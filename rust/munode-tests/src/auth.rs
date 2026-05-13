@@ -5,12 +5,12 @@
 
 use std::net::SocketAddr;
 
+use anyhow::Result;
 use axum::{
     Json, Router,
     http::StatusCode,
     routing::{get, post},
 };
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;

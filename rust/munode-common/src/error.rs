@@ -10,9 +10,15 @@ pub enum ConfigError {
     #[error("invalid value for '{field}': {reason}")]
     InvalidValue { field: &'static str, reason: String },
     #[error("failed to read config file '{path}': {source}")]
-    ReadFailed { path: String, source: std::io::Error },
+    ReadFailed {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("TOML parse error in '{path}': {source}")]
-    ParseError { path: String, source: toml::de::Error },
+    ParseError {
+        path: String,
+        source: toml::de::Error,
+    },
     #[error("{0}")]
     Other(String),
 }
@@ -21,13 +27,22 @@ pub enum ConfigError {
 #[derive(Error, Debug)]
 pub enum TlsError {
     #[error("failed to open certificate file '{path}': {source}")]
-    CertFileOpen { path: String, source: std::io::Error },
+    CertFileOpen {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("failed to parse certificate in '{path}': {source}")]
-    CertParse { path: String, source: std::io::Error },
+    CertParse {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("no certificates found in '{path}'")]
     NoCerts { path: String },
     #[error("failed to open key file '{path}': {source}")]
-    KeyFileOpen { path: String, source: std::io::Error },
+    KeyFileOpen {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("failed to parse private key in '{path}'")]
     KeyParse { path: String },
     #[error("no private key found in '{path}'")]

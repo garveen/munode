@@ -13,7 +13,10 @@ impl RpcHandler {
             let pending = self.state.pending_auths.read().await;
             if let Some((flag, _)) = pending.get(&session_id) {
                 flag.store(true, Ordering::Relaxed);
-                debug!("Auth cancel flag set for disconnecting session {}", session_id);
+                debug!(
+                    "Auth cancel flag set for disconnecting session {}",
+                    session_id
+                );
             }
         }
 
@@ -54,21 +57,37 @@ impl RpcHandler {
             return;
         }
 
-        let required_perm = if params.ban { permission::BAN } else { permission::KICK };
+        let required_perm = if params.ban {
+            permission::BAN
+        } else {
+            permission::KICK
+        };
         let (target_channel, actor_groups) = {
             let target_info = self.state.session_manager.get_session(target_session).await;
             let actor_info = if params.actor_session != 0 {
-                self.state.session_manager.get_session(params.actor_session).await
+                self.state
+                    .session_manager
+                    .get_session(params.actor_session)
+                    .await
             } else {
                 None
             };
             (
                 target_info.map(|session| session.channel_id).unwrap_or(0),
-                actor_info.map(|session| session.groups.clone()).unwrap_or_default(),
+                actor_info
+                    .map(|session| session.groups.clone())
+                    .unwrap_or_default(),
             )
         };
-        let allowed = self.state.acl_manager
-            .has_permission(params.actor_user_id as i32, target_channel, &actor_groups, required_perm)
+        let allowed = self
+            .state
+            .acl_manager
+            .has_permission(
+                params.actor_user_id as i32,
+                target_channel,
+                &actor_groups,
+                required_perm,
+            )
             .await;
         if !allowed {
             debug!(
@@ -82,8 +101,16 @@ impl RpcHandler {
             return;
         }
 
-        if let Some(removed) = self.state.session_manager.remove_session(target_session).await {
-            info!("User removed: {} (session={})", removed.username, target_session);
+        if let Some(removed) = self
+            .state
+            .session_manager
+            .remove_session(target_session)
+            .await
+        {
+            info!(
+                "User removed: {} (session={})",
+                removed.username, target_session
+            );
 
             self.state
                 .voice_targets
@@ -278,13 +305,29 @@ impl RpcHandler {
             let links_remove: Vec<u32> = params.links_remove.clone();
 
             for target_id in &links_add {
-                if let Err(error) = self.state.channel_store.add_link(channel_id, *target_id).await {
-                    warn!("Failed to add channel link {} <-> {}: {}", channel_id, target_id, error);
+                if let Err(error) = self
+                    .state
+                    .channel_store
+                    .add_link(channel_id, *target_id)
+                    .await
+                {
+                    warn!(
+                        "Failed to add channel link {} <-> {}: {}",
+                        channel_id, target_id, error
+                    );
                 }
             }
             for target_id in &links_remove {
-                if let Err(error) = self.state.channel_store.remove_link(channel_id, *target_id).await {
-                    warn!("Failed to remove channel link {} <-> {}: {}", channel_id, target_id, error);
+                if let Err(error) = self
+                    .state
+                    .channel_store
+                    .remove_link(channel_id, *target_id)
+                    .await
+                {
+                    warn!(
+                        "Failed to remove channel link {} <-> {}: {}",
+                        channel_id, target_id, error
+                    );
                 }
             }
 
@@ -349,7 +392,8 @@ impl RpcHandler {
                         links: peer.links.iter().copied().collect(),
                     };
                     self.broadcast_notification("hub.channelUpdated", |notification| {
-                        notification.channel_updated = Some(HubChannelUpdatedParams { channel: proto });
+                        notification.channel_updated =
+                            Some(HubChannelUpdatedParams { channel: proto });
                     })
                     .await;
                 }

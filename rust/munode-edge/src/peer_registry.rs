@@ -1,5 +1,5 @@
-use std::net::SocketAddr;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
 use smallvec::SmallVec;
 use tokio::sync::mpsc;
@@ -44,8 +44,10 @@ impl PeerVoiceTcpPool {
     /// Clears the disconnection-since timestamp and resets the report flag so
     /// a future full-pool disconnection can trigger a fresh report.
     pub fn mark_connected(&self) {
-        self.all_disconnected_since_ms.store(0, std::sync::atomic::Ordering::Release);
-        self.disconnect_reported.store(false, std::sync::atomic::Ordering::Release);
+        self.all_disconnected_since_ms
+            .store(0, std::sync::atomic::Ordering::Release);
+        self.disconnect_reported
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Called by a slot after it clears its own sender.
@@ -65,9 +67,9 @@ impl PeerVoiceTcpPool {
 
     /// Returns `true` if at least one slot currently holds a live sender.
     pub fn has_live_sender(&self) -> bool {
-        self.senders.iter().any(|m| {
-            m.lock().ok().map_or(false, |g| g.is_some())
-        })
+        self.senders
+            .iter()
+            .any(|m| m.lock().ok().map_or(false, |g| g.is_some()))
     }
 
     /// Try to send `frame` to one live slot (round-robin).
@@ -82,7 +84,10 @@ impl PeerVoiceTcpPool {
     /// Returns `true` if the frame was accepted by at least one slot.
     pub fn try_send(&self, frame: Vec<u8>) -> bool {
         let n = self.senders.len();
-        let start = self.next_rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
+        let start = self
+            .next_rr
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % n;
         let mut remaining = frame;
         for i in 0..n {
             let idx = (start + i) % n;

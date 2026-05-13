@@ -6,12 +6,12 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use munode_protocol::mumbleproto;
 use munode_client::ClientEvent;
+use munode_protocol::mumbleproto;
 
 use crate::harness::{
-    cleanup_clients, random_voice_data, single_edge_env, sleep_ms, standard_env, ClientConfig,
-    TestEnvBuilder, create_clients,
+    ClientConfig, TestEnvBuilder, cleanup_clients, create_clients, random_voice_data,
+    single_edge_env, sleep_ms, standard_env,
 };
 
 async fn wait_for_voice_from(
@@ -83,8 +83,7 @@ async fn assert_cross_edge_voice_delivery(
     }
 
     assert_eq!(
-        received,
-        should_receive,
+        received, should_receive,
         "{context}: expected cross-edge voice received={should_receive}, got {received}"
     );
 
@@ -125,10 +124,7 @@ async fn test_send_voice_tcp_does_not_panic() -> Result<()> {
 #[tokio::test]
 async fn test_voice_received_by_same_channel_user() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
@@ -163,16 +159,13 @@ async fn test_voice_received_by_same_channel_user() -> Result<()> {
 #[tokio::test]
 async fn test_voice_not_received_by_different_channel_user() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
     // Sender in Lobby, receiver in General
-    sender.channel(1).join().await?;    // Lobby
-    receiver.channel(2).join().await?;  // General
+    sender.channel(1).join().await?; // Lobby
+    receiver.channel(2).join().await?; // General
     sleep_ms(300).await;
 
     let mut rx = receiver.subscribe();
@@ -192,7 +185,10 @@ async fn test_voice_not_received_by_different_channel_user() -> Result<()> {
         }
     }
 
-    assert!(!received, "Voice should NOT be received by user in a different channel");
+    assert!(
+        !received,
+        "Voice should NOT be received by user in a different channel"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -202,10 +198,7 @@ async fn test_voice_not_received_by_different_channel_user() -> Result<()> {
 #[tokio::test]
 async fn test_voice_received_cross_edge_same_channel() -> Result<()> {
     let env = standard_env().await?; // 2 edges
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 2),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 2)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
@@ -232,7 +225,10 @@ async fn test_voice_received_cross_edge_same_channel() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(received, "Voice should propagate across edges to same channel");
+    assert!(
+        received,
+        "Voice should propagate across edges to same channel"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -242,7 +238,8 @@ async fn test_voice_received_cross_edge_same_channel() -> Result<()> {
 /// Hub TCP relay and Edge fallback are both disabled. This must use UDP voice,
 /// because TCP-tunneled client voice is Hub-relayed for remote edges by design.
 #[tokio::test]
-async fn test_cross_edge_voice_routes_without_hub_relay_when_direct_path_is_available() -> Result<()> {
+async fn test_cross_edge_voice_routes_without_hub_relay_when_direct_path_is_available() -> Result<()>
+{
     let env = TestEnvBuilder::new()
         .edges(2)
         .hub_config_patch(serde_json::json!({
@@ -273,7 +270,8 @@ async fn test_cross_edge_voice_routes_without_hub_relay_when_direct_path_is_avai
 /// resolvable into a direct address, Hub relay should keep cross-edge voice
 /// working.
 #[tokio::test]
-async fn test_cross_edge_voice_falls_back_to_hub_relay_when_direct_path_is_unresolvable() -> Result<()> {
+async fn test_cross_edge_voice_falls_back_to_hub_relay_when_direct_path_is_unresolvable()
+-> Result<()> {
     let env = TestEnvBuilder::new()
         .edges(2)
         .hub_config_patch(serde_json::json!({
@@ -307,7 +305,8 @@ async fn test_cross_edge_voice_falls_back_to_hub_relay_when_direct_path_is_unres
 /// direct peer metadata is unusable and relay/fallback are disabled, cross-edge
 /// voice must not be delivered.
 #[tokio::test]
-async fn test_cross_edge_voice_does_not_fallback_when_direct_path_is_unresolvable_and_relay_is_disabled() -> Result<()> {
+async fn test_cross_edge_voice_does_not_fallback_when_direct_path_is_unresolvable_and_relay_is_disabled()
+-> Result<()> {
     let env = TestEnvBuilder::new()
         .edges(2)
         .hub_config_patch(serde_json::json!({
@@ -342,10 +341,7 @@ async fn test_cross_edge_voice_does_not_fallback_when_direct_path_is_unresolvabl
 #[tokio::test]
 async fn test_deaf_user_does_not_receive_voice() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
@@ -397,16 +393,24 @@ async fn test_voice_routes_through_linked_channels() -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let ch_a = admin.channel(0).create_subchannel(&format!("VA_{ts}")).await?;
-    let ch_b = admin.channel(0).create_subchannel(&format!("VB_{ts}")).await?;
+    let ch_a = admin
+        .channel(0)
+        .create_subchannel(&format!("VA_{ts}"))
+        .await?;
+    let ch_b = admin
+        .channel(0)
+        .create_subchannel(&format!("VB_{ts}"))
+        .await?;
     sleep_ms(300).await;
 
     // Link A → B
-    admin.send_channel_state(mumbleproto::ChannelState {
-        channel_id: Some(ch_a),
-        links_add: vec![ch_b],
-        ..Default::default()
-    }).await?;
+    admin
+        .send_channel_state(mumbleproto::ChannelState {
+            channel_id: Some(ch_a),
+            links_add: vec![ch_b],
+            ..Default::default()
+        })
+        .await?;
     sleep_ms(600).await;
 
     // user1 in ch_a, user2 in ch_b
@@ -460,10 +464,16 @@ async fn test_whisper_to_specific_channel() -> Result<()> {
     let target_session = target.session_id().unwrap();
 
     // Set voice target 1 to whisper to target user
-    sender.voice().set_target(1, vec![mumbleproto::voice_target::Target {
-        session: vec![target_session],
-        ..Default::default()
-    }]).await?;
+    sender
+        .voice()
+        .set_target(
+            1,
+            vec![mumbleproto::voice_target::Target {
+                session: vec![target_session],
+                ..Default::default()
+            }],
+        )
+        .await?;
     sleep_ms(200).await;
 
     let mut target_rx = target.subscribe();
@@ -561,7 +571,10 @@ async fn test_whisper_children_target_tracks_new_subchannel_after_creation() -> 
     })
     .await
     .unwrap_or(false);
-    assert!(initial_received, "children whisper baseline must reach existing child members");
+    assert!(
+        initial_received,
+        "children whisper baseline must reach existing child members"
+    );
 
     let new_child = admin
         .channel(parent)
@@ -644,7 +657,10 @@ async fn test_whisper_to_current_channel_members() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(current_received, "channel whisper should reach other users in the sender's current channel");
+    assert!(
+        current_received,
+        "channel whisper should reach other users in the sender's current channel"
+    );
 
     let other_received = tokio::time::timeout(Duration::from_millis(800), async {
         loop {
@@ -657,7 +673,10 @@ async fn test_whisper_to_current_channel_members() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(!other_received, "channel whisper to current channel should not leak to other channels");
+    assert!(
+        !other_received,
+        "channel whisper to current channel should not leak to other channels"
+    );
 
     cleanup_clients(clients).await;
     Ok(())
@@ -828,12 +847,9 @@ async fn test_cross_edge_udp_whisper_to_current_channel_members() -> Result<()> 
         sender.voice().send(4, 9, 1, &audio).await?;
 
         if !local_received {
-            local_received = wait_for_voice_from(
-                same_edge_target,
-                sender_session,
-                Duration::from_millis(500),
-            )
-            .await;
+            local_received =
+                wait_for_voice_from(same_edge_target, sender_session, Duration::from_millis(500))
+                    .await;
         }
 
         if !remote_received {
@@ -949,7 +965,8 @@ async fn test_cross_edge_udp_whisper_to_current_channel_members_without_sync_del
 }
 
 #[tokio::test]
-async fn test_cross_edge_udp_whisper_to_current_channel_members_eventually_recovers_without_sync_delay() -> Result<()> {
+async fn test_cross_edge_udp_whisper_to_current_channel_members_eventually_recovers_without_sync_delay()
+-> Result<()> {
     let env = TestEnvBuilder::new()
         .edges(2)
         .hub_config_patch(serde_json::json!({
@@ -1021,12 +1038,9 @@ async fn test_cross_edge_udp_whisper_to_current_channel_members_eventually_recov
         sender.voice().send(4, 11, 1, &audio).await?;
 
         if !local_received {
-            local_received = wait_for_voice_from(
-                same_edge_target,
-                sender_session,
-                Duration::from_millis(500),
-            )
-            .await;
+            local_received =
+                wait_for_voice_from(same_edge_target, sender_session, Duration::from_millis(500))
+                    .await;
         }
 
         if !remote_received {
@@ -1070,8 +1084,13 @@ async fn test_whisper_current_channel_rewrite_updates_same_slot_route() -> Resul
         ],
     )
     .await?;
-    let (admin, sender, old_channel_member, new_channel_member, outsider) =
-        (&clients[0], &clients[1], &clients[2], &clients[3], &clients[4]);
+    let (admin, sender, old_channel_member, new_channel_member, outsider) = (
+        &clients[0],
+        &clients[1],
+        &clients[2],
+        &clients[3],
+        &clients[4],
+    );
 
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1112,7 +1131,10 @@ async fn test_whisper_current_channel_rewrite_updates_same_slot_route() -> Resul
 
     let audio_first = random_voice_data(20);
     let mut first_rx = old_channel_member.subscribe();
-    sender.voice().send(4, target_id as u8, 1, &audio_first).await?;
+    sender
+        .voice()
+        .send(4, target_id as u8, 1, &audio_first)
+        .await?;
 
     let first_received = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
@@ -1152,7 +1174,10 @@ async fn test_whisper_current_channel_rewrite_updates_same_slot_route() -> Resul
     let mut new_rx = new_channel_member.subscribe();
     let mut outsider_rx = outsider.subscribe();
 
-    sender.voice().send(4, target_id as u8, 2, &audio_second).await?;
+    sender
+        .voice()
+        .send(4, target_id as u8, 2, &audio_second)
+        .await?;
 
     let new_received = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
@@ -1257,7 +1282,10 @@ async fn test_whisper_to_root_channel_members() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(root_received, "channel whisper should reach other users in the root channel");
+    assert!(
+        root_received,
+        "channel whisper should reach other users in the root channel"
+    );
 
     let other_received = tokio::time::timeout(Duration::from_millis(800), async {
         loop {
@@ -1270,7 +1298,10 @@ async fn test_whisper_to_root_channel_members() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(!other_received, "channel whisper to the root channel should not leak to other channels");
+    assert!(
+        !other_received,
+        "channel whisper to the root channel should not leak to other channels"
+    );
 
     cleanup_clients(clients).await;
     Ok(())
@@ -1289,7 +1320,8 @@ async fn test_whisper_to_parent_channel_members() -> Result<()> {
         ],
     )
     .await?;
-    let (admin, sender, parent_member, sibling_member) = (&clients[0], &clients[1], &clients[2], &clients[3]);
+    let (admin, sender, parent_member, sibling_member) =
+        (&clients[0], &clients[1], &clients[2], &clients[3]);
 
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1346,7 +1378,10 @@ async fn test_whisper_to_parent_channel_members() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(parent_received, "channel whisper to parent channel should reach users in that parent channel");
+    assert!(
+        parent_received,
+        "channel whisper to parent channel should reach users in that parent channel"
+    );
 
     let sibling_received = tokio::time::timeout(Duration::from_millis(800), async {
         loop {
@@ -1419,7 +1454,10 @@ async fn test_whisper_to_root_parent_channel_members() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(root_received, "channel whisper to a root parent channel should reach users in root");
+    assert!(
+        root_received,
+        "channel whisper to a root parent channel should reach users in root"
+    );
 
     let sibling_received = tokio::time::timeout(Duration::from_millis(800), async {
         loop {
@@ -1454,7 +1492,8 @@ async fn test_whisper_to_subchannel_members() -> Result<()> {
         ],
     )
     .await?;
-    let (admin, sender, subchannel_member, parent_member) = (&clients[0], &clients[1], &clients[2], &clients[3]);
+    let (admin, sender, subchannel_member, parent_member) =
+        (&clients[0], &clients[1], &clients[2], &clients[3]);
 
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1507,7 +1546,10 @@ async fn test_whisper_to_subchannel_members() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(child_received, "channel whisper to subchannel should reach users in that subchannel");
+    assert!(
+        child_received,
+        "channel whisper to subchannel should reach users in that subchannel"
+    );
 
     let parent_received = tokio::time::timeout(Duration::from_millis(800), async {
         loop {
@@ -1587,10 +1629,7 @@ async fn test_voice_routes_after_self_channel_move_back() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("user1", 1),
-            ClientConfig::new("user2", 1),
-        ],
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)],
     )
     .await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
@@ -1638,7 +1677,10 @@ async fn test_voice_routes_after_self_channel_move_back() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(after, "Voice must still route after self channel move + return");
+    assert!(
+        after,
+        "Voice must still route after self channel move + return"
+    );
 
     cleanup_clients(clients).await;
     Ok(())
@@ -1655,10 +1697,7 @@ async fn test_receiver_does_not_hear_previous_channel_after_move() -> Result<()>
     let env = single_edge_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("user1", 1),
-            ClientConfig::new("user2", 1),
-        ],
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)],
     )
     .await?;
     let (sender, mover) = (&clients[0], &clients[1]);
@@ -1721,10 +1760,7 @@ async fn test_receiver_does_not_hear_previous_channel_after_move_cross_edge() ->
     let env = standard_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("user1", 1),
-            ClientConfig::new("user2", 2),
-        ],
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 2)],
     )
     .await?;
     let (sender, mover) = (&clients[0], &clients[1]);
@@ -1783,10 +1819,7 @@ async fn test_listeners_in_previous_channel_stop_hearing_after_sender_moves() ->
     let env = single_edge_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("user1", 1),
-            ClientConfig::new("user2", 1),
-        ],
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)],
     )
     .await?;
     let (sender, listener) = (&clients[0], &clients[1]);
@@ -1836,4 +1869,3 @@ async fn test_listeners_in_previous_channel_stop_hearing_after_sender_moves() ->
     cleanup_clients(clients).await;
     Ok(())
 }
-

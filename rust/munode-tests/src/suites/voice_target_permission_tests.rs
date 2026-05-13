@@ -14,7 +14,7 @@ use munode_client::{ClientEvent, MumbleClient};
 use munode_protocol::mumbleproto;
 
 use crate::harness::{
-    cleanup_clients, create_clients, single_edge_env, sleep_ms, standard_env, ClientConfig,
+    ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms, standard_env,
 };
 
 const PERM_TRAVERSE: u32 = 0x2;
@@ -41,10 +41,7 @@ async fn test_allow_voice_target_to_visible_users() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("user1", 1),
-            ClientConfig::new("user2", 1),
-        ],
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)],
     )
     .await?;
     sleep_ms(500).await;
@@ -65,7 +62,10 @@ async fn test_allow_voice_target_to_visible_users() -> Result<()> {
         .await?;
 
     let denied = expect_no_permission_denied(&clients[0], Duration::from_millis(700)).await;
-    assert!(!denied, "default permissions should allow whisper to visible users");
+    assert!(
+        !denied,
+        "default permissions should allow whisper to visible users"
+    );
 
     cleanup_clients(clients).await;
     Ok(())
@@ -76,10 +76,7 @@ async fn test_allow_targeting_accessible_channel() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("admin", 1),
-            ClientConfig::new("user1", 1),
-        ],
+        &[ClientConfig::new("admin", 1), ClientConfig::new("user1", 1)],
     )
     .await?;
     sleep_ms(500).await;
@@ -113,10 +110,7 @@ async fn test_deny_targeting_inaccessible_channel() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("admin", 1),
-            ClientConfig::new("user2", 1),
-        ],
+        &[ClientConfig::new("admin", 1), ClientConfig::new("user2", 1)],
     )
     .await?;
     sleep_ms(500).await;
@@ -229,7 +223,10 @@ async fn test_voice_target_cross_edge() -> Result<()> {
         .await?;
 
     let denied = expect_no_permission_denied(&clients[0], Duration::from_millis(700)).await;
-    assert!(!denied, "cross-edge whisper to visible user should be allowed");
+    assert!(
+        !denied,
+        "cross-edge whisper to visible user should be allowed"
+    );
 
     cleanup_clients(clients).await;
     Ok(())

@@ -23,9 +23,19 @@ fn main() -> Result<()> {
     } else {
         let workspace_root = manifest_dir
             .parent()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Failed to find munode-protocol parent directory"))?
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Failed to find munode-protocol parent directory",
+                )
+            })?
             .parent()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Failed to find workspace root (expected 2 levels above munode-protocol)"))?;
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Failed to find workspace root (expected 2 levels above munode-protocol)",
+                )
+            })?;
         workspace_root.join("packages/protocol/proto")
     };
 

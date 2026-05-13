@@ -30,14 +30,18 @@ impl RpcHandler {
                         "getBanList denied: actor_session={} actor_user_id={}: no WRITE on root channel",
                         params.actor_session, params.actor_user_id
                     );
-                    return Ok(self.make_response_packet(request_id, "edge.getBanList", |response| {
-                        response.edge_handle_acl = Some(EdgeHandleAclResult {
-                            success: false,
-                            permission_denied: Some(true),
-                            error: Some("permission denied".to_string()),
-                            ..Default::default()
-                        });
-                    }));
+                    return Ok(self.make_response_packet(
+                        request_id,
+                        "edge.getBanList",
+                        |response| {
+                            response.edge_handle_acl = Some(EdgeHandleAclResult {
+                                success: false,
+                                permission_denied: Some(true),
+                                error: Some("permission denied".to_string()),
+                                ..Default::default()
+                            });
+                        },
+                    ));
                 }
             }
         }
@@ -61,15 +65,17 @@ impl RpcHandler {
             query: Some(false),
         });
 
-        Ok(self.make_response_packet(request_id, "edge.getBanList", |response| {
-            response.edge_handle_acl = Some(EdgeHandleAclResult {
-                success: true,
-                raw_data: Some(raw),
-                error: None,
-                channel_id: None,
-                permission_denied: None,
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.getBanList", |response| {
+                response.edge_handle_acl = Some(EdgeHandleAclResult {
+                    success: true,
+                    raw_data: Some(raw),
+                    error: None,
+                    channel_id: None,
+                    permission_denied: None,
+                });
+            }),
+        )
     }
 
     pub(super) async fn handle_update_ban_list(
@@ -77,7 +83,9 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_handle_acl.as_ref()
+        let params = request
+            .edge_handle_acl
+            .as_ref()
             .context("Missing ban list data (via edge_handle_acl.raw_data)")?;
 
         if params.actor_user_id > 0 {
@@ -103,14 +111,18 @@ impl RpcHandler {
                     "updateBanList denied: actor_session={} actor_user_id={}: no BAN on root channel",
                     params.actor_session, params.actor_user_id
                 );
-                return Ok(self.make_response_packet(request_id, "edge.updateBanList", |response| {
-                    response.edge_handle_acl = Some(EdgeHandleAclResult {
-                        success: false,
-                        permission_denied: Some(true),
-                        error: Some("permission denied".to_string()),
-                        ..Default::default()
-                    });
-                }));
+                return Ok(self.make_response_packet(
+                    request_id,
+                    "edge.updateBanList",
+                    |response| {
+                        response.edge_handle_acl = Some(EdgeHandleAclResult {
+                            success: false,
+                            permission_denied: Some(true),
+                            error: Some("permission denied".to_string()),
+                            ..Default::default()
+                        });
+                    },
+                ));
             }
         }
 
@@ -151,15 +163,17 @@ impl RpcHandler {
         self.state.ban_store.replace_bans(&bans_data).await?;
         info!("Updated ban list: {} entries", bans_data.len());
 
-        Ok(self.make_response_packet(request_id, "edge.updateBanList", |response| {
-            response.edge_handle_acl = Some(EdgeHandleAclResult {
-                success: true,
-                raw_data: None,
-                error: None,
-                channel_id: None,
-                permission_denied: None,
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.updateBanList", |response| {
+                response.edge_handle_acl = Some(EdgeHandleAclResult {
+                    success: true,
+                    raw_data: None,
+                    error: None,
+                    channel_id: None,
+                    permission_denied: None,
+                });
+            }),
+        )
     }
 
     pub(super) async fn handle_get_user_list(&self, request_id: &str) -> Result<EdgeHubPacket> {
@@ -176,15 +190,17 @@ impl RpcHandler {
                 .collect(),
         });
 
-        Ok(self.make_response_packet(request_id, "edge.getUserList", |response| {
-            response.edge_handle_acl = Some(EdgeHandleAclResult {
-                success: true,
-                raw_data: Some(raw),
-                error: None,
-                channel_id: None,
-                permission_denied: None,
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.getUserList", |response| {
+                response.edge_handle_acl = Some(EdgeHandleAclResult {
+                    success: true,
+                    raw_data: Some(raw),
+                    error: None,
+                    channel_id: None,
+                    permission_denied: None,
+                });
+            }),
+        )
     }
 
     pub(super) async fn handle_update_user_list(
@@ -192,19 +208,23 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_handle_acl.as_ref()
+        let params = request
+            .edge_handle_acl
+            .as_ref()
             .context("Missing user list data (via edge_handle_acl.raw_data)")?;
 
         if params.actor_user_id == 0 {
-            return Ok(self.make_response_packet(request_id, "edge.updateUserList", |response| {
-                response.edge_handle_acl = Some(EdgeHandleAclResult {
-                    success: false,
-                    raw_data: None,
-                    error: Some("Permission denied".to_string()),
-                    channel_id: None,
-                    permission_denied: Some(true),
-                });
-            }));
+            return Ok(
+                self.make_response_packet(request_id, "edge.updateUserList", |response| {
+                    response.edge_handle_acl = Some(EdgeHandleAclResult {
+                        success: false,
+                        raw_data: None,
+                        error: Some("Permission denied".to_string()),
+                        channel_id: None,
+                        permission_denied: Some(true),
+                    });
+                }),
+            );
         }
 
         let actor_groups: Vec<String> = self
@@ -225,15 +245,17 @@ impl RpcHandler {
             )
             .await;
         if !has_perm {
-            return Ok(self.make_response_packet(request_id, "edge.updateUserList", |response| {
-                response.edge_handle_acl = Some(EdgeHandleAclResult {
-                    success: false,
-                    raw_data: None,
-                    error: Some("Permission denied".to_string()),
-                    channel_id: None,
-                    permission_denied: Some(true),
-                });
-            }));
+            return Ok(
+                self.make_response_packet(request_id, "edge.updateUserList", |response| {
+                    response.edge_handle_acl = Some(EdgeHandleAclResult {
+                        success: false,
+                        raw_data: None,
+                        error: Some("Permission denied".to_string()),
+                        channel_id: None,
+                        permission_denied: Some(true),
+                    });
+                }),
+            );
         }
 
         let user_list: munode_protocol::mumbleproto::UserList =
@@ -258,14 +280,16 @@ impl RpcHandler {
             }
         }
 
-        Ok(self.make_response_packet(request_id, "edge.updateUserList", |response| {
-            response.edge_handle_acl = Some(EdgeHandleAclResult {
-                success: error_msg.is_none(),
-                raw_data: None,
-                error: error_msg,
-                channel_id: None,
-                permission_denied: None,
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.updateUserList", |response| {
+                response.edge_handle_acl = Some(EdgeHandleAclResult {
+                    success: error_msg.is_none(),
+                    raw_data: None,
+                    error: error_msg,
+                    channel_id: None,
+                    permission_denied: None,
+                });
+            }),
+        )
     }
 }

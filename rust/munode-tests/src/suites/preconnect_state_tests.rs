@@ -8,7 +8,9 @@ use anyhow::Result;
 use munode_client::{ClientEvent, PreConnectState};
 use std::time::Duration;
 
-use crate::harness::{cleanup_clients, create_clients, sleep_ms, single_edge_env, standard_env, ClientConfig};
+use crate::harness::{
+    ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms, standard_env,
+};
 
 #[tokio::test]
 async fn test_preconnect_self_deaf_broadcast() -> Result<()> {
@@ -21,7 +23,10 @@ async fn test_preconnect_self_deaf_broadcast() -> Result<()> {
     let mut rx = observer.subscribe();
 
     // Now user2 connects with pre-connect self_deaf=true
-    let pcs = PreConnectState { self_mute: None, self_deaf: Some(true) };
+    let pcs = PreConnectState {
+        self_mute: None,
+        self_deaf: Some(true),
+    };
     let user_clients = create_clients(
         &env,
         &[ClientConfig {
@@ -40,7 +45,9 @@ async fn test_preconnect_self_deaf_broadcast() -> Result<()> {
     let got = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::UserStateChanged(u)) if u.session == user_session && u.self_deaf => {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == user_session && u.self_deaf =>
+                {
                     break true;
                 }
                 Ok(_) => continue,
@@ -54,7 +61,10 @@ async fn test_preconnect_self_deaf_broadcast() -> Result<()> {
     if !got {
         // Fallback: query observer's user list
         let users = observer.users();
-        let u = users.iter().find(|u| u.session == user_session).expect("user2 visible");
+        let u = users
+            .iter()
+            .find(|u| u.session == user_session)
+            .expect("user2 visible");
         assert!(u.self_deaf, "observer should see user2.self_deaf=true");
     }
 
@@ -74,7 +84,10 @@ async fn test_preconnect_self_mute_broadcast() -> Result<()> {
     let observer_clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     sleep_ms(500).await;
 
-    let pcs = PreConnectState { self_mute: Some(true), self_deaf: None };
+    let pcs = PreConnectState {
+        self_mute: Some(true),
+        self_deaf: None,
+    };
     let user_clients = create_clients(
         &env,
         &[ClientConfig {
@@ -90,7 +103,10 @@ async fn test_preconnect_self_mute_broadcast() -> Result<()> {
 
     let user_session = user_clients[0].session_id().expect("session");
     let users = observer_clients[0].users();
-    let u = users.iter().find(|u| u.session == user_session).expect("user2 visible");
+    let u = users
+        .iter()
+        .find(|u| u.session == user_session)
+        .expect("user2 visible");
     assert!(u.self_mute, "observer should see user2.self_mute=true");
     assert!(!u.self_deaf, "self_deaf should remain false");
 
@@ -108,7 +124,10 @@ async fn test_preconnect_state_cross_edge() -> Result<()> {
     sleep_ms(500).await;
 
     // user2 connects to Edge 1 with both self_mute and self_deaf
-    let pcs = PreConnectState { self_mute: Some(true), self_deaf: Some(true) };
+    let pcs = PreConnectState {
+        self_mute: Some(true),
+        self_deaf: Some(true),
+    };
     let user_clients = create_clients(
         &env,
         &[ClientConfig {
@@ -124,7 +143,10 @@ async fn test_preconnect_state_cross_edge() -> Result<()> {
 
     let user_session = user_clients[0].session_id().expect("session");
     let users = observer_clients[0].users();
-    let u = users.iter().find(|u| u.session == user_session).expect("cross-edge user2 visible");
+    let u = users
+        .iter()
+        .find(|u| u.session == user_session)
+        .expect("cross-edge user2 visible");
     assert!(u.self_mute, "cross-edge observer should see self_mute=true");
     assert!(u.self_deaf, "cross-edge observer should see self_deaf=true");
 

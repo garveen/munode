@@ -68,15 +68,27 @@ fn capture_output(bin: &std::path::Path, args: &[&str], dur: Duration) -> Vec<St
 fn parse_and_validate(raw: &str) -> Value {
     let v: Value = serde_json::from_str(raw).unwrap_or_else(|_| panic!("not JSON: {raw}"));
     let obj = v.as_object().expect("object");
-    assert!(obj.get("timestamp").and_then(|x| x.as_str()).is_some(), "timestamp: {raw}");
+    assert!(
+        obj.get("timestamp").and_then(|x| x.as_str()).is_some(),
+        "timestamp: {raw}"
+    );
     let level = obj.get("level").and_then(|x| x.as_str()).expect("level");
     assert!(
         ["INFO", "WARN", "ERROR", "DEBUG", "TRACE"].contains(&level),
         "bad level: {raw}"
     );
-    assert!(obj.get("target").and_then(|x| x.as_str()).is_some(), "target: {raw}");
-    let fields = obj.get("fields").and_then(|x| x.as_object()).expect("fields obj");
-    assert!(fields.get("message").and_then(|x| x.as_str()).is_some(), "fields.message: {raw}");
+    assert!(
+        obj.get("target").and_then(|x| x.as_str()).is_some(),
+        "target: {raw}"
+    );
+    let fields = obj
+        .get("fields")
+        .and_then(|x| x.as_object())
+        .expect("fields obj");
+    assert!(
+        fields.get("message").and_then(|x| x.as_str()).is_some(),
+        "fields.message: {raw}"
+    );
     v
 }
 
@@ -86,7 +98,12 @@ fn next_port(ports: &mut ReservedPortBlock) -> u16 {
 
 // ── Hub JSON log format ───────────────────────────────────────────────────
 
-fn write_hub_config_json(tmp: &TempDir, control_port: u16, web_api_port: u16, log_format: Option<&str>) -> std::path::PathBuf {
+fn write_hub_config_json(
+    tmp: &TempDir,
+    control_port: u16,
+    web_api_port: u16,
+    log_format: Option<&str>,
+) -> std::path::PathBuf {
     let cfg_path = tmp.path().join("hub.json");
     let mut cfg = serde_json::json!({
         "network": { "host": "127.0.0.1", "control_port": control_port },
@@ -98,7 +115,9 @@ fn write_hub_config_json(tmp: &TempDir, control_port: u16, web_api_port: u16, lo
         "log_level": "info",
     });
     if let Some(fmt) = log_format {
-        cfg.as_object_mut().unwrap().insert("log_format".into(), Value::String(fmt.into()));
+        cfg.as_object_mut()
+            .unwrap()
+            .insert("log_format".into(), Value::String(fmt.into()));
     }
     std::fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
     cfg_path
@@ -108,7 +127,12 @@ fn write_hub_config_json(tmp: &TempDir, control_port: u16, web_api_port: u16, lo
 fn test_hub_json_format_emits_valid_json_lines() -> Result<()> {
     let tmp = TempDir::new()?;
     let mut ports = ReservedPortBlock::acquire(19000)?;
-    let cfg = write_hub_config_json(&tmp, next_port(&mut ports), next_port(&mut ports), Some("json"));
+    let cfg = write_hub_config_json(
+        &tmp,
+        next_port(&mut ports),
+        next_port(&mut ports),
+        Some("json"),
+    );
     let bin = find_binary("munode-hub")?;
     let lines = capture_output(&bin, &[cfg.to_str().unwrap()], Duration::from_millis(2000));
     assert!(!lines.is_empty(), "no log output captured");
@@ -122,7 +146,12 @@ fn test_hub_json_format_emits_valid_json_lines() -> Result<()> {
 fn test_hub_json_format_startup_message_has_control_port() -> Result<()> {
     let tmp = TempDir::new()?;
     let mut ports = ReservedPortBlock::acquire(19000)?;
-    let cfg = write_hub_config_json(&tmp, next_port(&mut ports), next_port(&mut ports), Some("json"));
+    let cfg = write_hub_config_json(
+        &tmp,
+        next_port(&mut ports),
+        next_port(&mut ports),
+        Some("json"),
+    );
     let bin = find_binary("munode-hub")?;
     let lines = capture_output(&bin, &[cfg.to_str().unwrap()], Duration::from_millis(2000));
     let parsed: Vec<Value> = lines.iter().map(|l| parse_and_validate(l)).collect();
@@ -136,7 +165,9 @@ fn test_hub_json_format_startup_message_has_control_port() -> Result<()> {
     });
     let s = startup.expect("expected Hub startup INFO line");
     assert!(
-        s.get("fields").and_then(|f| f.get("control_port")).is_some(),
+        s.get("fields")
+            .and_then(|f| f.get("control_port"))
+            .is_some(),
         "startup line missing control_port field"
     );
     Ok(())
@@ -150,8 +181,13 @@ fn test_hub_text_format_default_is_not_json() -> Result<()> {
     let bin = find_binary("munode-hub")?;
     let lines = capture_output(&bin, &[cfg.to_str().unwrap()], Duration::from_millis(2000));
     assert!(!lines.is_empty());
-    let has_non_json = lines.iter().any(|l| serde_json::from_str::<Value>(l).is_err());
-    assert!(has_non_json, "text mode should emit at least one non-JSON line");
+    let has_non_json = lines
+        .iter()
+        .any(|l| serde_json::from_str::<Value>(l).is_err());
+    assert!(
+        has_non_json,
+        "text mode should emit at least one non-JSON line"
+    );
     Ok(())
 }
 
@@ -192,7 +228,9 @@ fn write_edge_config_json(
         "log_level": "info",
     });
     if let Some(fmt) = log_format {
-        cfg.as_object_mut().unwrap().insert("log_format".into(), Value::String(fmt.into()));
+        cfg.as_object_mut()
+            .unwrap()
+            .insert("log_format".into(), Value::String(fmt.into()));
     }
     std::fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
     cfg_path

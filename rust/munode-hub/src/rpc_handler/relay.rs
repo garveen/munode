@@ -11,12 +11,16 @@ impl RpcHandler {
             .context("Missing edge_relay_voice_via_tcp params")?;
 
         if !self.state.config.voice_routing.enable_hub_tcp_relay {
-            return Ok(self.make_response_packet(request_id, "edge.relayVoiceViaTcp", |response| {
-                response.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
-                    success: false,
-                    error: Some("Hub voice relay is disabled by configuration".to_string()),
-                });
-            }));
+            return Ok(self.make_response_packet(
+                request_id,
+                "edge.relayVoiceViaTcp",
+                |response| {
+                    response.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
+                        success: false,
+                        error: Some("Hub voice relay is disabled by configuration".to_string()),
+                    });
+                },
+            ));
         }
 
         let target_edge_id = params.target_edge_id;
@@ -48,18 +52,23 @@ impl RpcHandler {
         .unwrap_or(false);
 
         if !sent {
-            debug!("Could not relay voice to edge {} (not connected)", target_edge_id);
+            debug!(
+                "Could not relay voice to edge {} (not connected)",
+                target_edge_id
+            );
         }
 
-        Ok(self.make_response_packet(request_id, "edge.relayVoiceViaTcp", |response| {
-            response.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
-                success: sent,
-                error: if sent {
-                    None
-                } else {
-                    Some(format!("Edge {} not connected", target_edge_id))
-                },
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.relayVoiceViaTcp", |response| {
+                response.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
+                    success: sent,
+                    error: if sent {
+                        None
+                    } else {
+                        Some(format!("Edge {} not connected", target_edge_id))
+                    },
+                });
+            }),
+        )
     }
 }

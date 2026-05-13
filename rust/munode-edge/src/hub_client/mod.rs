@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -8,23 +8,21 @@ use bytes::Bytes;
 use flate2::read::ZlibDecoder;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::time;
 use tokio_tungstenite::tungstenite;
 use tracing::{debug, error, info, warn};
 
 use munode_common::config::{EdgeConfig, HubServerConfig};
 use munode_protocol::hubedge::{
-    self, EdgeFullSyncParams,
-    EdgeHubPacket, EdgeJoinCompleteParams, EdgeJoinParams, EdgeRegisterParams,
-    PacketType, TypedRpcNotification, TypedRpcRequest, TypedRpcResponse,
-    EdgeReportSessionParams, GlobalSessionProto,
+    self, EdgeFullSyncParams, EdgeHubPacket, EdgeJoinCompleteParams, EdgeJoinParams,
+    EdgeRegisterParams, EdgeReportSessionParams, GlobalSessionProto, PacketType,
+    TypedRpcNotification, TypedRpcRequest, TypedRpcResponse,
 };
 
-use crate::state::{EdgeEvent, EdgeState};
 use crate::peer_registry::PeerEdgeInfo;
+use crate::state::{EdgeEvent, EdgeState};
 use crate::voice_target::{apply_voice_target_proto_batch, voice_target_config_to_proto};
-
 
 mod notification;
 mod rpc;
@@ -52,7 +50,11 @@ impl ExponentialBackoff {
 
     fn new(base_ms: u64) -> Self {
         let base_ms = base_ms.max(MIN_BACKOFF_MS); // enforce minimum
-        Self { base_ms, current_ms: base_ms, attempt: 0 }
+        Self {
+            base_ms,
+            current_ms: base_ms,
+            attempt: 0,
+        }
     }
 
     /// Return the delay for the next reconnect attempt and advance the counter.
@@ -191,9 +193,8 @@ impl NotificationSequencer {
 
     /// Returns the remaining time before the gap timeout fires, or None if no gap.
     fn gap_remaining(&self) -> Option<Duration> {
-        self.gap_since.map(|t| {
-            NOTIFICATION_GAP_TIMEOUT.saturating_sub(t.elapsed())
-        })
+        self.gap_since
+            .map(|t| NOTIFICATION_GAP_TIMEOUT.saturating_sub(t.elapsed()))
     }
 }
 
@@ -250,9 +251,7 @@ pub(super) enum PendingControlNotification {
         links_remove: Vec<u32>,
     },
     /// A client deleted a channel while Hub was unreachable.
-    ChannelRemoved {
-        channel_id: u32,
-    },
+    ChannelRemoved { channel_id: u32 },
 }
 
 /// Client for communicating with the Hub server via WebSocket + protobuf.
@@ -325,10 +324,7 @@ pub struct HubClient {
 }
 
 impl HubClient {
-    pub fn new(
-        config: &EdgeConfig,
-        edge_state: Arc<EdgeState>,
-    ) -> Arc<Self> {
+    pub fn new(config: &EdgeConfig, edge_state: Arc<EdgeState>) -> Arc<Self> {
         let external_port = config.network.external_port.unwrap_or(config.network.port);
         let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
         let pool_size = config.hub_server.pool_size.max(1) as usize;
@@ -426,14 +422,25 @@ impl HubClient {
         if pending.is_empty() {
             return;
         }
-        info!("Replaying {} deferred control notifications after Hub reconnect", pending.len());
+        info!(
+            "Replaying {} deferred control notifications after Hub reconnect",
+            pending.len()
+        );
         for n in pending {
             match n {
-                PendingControlNotification::UserLeft { session_id, ref reason } => {
+                PendingControlNotification::UserLeft {
+                    session_id,
+                    ref reason,
+                } => {
                     self.rpc_user_left(session_id, reason.as_deref()).await;
                 }
-                PendingControlNotification::ChannelLinksChanged { channel_id, links_add, links_remove } => {
-                    self.rpc_channel_state(channel_id, links_add, links_remove).await;
+                PendingControlNotification::ChannelLinksChanged {
+                    channel_id,
+                    links_add,
+                    links_remove,
+                } => {
+                    self.rpc_channel_state(channel_id, links_add, links_remove)
+                        .await;
                 }
                 PendingControlNotification::ChannelRemoved { channel_id } => {
                     self.rpc_channel_remove(channel_id).await;
@@ -464,12 +471,17 @@ impl HubClient {
             // Single-connection mode: original behaviour.
             self.run_single_slot(0).await;
         } else {
-            info!("Hub connection pool mode: {} slots (peer-equal)", self.pool_size);
+            info!(
+                "Hub connection pool mode: {} slots (peer-equal)",
+                self.pool_size
+            );
 
             let mut slot_handles = Vec::with_capacity(self.pool_size);
             for slot in 0..self.pool_size {
                 let me = self.clone();
-                slot_handles.push(tokio::spawn(async move { me.run_single_slot(slot).await; }));
+                slot_handles.push(tokio::spawn(async move {
+                    me.run_single_slot(slot).await;
+                }));
             }
 
             // Keep this future alive until all slot tasks complete (they loop
@@ -536,8 +548,11 @@ impl HubClient {
                             // All relay peers failed — immediately try direct as
                             // fallback (no backoff delay) before any_slot_alive()
                             // check so the pool stays non-empty if direct succeeds.
-                            warn!(slot, "All relay peers unreachable ({relay_err}) — \
-                                         falling back to direct Hub connection");
+                            warn!(
+                                slot,
+                                "All relay peers unreachable ({relay_err}) — \
+                                         falling back to direct Hub connection"
+                            );
                             self.try_connect_slot(slot).await
                         }
                     }
@@ -640,7 +655,12 @@ impl HubClient {
     /// Returns `true` if at least one relay peer (static or dynamic) is known.
     fn has_relay_peers(&self) -> bool {
         !self.static_relay_peers.is_empty()
-            || !self.edge_state.peer_registry.load().relay_peers().is_empty()
+            || !self
+                .edge_state
+                .peer_registry
+                .load()
+                .relay_peers()
+                .is_empty()
     }
 
     /// Try to connect to Hub via a peer Edge's control-relay port.
@@ -654,12 +674,19 @@ impl HubClient {
     async fn try_connect_via_relay(self: &Arc<Self>, slot: usize) -> Result<()> {
         // 1. Static peers from config (for bootstrap before Hub connection)
         for (host, relay_port) in &self.static_relay_peers {
-            let relay_url = rpc::build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
+            let relay_url =
+                rpc::build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
             let safe_url = rpc::safe_relay_url(host, *relay_port);
             info!("Attempting Hub relay via static peer at {}", safe_url);
-            match self.try_connect_via_url(&relay_url, slot, self.config.hmac_secret.as_deref()).await {
+            match self
+                .try_connect_via_url(&relay_url, slot, self.config.hmac_secret.as_deref())
+                .await
+            {
                 Ok(()) => {
-                    info!("Static peer relay connection ({}) closed normally", safe_url);
+                    info!(
+                        "Static peer relay connection ({}) closed normally",
+                        safe_url
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -674,10 +701,14 @@ impl HubClient {
             return Err(anyhow::anyhow!("No relay peers available"));
         }
         for (peer_id, host, relay_port) in &dynamic_peers {
-            let relay_url = rpc::build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
+            let relay_url =
+                rpc::build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
             let safe_url = rpc::safe_relay_url(host, *relay_port);
             info!("Attempting Hub relay via peer {} at {}", peer_id, safe_url);
-            match self.try_connect_via_url(&relay_url, slot, self.config.hmac_secret.as_deref()).await {
+            match self
+                .try_connect_via_url(&relay_url, slot, self.config.hmac_secret.as_deref())
+                .await
+            {
                 Ok(()) => {
                     info!("Dynamic peer relay (peer {}) closed normally", peer_id);
                     return Ok(());
@@ -691,7 +722,12 @@ impl HubClient {
     }
 
     /// Connect via a specific WebSocket URL (used for both direct and relay connections).
-    async fn try_connect_via_url(self: &Arc<Self>, url: &str, slot: usize, hmac_secret: Option<&str>) -> Result<()> {
+    async fn try_connect_via_url(
+        self: &Arc<Self>,
+        url: &str,
+        slot: usize,
+        hmac_secret: Option<&str>,
+    ) -> Result<()> {
         // Only downgrade to Connecting if no other slot is still Registered/Connected.
         // Avoids clobbering a better state while another slot is alive.
         {
@@ -703,22 +739,38 @@ impl HubClient {
         info!("Connecting to Hub at {} (slot {})", url, slot);
 
         const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-        let (mut ws_stream, _) = time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
-            .await
-            .with_context(|| format!("Hub WebSocket connect timed out after {:?} (slot {})", CONNECT_TIMEOUT, slot))?
-            .with_context(|| format!("Failed to connect to Hub WebSocket at {} (slot {})", url, slot))?;
+        let (mut ws_stream, _) =
+            time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
+                .await
+                .with_context(|| {
+                    format!(
+                        "Hub WebSocket connect timed out after {:?} (slot {})",
+                        CONNECT_TIMEOUT, slot
+                    )
+                })?
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to Hub WebSocket at {} (slot {})",
+                        url, slot
+                    )
+                })?;
 
         // Challenge-response auth handshake for relay connections.
         if let Some(secret) = hmac_secret {
             crate::relay_server::relay_auth_client(&mut ws_stream, secret)
                 .await
-                .with_context(|| format!("Relay auth handshake failed for {} (slot {})", url, slot))?;
+                .with_context(|| {
+                    format!("Relay auth handshake failed for {} (slot {})", url, slot)
+                })?;
         }
 
         info!("WebSocket connected to {} (slot {})", url, slot);
         {
             let mut st = self.state.write().await;
-            if matches!(*st, HubConnectionState::Disconnected | HubConnectionState::Connecting) {
+            if matches!(
+                *st,
+                HubConnectionState::Disconnected | HubConnectionState::Connecting
+            ) {
                 *st = HubConnectionState::Connected;
             }
         }
@@ -752,12 +804,15 @@ impl HubClient {
                 let result = time::timeout(
                     WS_WRITE_TIMEOUT,
                     ws_write.send(tungstenite::Message::Binary(Bytes::from(data))),
-                ).await;
+                )
+                .await;
                 match result {
                     Ok(Ok(())) => {} // write succeeded
                     Ok(Err(e)) => {
                         error!("WebSocket write error (slot {}): {}", slot, e);
-                        if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
+                        if let Some(tx) = fail_tx.take() {
+                            let _ = tx.send(());
+                        }
                         break;
                     }
                     Err(_) => {
@@ -766,7 +821,9 @@ impl HubClient {
                              TCP send buffer may be stalled; closing connection",
                             WS_WRITE_TIMEOUT, slot
                         );
-                        if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
+                        if let Some(tx) = fail_tx.take() {
+                            let _ = tx.send(());
+                        }
                         break;
                     }
                 }
@@ -906,7 +963,11 @@ impl HubClient {
         // Run the sync sequence (fullSync, joinCluster, reportLocalUsers, etc.)
         // exactly once.  CAS ensures only one slot executes it even if multiple
         // slots connect concurrently.
-        if self.sync_done.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+        if self
+            .sync_done
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
             // Replay control notifications that failed while the Hub was unreachable
             // (UserLeft, ChannelLinksChanged, ChannelRemoved).  Must happen before
             // do_full_sync so the Hub snapshot excludes ghost sessions and includes
@@ -919,7 +980,10 @@ impl HubClient {
                 warn!("Failed to report existing users to Hub: {}", e);
             }
             if let Err(e) = self.do_report_local_voice_targets().await {
-                warn!("Failed to re-upload local VoiceTarget configs to Hub: {}", e);
+                warn!(
+                    "Failed to re-upload local VoiceTarget configs to Hub: {}",
+                    e
+                );
             }
             // Open the gate so the notification processor starts handling events.
             // Use notify_one() (not notify_waiters()) so the permit is stored and
@@ -949,15 +1013,20 @@ impl HubClient {
                     grace_secs = HUB_RESTART_GRACE_SECS,
                     "Hub cold restart detected — deferring UserRemove for {} cached session(s); \
                      grace period: {}s",
-                    old_session_ids.len(), HUB_RESTART_GRACE_SECS
+                    old_session_ids.len(),
+                    HUB_RESTART_GRACE_SECS
                 );
                 // Re-enable accepting_connections immediately and synchronously here,
                 // before emitting the event.  The event listener sets it too, but it
                 // processes events asynchronously — if the listener is busy there would
                 // be a window where Hub is Registered but new connections are still
                 // refused with only a debug log.
-                self.edge_state.accepting_connections.store(true, Ordering::Relaxed);
-                self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: vec![] });
+                self.edge_state
+                    .accepting_connections
+                    .store(true, Ordering::Relaxed);
+                self.edge_state.emit(EdgeEvent::HubRegistered {
+                    disappeared_session_ids: vec![],
+                });
                 // Spawn the grace-period reconciliation task.
                 let state_clone = self.edge_state.clone();
                 let my_edge = self.edge_id();
@@ -978,7 +1047,10 @@ impl HubClient {
                         .filter(|id| !current_remote.contains(id))
                         .collect();
                     if reconciled.is_empty() {
-                        info!("Hub restart grace period elapsed — all {} cached sessions recovered", current_remote.len());
+                        info!(
+                            "Hub restart grace period elapsed — all {} cached sessions recovered",
+                            current_remote.len()
+                        );
                     } else {
                         warn!(
                             count = reconciled.len(),
@@ -986,7 +1058,9 @@ impl HubClient {
                              sending UserRemove",
                             reconciled.len()
                         );
-                        state_clone.emit(EdgeEvent::HubReconcileDisappeared { session_ids: reconciled });
+                        state_clone.emit(EdgeEvent::HubReconcileDisappeared {
+                            session_ids: reconciled,
+                        });
                     }
                 });
             } else {
@@ -995,22 +1069,43 @@ impl HubClient {
                 // processes events asynchronously — if the listener is busy there would
                 // be a window where Hub is Registered but new connections are still
                 // refused with only a debug log.
-                self.edge_state.accepting_connections.store(true, Ordering::Relaxed);
-                self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
+                self.edge_state
+                    .accepting_connections
+                    .store(true, Ordering::Relaxed);
+                self.edge_state.emit(EdgeEvent::HubRegistered {
+                    disappeared_session_ids: disappeared,
+                });
             }
-            info!("Edge registered with Hub successfully ({}, slot {})", url, slot);
+            info!(
+                "Edge registered with Hub successfully ({}, slot {})",
+                url, slot
+            );
         } else {
-            debug!("Slot {} connected (sync already done by another slot)", slot);
+            debug!(
+                "Slot {} connected (sync already done by another slot)",
+                slot
+            );
             // If Hub was previously declared unreachable (accepting_connections == false),
             // the slot that wins the sync CAS already re-emits HubRegistered.  But if
             // another slot was alive during the outage so sync_done was never reset, the
             // CAS always fails and HubRegistered is never emitted, leaving
             // accepting_connections permanently false.  Detect that here and recover.
-            if !self.edge_state.accepting_connections.load(Ordering::Relaxed) {
-                info!("Slot {} recovering accepting_connections after HubUnreachable (sync held by peer slot)", slot);
+            if !self
+                .edge_state
+                .accepting_connections
+                .load(Ordering::Relaxed)
+            {
+                info!(
+                    "Slot {} recovering accepting_connections after HubUnreachable (sync held by peer slot)",
+                    slot
+                );
                 // Same eager set to avoid the event-listener async delay.
-                self.edge_state.accepting_connections.store(true, Ordering::Relaxed);
-                self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: vec![] });
+                self.edge_state
+                    .accepting_connections
+                    .store(true, Ordering::Relaxed);
+                self.edge_state.emit(EdgeEvent::HubRegistered {
+                    disappeared_session_ids: vec![],
+                });
             }
         }
 
@@ -1047,18 +1142,25 @@ impl HubClient {
     /// All slots are peer-equal: any slot can perform registration & sync.
     async fn try_connect_slot(self: &Arc<Self>, slot: usize) -> Result<()> {
         let scheme = if self.config.tls { "wss" } else { "ws" };
-        let url = format!("{}://{}:{}", scheme, self.config.host, self.config.control_port);
+        let url = format!(
+            "{}://{}:{}",
+            scheme, self.config.host, self.config.control_port
+        );
         self.try_connect_via_url(&url, slot, None).await
     }
 
     /// Send raw bytes through a specific pool slot.
     async fn send_on_slot(&self, slot: usize, data: Vec<u8>) -> Result<()> {
-        let sender = self.pool_senders.get(slot)
+        let sender = self
+            .pool_senders
+            .get(slot)
             .ok_or_else(|| anyhow::anyhow!("Pool slot {} out of range", slot))?;
         // Clone the Sender under the lock so the Mutex is never held across the
         // async send — holding it would deadlock clear_slot() / any_slot_alive()
         // if the send suspends waiting for channel capacity.
-        let tx = sender.lock().await
+        let tx = sender
+            .lock()
+            .await
             .as_ref()
             .map(|s| s.clone())
             .ok_or_else(|| anyhow::anyhow!("Pool slot {} not connected", slot))?;
@@ -1101,8 +1203,14 @@ impl HubClient {
             }
         }
         // No live slot — all connections to Hub are down or busy
-        warn!("HubClient::send_raw: all {} pool slot(s) unavailable (disconnected or busy) — message dropped", self.pool_size);
-        Err(anyhow::anyhow!("all {} connection pool slots unavailable (disconnected or busy)", self.pool_size))
+        warn!(
+            "HubClient::send_raw: all {} pool slot(s) unavailable (disconnected or busy) — message dropped",
+            self.pool_size
+        );
+        Err(anyhow::anyhow!(
+            "all {} connection pool slots unavailable (disconnected or busy)",
+            self.pool_size
+        ))
     }
 
     /// Send an EdgeHubPacket to the Hub.
@@ -1143,7 +1251,11 @@ impl HubClient {
             }
         }
         if !cancelled.is_empty() {
-            debug!("Cancelled {} in-flight RPC(s) for disconnected pool slot {}", cancelled.len(), slot);
+            debug!(
+                "Cancelled {} in-flight RPC(s) for disconnected pool slot {}",
+                cancelled.len(),
+                slot
+            );
         }
     }
 
@@ -1162,7 +1274,11 @@ impl HubClient {
                 // Assign a new request_id so the retry doesn't collide with any
                 // stale response the Hub might still send for the original request.
                 request.request_id = self.next_request_id();
-                debug!("RPC {} retrying after slot failure (attempt {})", method, attempt + 1);
+                debug!(
+                    "RPC {} retrying after slot failure (attempt {})",
+                    method,
+                    attempt + 1
+                );
             }
 
             let request_id = request.request_id.clone();
@@ -1185,14 +1301,16 @@ impl HubClient {
                         // once rather than immediately returning an error.
                         const WAIT_FOR_SLOT: Duration = Duration::from_secs(10);
                         const POLL_INTERVAL: Duration = Duration::from_millis(250);
-                        warn!("No Hub slot available for RPC {method} — waiting up to {WAIT_FOR_SLOT:?} for reconnect");
+                        warn!(
+                            "No Hub slot available for RPC {method} — waiting up to {WAIT_FOR_SLOT:?} for reconnect"
+                        );
                         let deadline = time::Instant::now() + WAIT_FOR_SLOT;
                         loop {
                             time::sleep(POLL_INTERVAL).await;
                             if time::Instant::now() >= deadline {
-                                return Err(e.context(
-                                    format!("timed out waiting for Hub slot for RPC {method}"),
-                                ));
+                                return Err(e.context(format!(
+                                    "timed out waiting for Hub slot for RPC {method}"
+                                )));
                             }
                             if self.any_slot_alive().await {
                                 debug!("Hub slot available — retrying RPC {method}");
@@ -1206,7 +1324,13 @@ impl HubClient {
                 }
             };
 
-            self.pending.lock().await.insert(request_id.clone(), PendingRequest { tx, slot: used_slot });
+            self.pending.lock().await.insert(
+                request_id.clone(),
+                PendingRequest {
+                    tx,
+                    slot: used_slot,
+                },
+            );
 
             // Wait for response with timeout
             let timeout = Duration::from_secs(30);
@@ -1220,7 +1344,10 @@ impl HubClient {
                     // Slot died mid-flight (cancel_pending_for_slot dropped the sender).
                     // Retry once on a different slot.
                     if attempt == 0 {
-                        warn!("RPC {} cancelled (pool slot {} died mid-flight), retrying", method, used_slot);
+                        warn!(
+                            "RPC {} cancelled (pool slot {} died mid-flight), retrying",
+                            method, used_slot
+                        );
                         continue;
                     } else {
                         anyhow::bail!("RPC {} cancelled after retry", method);
@@ -1257,7 +1384,10 @@ impl HubClient {
             .await
             .context("spawn_blocking join error")?;
             match result {
-                Ok(buf) => { owned = buf; &owned }
+                Ok(buf) => {
+                    owned = buf;
+                    &owned
+                }
                 Err(e) => {
                     return Err(anyhow::anyhow!("Failed to decompress Hub message: {}", e));
                 }
@@ -1265,8 +1395,7 @@ impl HubClient {
         } else {
             data
         };
-        let packet = EdgeHubPacket::decode(data)
-            .context("Failed to decode EdgeHubPacket")?;
+        let packet = EdgeHubPacket::decode(data).context("Failed to decode EdgeHubPacket")?;
 
         match PacketType::try_from(packet.r#type) {
             Ok(PacketType::RpcResponse) => {
@@ -1276,7 +1405,8 @@ impl HubClient {
             }
             Ok(PacketType::RpcError) => {
                 if let Some(error) = packet.rpc_error {
-                    self.handle_rpc_error(&error.request_id, &error.message).await;
+                    self.handle_rpc_error(&error.request_id, &error.message)
+                        .await;
                 }
             }
             Ok(PacketType::RpcNotification) => {
@@ -1326,7 +1456,10 @@ impl HubClient {
             let _ = pending.tx.send(Ok(response));
         } else {
             // Expected for fire-and-forget requests such as relay_voice_via_hub.
-            debug!("Received response for unregistered request (fire-and-forget): {}", request_id);
+            debug!(
+                "Received response for unregistered request (fire-and-forget): {}",
+                request_id
+            );
         }
     }
 
@@ -1366,10 +1499,13 @@ impl HubClient {
         // The Hub's edge_connection handler ensures only the first connection
         // per edge stores its sender in edge_connections; subsequent pool
         // connections only set their server_id.
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.register RPC failed")?;
 
-        let result = response.edge_register
+        let result = response
+            .edge_register
             .ok_or_else(|| anyhow::anyhow!("No edge_register in response"))?;
 
         if !result.success {
@@ -1377,7 +1513,9 @@ impl HubClient {
             if let Some(challenge) = &result.challenge {
                 if let Some(hmac_secret) = &self.config.hmac_secret {
                     info!("Received HMAC challenge, sending response");
-                    return self.do_register_with_challenge(challenge, hmac_secret).await;
+                    return self
+                        .do_register_with_challenge(challenge, hmac_secret)
+                        .await;
                 }
             }
             anyhow::bail!("Registration failed: {:?}", result.error);
@@ -1431,10 +1569,13 @@ impl HubClient {
             ..Default::default()
         };
 
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.register (challenge) RPC failed")?;
 
-        let result = response.edge_register
+        let result = response
+            .edge_register
             .ok_or_else(|| anyhow::anyhow!("No edge_register in response"))?;
 
         if !result.success {
@@ -1484,10 +1625,13 @@ impl HubClient {
             ..Default::default()
         };
 
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.fullSync RPC failed")?;
 
-        let result = response.edge_full_sync
+        let result = response
+            .edge_full_sync
             .ok_or_else(|| anyhow::anyhow!("No edge_full_sync in response"))?;
 
         // Store the notification sequence from Hub so the processor knows where
@@ -1495,8 +1639,13 @@ impl HubClient {
         // are already reflected in the fullsync snapshot (or will be discarded
         // as duplicates).
         let hub_seq = result.sequence;
-        self.notification_expected_seq.store(hub_seq + 1, Ordering::Release);
-        info!(hub_seq, expected_next = hub_seq + 1, "Full sync: notification sequence initialised");
+        self.notification_expected_seq
+            .store(hub_seq + 1, Ordering::Release);
+        info!(
+            hub_seq,
+            expected_next = hub_seq + 1,
+            "Full sync: notification sequence initialised"
+        );
 
         // Filter out sessions belonging to this edge — they are tracked locally by
         // client_manager and must not pollute the remote_users cache.  Without this
@@ -1510,7 +1659,8 @@ impl HubClient {
         // This should not happen under normal operation (Hub cleans up stale sessions
         // during re-registration), but if it does it indicates a Hub-side bug or a
         // configuration error (duplicate server_id).
-        let local_in_snapshot: Vec<_> = result.sessions
+        let local_in_snapshot: Vec<_> = result
+            .sessions
             .iter()
             .filter(|s| s.edge_id == my_edge_id)
             .collect();
@@ -1521,11 +1671,13 @@ impl HubClient {
                 "Full sync: Hub snapshot contains {} session(s) attributed to THIS edge (edge_id={}) — \
                  these will be ignored. Possible causes: Hub did not clean up stale sessions, \
                  or duplicate server_id in config.",
-                local_in_snapshot.len(), my_edge_id
+                local_in_snapshot.len(),
+                my_edge_id
             );
         }
 
-        let remote_sessions: Vec<&munode_protocol::hubedge::GlobalSessionProto> = result.sessions
+        let remote_sessions: Vec<&munode_protocol::hubedge::GlobalSessionProto> = result
+            .sessions
             .iter()
             .filter(|s| s.edge_id != my_edge_id)
             .collect();
@@ -1534,7 +1686,8 @@ impl HubClient {
         // we can compute the "disappeared" diff once the fresh data is loaded.
         // Only consider sessions from other edges to exclude any stale local sessions
         // that may have been loaded into the cache by a previous buggy run.
-        let old_session_ids: std::collections::HashSet<u32> = self.edge_state
+        let old_session_ids: std::collections::HashSet<u32> = self
+            .edge_state
             .channel_manager
             .get_all_remote_users()
             .await
@@ -1544,21 +1697,22 @@ impl HubClient {
             .collect();
 
         // Load channels
-        self.edge_state.channel_manager.load_channels(
-            &result.channels,
-            &result.channel_links,
-        ).await;
+        self.edge_state
+            .channel_manager
+            .load_channels(&result.channels, &result.channel_links)
+            .await;
 
         // Load remote users (clears and repopulates the cache) — only remote sessions.
         let remote_sessions_owned: Vec<munode_protocol::hubedge::GlobalSessionProto> =
             remote_sessions.iter().map(|s| (*s).clone()).collect();
-        self.edge_state.channel_manager.load_remote_users(&remote_sessions_owned).await;
+        self.edge_state
+            .channel_manager
+            .load_remote_users(&remote_sessions_owned)
+            .await;
 
         // Compute sessions that existed before but are no longer present.
-        let new_session_ids: std::collections::HashSet<u32> = remote_sessions
-            .iter()
-            .map(|s| s.session_id)
-            .collect();
+        let new_session_ids: std::collections::HashSet<u32> =
+            remote_sessions.iter().map(|s| s.session_id).collect();
         let disappeared: Vec<u32> = old_session_ids
             .iter()
             .filter(|id| !new_session_ids.contains(*id))
@@ -1575,7 +1729,10 @@ impl HubClient {
                     disappeared.len()
                 );
             } else {
-                info!("Full sync: {} session(s) disappeared from Hub snapshot", disappeared.len());
+                info!(
+                    "Full sync: {} session(s) disappeared from Hub snapshot",
+                    disappeared.len()
+                );
             }
         }
 
@@ -1586,7 +1743,9 @@ impl HubClient {
             result.sessions.len(),
         );
         // Invalidate all BroadcastCaches: full state refresh means routing targets changed.
-        self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
+        self.edge_state
+            .topology_version
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
         Ok((disappeared, hub_was_empty, old_session_ids))
     }
 
@@ -1594,7 +1753,7 @@ impl HubClient {
     /// Called once after FullSync + cache clear so that voice targets set by users
     /// on other edges (or before this edge connected) are immediately available.
     async fn do_fetch_voice_targets(&self) {
-        use munode_protocol::hubedge::{EdgeGetVoiceTargetsParams};
+        use munode_protocol::hubedge::EdgeGetVoiceTargetsParams;
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
@@ -1606,9 +1765,15 @@ impl HubClient {
         let result = match self.rpc_call(request).await {
             Ok(r) => match r.edge_get_voice_targets {
                 Some(v) => v,
-                None => { warn!("edge.getVoiceTargets: empty response"); return; }
+                None => {
+                    warn!("edge.getVoiceTargets: empty response");
+                    return;
+                }
             },
-            Err(e) => { warn!("edge.getVoiceTargets RPC failed: {}", e); return; }
+            Err(e) => {
+                warn!("edge.getVoiceTargets RPC failed: {}", e);
+                return;
+            }
         };
         if result.voice_targets.is_empty() {
             return;
@@ -1631,7 +1796,10 @@ impl HubClient {
             .values()
             .map(|session_vts| session_vts.len())
             .sum();
-        debug!("Fetched {} voice target entries from Hub ({} cached locally)", total_from_hub, total);
+        debug!(
+            "Fetched {} voice target entries from Hub ({} cached locally)",
+            total_from_hub, total
+        );
     }
 
     /// Join the cluster topology so Hub can broadcast our address to peer Edges.
@@ -1656,10 +1824,13 @@ impl HubClient {
             ..Default::default()
         };
 
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.join RPC failed")?;
 
-        let result = response.edge_join
+        let result = response
+            .edge_join
             .ok_or_else(|| anyhow::anyhow!("No edge_join in response"))?;
 
         if !result.success {
@@ -1671,28 +1842,41 @@ impl HubClient {
             result.peers.len()
         );
         for peer in &result.peers {
-            info!("  Peer edge: {} (id={}, {}:{})", peer.name, peer.id, peer.host, peer.port);
+            info!(
+                "  Peer edge: {} (id={}, {}:{})",
+                peer.name, peer.id, peer.host, peer.port
+            );
             // Register each existing peer's UDP address
             if !peer.host.is_empty() && peer.voice_port > 0 {
                 if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
                     {
                         let current = self.edge_state.peer_registry.load_full();
                         let mut new_reg = (*current).clone();
-                        new_reg.upsert(peer.id, PeerEdgeInfo {
-                            udp_addr,
-                            host: peer.host.clone(),
-                            relay_port: None,
-                        });
+                        new_reg.upsert(
+                            peer.id,
+                            PeerEdgeInfo {
+                                udp_addr,
+                                host: peer.host.clone(),
+                                relay_port: None,
+                            },
+                        );
                         self.edge_state.peer_registry.store(Arc::new(new_reg));
                     }
-                    info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
+                    info!(
+                        "Registered direct UDP route to existing peer edge {} at {}",
+                        peer.id, udp_addr
+                    );
                 }
                 // Connect TCP voice pool to the existing peer, dedup via voice_tcp_peers.
                 let peer_id = peer.id;
                 let peer_host = peer.host.clone();
                 let voice_port = peer.voice_port as u16;
                 let already_managed = {
-                    self.edge_state.voice_tcp_peers.read().await.contains(&peer_id)
+                    self.edge_state
+                        .voice_tcp_peers
+                        .read()
+                        .await
+                        .contains(&peer_id)
                 };
                 if !already_managed {
                     let self_id = self.edge_state.get_edge_id();
@@ -1741,7 +1925,8 @@ impl HubClient {
         use crate::client::ClientState;
         let edge_id = self.edge_id();
         let clients = self.edge_state.client_manager.get_all_clients().await;
-        let ready_clients: Vec<_> = clients.iter()
+        let ready_clients: Vec<_> = clients
+            .iter()
             .filter(|c| c.state == ClientState::Ready)
             .collect();
 
@@ -1749,7 +1934,10 @@ impl HubClient {
             return Ok(());
         }
 
-        info!("Reporting {} existing local users to Hub after reconnect", ready_clients.len());
+        info!(
+            "Reporting {} existing local users to Hub after reconnect",
+            ready_clients.len()
+        );
 
         for client in ready_clients {
             let session_proto = GlobalSessionProto {
@@ -1776,13 +1964,21 @@ impl HubClient {
                 request_id,
                 method: "edge.reportSession".to_string(),
                 timeout_ms: Some(10000),
-                edge_report_session: Some(EdgeReportSessionParams { session: Some(session_proto) }),
+                edge_report_session: Some(EdgeReportSessionParams {
+                    session: Some(session_proto),
+                }),
                 ..Default::default()
             };
             if let Err(e) = self.rpc_call(request).await {
-                warn!("Failed to report existing session {} to Hub: {}", client.session, e);
+                warn!(
+                    "Failed to report existing session {} to Hub: {}",
+                    client.session, e
+                );
             } else {
-                debug!("Reported session {} ({}) to Hub", client.session, client.username);
+                debug!(
+                    "Reported session {} ({}) to Hub",
+                    client.session, client.username
+                );
             }
         }
 
@@ -1835,14 +2031,20 @@ impl HubClient {
                 ..Default::default()
             };
             if let Err(e) = self.rpc_call(request).await {
-                warn!("Failed to re-upload VoiceTarget session={} target={} to Hub: {}", session_id, target_id, e);
+                warn!(
+                    "Failed to re-upload VoiceTarget session={} target={} to Hub: {}",
+                    session_id, target_id, e
+                );
             } else {
                 upload_count += 1;
             }
         }
 
         if upload_count > 0 {
-            info!("Re-uploaded {} VoiceTarget configs to Hub after reconnect", upload_count);
+            info!(
+                "Re-uploaded {} VoiceTarget configs to Hub after reconnect",
+                upload_count
+            );
         }
         Ok(())
     }
@@ -1857,7 +2059,12 @@ impl HubClient {
             sequence += 1;
 
             let user_count = self.edge_state.client_manager.client_count().await as u32;
-            let channel_count = self.edge_state.channel_manager.get_all_channels().await.len() as u32;
+            let channel_count = self
+                .edge_state
+                .channel_manager
+                .get_all_channels()
+                .await
+                .len() as u32;
             let uptime_seconds = self.start_time.elapsed().as_secs();
 
             let packet = EdgeHubPacket {
@@ -1888,5 +2095,4 @@ impl HubClient {
             debug!("Heartbeat sent (seq={})", sequence);
         }
     }
-
 }

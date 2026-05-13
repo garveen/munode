@@ -9,8 +9,8 @@ use anyhow::Result;
 use munode_client::ClientEvent;
 
 use crate::harness::{
-    cleanup_clients, four_edge_env, single_edge_env, standard_env, sleep_ms,
-    ClientConfig, create_clients,
+    ClientConfig, cleanup_clients, create_clients, four_edge_env, single_edge_env, sleep_ms,
+    standard_env,
 };
 
 // ── Edge registration ─────────────────────────────────────────────────────
@@ -26,8 +26,14 @@ async fn test_two_edges_accept_connections() -> Result<()> {
     ];
     let clients = create_clients(&env, &configs).await?;
 
-    assert!(clients[0].is_connected(), "Edge 1 should accept connections");
-    assert!(clients[1].is_connected(), "Edge 2 should accept connections");
+    assert!(
+        clients[0].is_connected(),
+        "Edge 1 should accept connections"
+    );
+    assert!(
+        clients[1].is_connected(),
+        "Edge 2 should accept connections"
+    );
 
     cleanup_clients(clients).await;
     Ok(())
@@ -121,15 +127,15 @@ async fn test_channels_synced_across_edges() -> Result<()> {
 #[tokio::test]
 async fn test_new_channel_propagates_across_edges() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user1", 2),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 2)];
     let clients = create_clients(&env, &configs).await?;
     let (creator, observer) = (&clients[0], &clients[1]);
 
     let mut obs_rx = observer.subscribe();
-    let ch_id = creator.channel(0).create_subchannel("ClusterSyncChannel").await?;
+    let ch_id = creator
+        .channel(0)
+        .create_subchannel("ClusterSyncChannel")
+        .await?;
 
     // Observer on Edge 2 should receive ChannelCreated
     let ch_created = tokio::time::timeout(Duration::from_secs(8), async {
@@ -179,7 +185,7 @@ async fn test_user_state_propagates_across_edges() -> Result<()> {
         loop {
             match e2_rx.recv().await {
                 Ok(ClientEvent::UserStateChanged(u)) if u.session == e1_session && u.self_mute => {
-                    break true
+                    break true;
                 }
                 Ok(_) => continue,
                 Err(_) => break false,
@@ -189,10 +195,7 @@ async fn test_user_state_propagates_across_edges() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(
-        state_updated,
-        "Self-mute from Edge 1 should reach Edge 2"
-    );
+    assert!(state_updated, "Self-mute from Edge 1 should reach Edge 2");
 
     cleanup_clients(clients).await;
     Ok(())
@@ -223,10 +226,8 @@ async fn test_text_message_routes_across_edges() -> Result<()> {
     let received = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::TextMessage { message, .. })
-                    if message == "cluster-text-test" =>
-                {
-                    break true
+                Ok(ClientEvent::TextMessage { message, .. }) if message == "cluster-text-test" => {
+                    break true;
                 }
                 Ok(_) => continue,
                 Err(_) => break false,
@@ -349,10 +350,7 @@ async fn test_four_edge_all_users_visible_from_edge1() -> Result<()> {
 #[tokio::test]
 async fn test_single_edge_multi_user_visibility() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (a, b) = (&clients[0], &clients[1]);
 
@@ -479,7 +477,10 @@ async fn test_clean_disconnect_no_zombie_session() -> Result<()> {
     // Reconnect with the same username
     let second = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     let session_b = second[0].session_id().unwrap();
-    assert_ne!(session_b, session_a, "Reconnect should allocate a new session");
+    assert_ne!(
+        session_b, session_a,
+        "Reconnect should allocate a new session"
+    );
 
     sleep_ms(300).await;
 
@@ -543,4 +544,3 @@ async fn test_disconnected_users_not_visible_to_new_observer() -> Result<()> {
     cleanup_clients(obs).await;
     Ok(())
 }
-

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use munode_client::ClientEvent;
 use munode_client::{ConnectOptions, MumbleClient};
 use serde_json::json;
@@ -13,8 +13,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, watch};
 
 use crate::harness::{
-    certs_dir, cleanup_clients, create_clients, find_binary, find_free_port, sleep_ms,
-    wait_for_port, ClientConfig, HMAC_SECRET, TestEnvBuilder,
+    ClientConfig, HMAC_SECRET, TestEnvBuilder, certs_dir, cleanup_clients, create_clients,
+    find_binary, find_free_port, sleep_ms, wait_for_port,
 };
 use crate::users::find_user;
 
@@ -59,10 +59,12 @@ fn write_edge_cfg(
         "hmac_secret": HMAC_SECRET,
     });
     if let Some(peers) = static_peers {
-        hub_server["static_peers"] = json!(peers
-            .iter()
-            .map(|(h, p)| json!({"host": h, "relay_port": p}))
-            .collect::<Vec<_>>());
+        hub_server["static_peers"] = json!(
+            peers
+                .iter()
+                .map(|(h, p)| json!({"host": h, "relay_port": p}))
+                .collect::<Vec<_>>()
+        );
     }
     let cfg = json!({
         "server_id": 1,
@@ -82,7 +84,10 @@ fn write_edge_cfg(
     });
     let cfg_path = tmp.path().join(format!("{name}.json"));
     fs::write(&cfg_path, serde_json::to_string_pretty(&cfg)?)?;
-    Ok(DiagCtx { cfg_path, _tmp: tmp })
+    Ok(DiagCtx {
+        cfg_path,
+        _tmp: tmp,
+    })
 }
 
 fn write_bootstrap_edge_cfg(
@@ -135,7 +140,10 @@ fn write_bootstrap_edge_cfg(
     });
     let cfg_path = tmp.path().join(format!("{name}.json"));
     fs::write(&cfg_path, serde_json::to_string_pretty(&cfg)?)?;
-    Ok(DiagCtx { cfg_path, _tmp: tmp })
+    Ok(DiagCtx {
+        cfg_path,
+        _tmp: tmp,
+    })
 }
 
 fn run_diagnose(cfg_path: &PathBuf) -> Result<(String, i32)> {
@@ -187,22 +195,29 @@ async fn start_tcp_proxy(listen_port: u16, target_port: u16) -> Result<TcpProxyH
     Ok(TcpProxyHandle { shutdown_tx, join })
 }
 
-async fn wait_for_client_login(port: u16, username: &str, timeout: Duration) -> Result<MumbleClient> {
+async fn wait_for_client_login(
+    port: u16,
+    username: &str,
+    timeout: Duration,
+) -> Result<MumbleClient> {
     let user = find_user(username).expect("known integration test user");
     let deadline = Instant::now() + timeout;
 
     loop {
         let client = MumbleClient::new();
-        match client.connect(ConnectOptions {
-            host: "127.0.0.1".into(),
-            port,
-            username: username.to_string(),
-            password: Some(user.password.to_string()),
-            reject_unauthorized: false,
-            force_tcp_voice: true,
-            connect_timeout: Duration::from_secs(2),
-            ..Default::default()
-        }).await {
+        match client
+            .connect(ConnectOptions {
+                host: "127.0.0.1".into(),
+                port,
+                username: username.to_string(),
+                password: Some(user.password.to_string()),
+                reject_unauthorized: false,
+                force_tcp_voice: true,
+                connect_timeout: Duration::from_secs(2),
+                ..Default::default()
+            })
+            .await
+        {
             Ok(()) => return Ok(client),
             Err(err) => {
                 let error_text = err.to_string();
@@ -231,7 +246,11 @@ async fn wait_for_user_joined(
                 Ok(ClientEvent::UserJoined(user)) if user.name == username => return Ok(()),
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(err) => bail!("event channel closed while waiting for {} join: {}", username, err),
+                Err(err) => bail!(
+                    "event channel closed while waiting for {} join: {}",
+                    username,
+                    err
+                ),
             }
         }
     })
@@ -248,7 +267,10 @@ fn test_diagnose_control_relay_uses_edge_port() -> Result<()> {
     assert_eq!(code, 0, "stdout=\n{stdout}");
     assert!(stdout.contains("control_relay:"), "{stdout}");
     assert!(stdout.contains("enabled"), "{stdout}");
-    assert!(stdout.contains("19311"), "expected edge_port 19311 in:\n{stdout}");
+    assert!(
+        stdout.contains("19311"),
+        "expected edge_port 19311 in:\n{stdout}"
+    );
     Ok(())
 }
 
@@ -295,7 +317,10 @@ async fn test_edge_relay_ws_port_reachable_after_startup() -> Result<()> {
         TcpStream::connect(("127.0.0.1", edge_port)),
     )
     .await;
-    assert!(conn.is_ok(), "edge_port {edge_port} not reachable within 5s");
+    assert!(
+        conn.is_ok(),
+        "edge_port {edge_port} not reachable within 5s"
+    );
     assert!(
         conn.unwrap().is_ok(),
         "edge_port {edge_port} TCP connect error"
@@ -328,16 +353,21 @@ async fn test_edge_bootstraps_via_static_peer_relay_when_direct_hub_is_unreachab
     )?;
 
     let edge_bin = find_binary("munode-edge")?;
-    let edge_child = Command::new(&edge_bin)
-        .arg(&cfg.cfg_path)
-        .spawn()?;
+    let edge_child = Command::new(&edge_bin).arg(&cfg.cfg_path).spawn()?;
     let _edge_guard = ChildGuard(Some(edge_child));
 
     wait_for_port(fallback_client_port, Duration::from_secs(15))?;
 
-    let client = wait_for_client_login(fallback_client_port, "user1", Duration::from_secs(8)).await?;
-    assert!(client.is_connected(), "fallback edge client should connect after peer relay bootstrap");
-    assert!(!client.channels().is_empty(), "fallback edge should complete Hub sync via peer relay");
+    let client =
+        wait_for_client_login(fallback_client_port, "user1", Duration::from_secs(8)).await?;
+    assert!(
+        client.is_connected(),
+        "fallback edge client should connect after peer relay bootstrap"
+    );
+    assert!(
+        !client.channels().is_empty(),
+        "fallback edge should complete Hub sync via peer relay"
+    );
 
     cleanup_clients(vec![client]).await;
     drop(env);
@@ -370,15 +400,14 @@ async fn test_edge_switches_from_direct_hub_to_relay_and_keeps_control_plane() -
     )?;
 
     let edge_bin = find_binary("munode-edge")?;
-    let edge_child = Command::new(&edge_bin)
-        .arg(&cfg.cfg_path)
-        .spawn()?;
+    let edge_child = Command::new(&edge_bin).arg(&cfg.cfg_path).spawn()?;
     let _edge_guard = ChildGuard(Some(edge_child));
 
     wait_for_port(fallback_client_port, Duration::from_secs(15))?;
 
     let edge1_clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
-    let observer_edge2 = wait_for_client_login(fallback_client_port, "user2", Duration::from_secs(8)).await?;
+    let observer_edge2 =
+        wait_for_client_login(fallback_client_port, "user2", Duration::from_secs(8)).await?;
 
     sleep_ms(500).await;
     let mut edge1_rx = edge1_clients[0].subscribe();
@@ -394,7 +423,8 @@ async fn test_edge_switches_from_direct_hub_to_relay_and_keeps_control_plane() -
         "edge2 client should remain connected while relay takes over control-plane traffic"
     );
 
-    let guest_edge2 = wait_for_client_login(fallback_client_port, "guest", Duration::from_secs(8)).await?;
+    let guest_edge2 =
+        wait_for_client_login(fallback_client_port, "guest", Duration::from_secs(8)).await?;
     wait_for_user_joined(&mut edge1_rx, "guest", Duration::from_secs(8)).await?;
 
     let admin_edge1 = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;

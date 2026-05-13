@@ -8,7 +8,7 @@ use anyhow::Result;
 use munode_client::ClientEvent;
 
 use crate::harness::{
-    cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig, create_clients,
+    ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms, standard_env,
 };
 
 // ── Channel list & structure ──────────────────────────────────────────────
@@ -40,8 +40,8 @@ async fn test_seeded_channels_present() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
     let channels = clients[0].channels();
     let names: Vec<&str> = channels.iter().map(|c| c.name.as_str()).collect();
-    assert!(names.contains(&"Root"),    "Root channel missing");
-    assert!(names.contains(&"Lobby"),   "Lobby channel missing");
+    assert!(names.contains(&"Root"), "Root channel missing");
+    assert!(names.contains(&"Lobby"), "Lobby channel missing");
     assert!(names.contains(&"General"), "General channel missing");
     assert!(names.contains(&"Private"), "Private channel missing");
     cleanup_clients(clients).await;
@@ -55,7 +55,9 @@ async fn test_child_channels_have_correct_parent() -> Result<()> {
     let channels = clients[0].channels();
 
     for name in &["Lobby", "General", "Private"] {
-        let ch = channels.iter().find(|c| c.name.as_str() == *name)
+        let ch = channels
+            .iter()
+            .find(|c| c.name.as_str() == *name)
             .unwrap_or_else(|| panic!("Channel {} not found", name));
         assert_eq!(ch.parent, 0, "Channel {} should have root as parent", name);
     }
@@ -86,10 +88,13 @@ async fn test_create_channel() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
     let client = &clients[0];
 
-    let name = format!("TestCh_{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis());
+    let name = format!(
+        "TestCh_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
 
     let new_id = client.channel(0).create_subchannel(&name).await?;
     assert!(new_id > 0, "New channel ID should be > 0");
@@ -98,7 +103,10 @@ async fn test_create_channel() -> Result<()> {
 
     let channels = client.channels();
     let found = channels.iter().find(|c| c.channel_id == new_id);
-    assert!(found.is_some(), "Newly created channel should appear in channel list");
+    assert!(
+        found.is_some(),
+        "Newly created channel should appear in channel list"
+    );
     assert_eq!(found.unwrap().name, name);
 
     cleanup_clients(clients).await;
@@ -108,10 +116,7 @@ async fn test_create_channel() -> Result<()> {
 #[tokio::test]
 async fn test_create_channel_observers_notified() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user1", 1),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, observer) = (&clients[0], &clients[1]);
 
@@ -131,10 +136,7 @@ async fn test_create_channel_observers_notified() -> Result<()> {
 #[tokio::test]
 async fn test_create_channel_cross_edge_notified() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user2", 2),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user2", 2)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, observer) = (&clients[0], &clients[1]);
 
@@ -145,7 +147,10 @@ async fn test_create_channel_cross_edge_notified() -> Result<()> {
     admin.channel(0).create_subchannel(&name).await?;
 
     let got = wait_for_channel_event(&mut rx, &name, Duration::from_secs(8)).await;
-    assert!(got, "Cross-edge observer should receive channel creation notification");
+    assert!(
+        got,
+        "Cross-edge observer should receive channel creation notification"
+    );
 
     cleanup_clients(clients).await;
     Ok(())
@@ -196,10 +201,7 @@ async fn test_join_channel_updates_own_state() -> Result<()> {
 #[tokio::test]
 async fn test_move_user_notified_to_observer() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (mover, observer) = (&clients[0], &clients[1]);
 
@@ -224,7 +226,10 @@ async fn test_move_user_notified_to_observer() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(moved, "Observer should receive UserState with updated channel_id");
+    assert!(
+        moved,
+        "Observer should receive UserState with updated channel_id"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -234,16 +239,19 @@ async fn test_move_user_notified_to_observer() -> Result<()> {
 #[tokio::test]
 async fn test_channel_link_add_notifies_same_edge_observer() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user1", 1),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, observer) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let ch_a = admin.channel(0).create_subchannel(&format!("LinkA_{ts}")).await?;
-    let ch_b = admin.channel(0).create_subchannel(&format!("LinkB_{ts}")).await?;
+    let ch_a = admin
+        .channel(0)
+        .create_subchannel(&format!("LinkA_{ts}"))
+        .await?;
+    let ch_b = admin
+        .channel(0)
+        .create_subchannel(&format!("LinkB_{ts}"))
+        .await?;
     sleep_ms(400).await;
 
     let mut rx = observer.subscribe();
@@ -255,8 +263,7 @@ async fn test_channel_link_add_notifies_same_edge_observer() -> Result<()> {
         loop {
             match rx.recv().await {
                 Ok(ClientEvent::ChannelUpdated(ch))
-                    if ch.channel_id == ch_a
-                        && ch.links.contains(&ch_b) =>
+                    if ch.channel_id == ch_a && ch.links.contains(&ch_b) =>
                 {
                     break true;
                 }
@@ -276,16 +283,19 @@ async fn test_channel_link_add_notifies_same_edge_observer() -> Result<()> {
 #[tokio::test]
 async fn test_channel_link_remove_notifies_observer() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user1", 1),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, observer) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let ch_a = admin.channel(0).create_subchannel(&format!("UnlinkA_{ts}")).await?;
-    let ch_b = admin.channel(0).create_subchannel(&format!("UnlinkB_{ts}")).await?;
+    let ch_a = admin
+        .channel(0)
+        .create_subchannel(&format!("UnlinkA_{ts}"))
+        .await?;
+    let ch_b = admin
+        .channel(0)
+        .create_subchannel(&format!("UnlinkB_{ts}"))
+        .await?;
     sleep_ms(400).await;
 
     // Link first
@@ -300,8 +310,7 @@ async fn test_channel_link_remove_notifies_observer() -> Result<()> {
         loop {
             match rx.recv().await {
                 Ok(ClientEvent::ChannelUpdated(ch))
-                    if ch.channel_id == ch_a
-                        && !ch.links.contains(&ch_b) =>
+                    if ch.channel_id == ch_a && !ch.links.contains(&ch_b) =>
                 {
                     break true;
                 }
@@ -355,16 +364,19 @@ async fn wait_for_channel_event(
 #[tokio::test]
 async fn test_channel_link_add_notifies_cross_edge_observer() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user2", 2),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user2", 2)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, observer) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let ch_a = admin.channel(0).create_subchannel(&format!("LinkCrossA_{ts}")).await?;
-    let ch_b = admin.channel(0).create_subchannel(&format!("LinkCrossB_{ts}")).await?;
+    let ch_a = admin
+        .channel(0)
+        .create_subchannel(&format!("LinkCrossA_{ts}"))
+        .await?;
+    let ch_b = admin
+        .channel(0)
+        .create_subchannel(&format!("LinkCrossB_{ts}"))
+        .await?;
     sleep_ms(800).await;
 
     let mut rx = observer.subscribe();
@@ -394,16 +406,19 @@ async fn test_channel_link_add_notifies_cross_edge_observer() -> Result<()> {
 #[tokio::test]
 async fn test_channel_link_peers_receive_symmetric_notifications() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("guest", 1),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("guest", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, observer) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let ch_a = admin.channel(0).create_subchannel(&format!("LinkPeerA_{ts}")).await?;
-    let ch_b = admin.channel(0).create_subchannel(&format!("LinkPeerB_{ts}")).await?;
+    let ch_a = admin
+        .channel(0)
+        .create_subchannel(&format!("LinkPeerA_{ts}"))
+        .await?;
+    let ch_b = admin
+        .channel(0)
+        .create_subchannel(&format!("LinkPeerB_{ts}"))
+        .await?;
     sleep_ms(500).await;
 
     let mut rx = observer.subscribe();
@@ -434,7 +449,10 @@ async fn test_channel_link_peers_receive_symmetric_notifications() -> Result<()>
     .await;
 
     assert!(got_a_to_b, "Observer should see ch_a links contain ch_b");
-    assert!(got_b_to_a, "Peer ch_b should also receive symmetric link to ch_a");
+    assert!(
+        got_b_to_a,
+        "Peer ch_b should also receive symmetric link to ch_a"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -462,7 +480,10 @@ async fn test_user_restored_to_last_channel_after_reconnect() -> Result<()> {
     c1.channel(1).join().await?;
     sleep_ms(500).await;
     let s1 = c1.me().session().expect("session");
-    assert_eq!(s1.channel_id, 1, "user1 should be in channel 1 before disconnect");
+    assert_eq!(
+        s1.channel_id, 1,
+        "user1 should be in channel 1 before disconnect"
+    );
     let _ = c1.disconnect().await;
     sleep_ms(500).await;
 
@@ -560,4 +581,3 @@ async fn test_user_falls_back_to_root_when_last_channel_deleted() -> Result<()> 
     let _ = admin.disconnect().await;
     Ok(())
 }
-

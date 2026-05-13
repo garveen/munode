@@ -37,14 +37,19 @@ impl<'a> ChannelRef<'a> {
 
     /// Create a new subchannel under this channel and return its id.
     pub async fn create_subchannel(&self, name: impl Into<String>) -> Result<u32> {
-        self.client.create_channel(&name.into(), self.channel_id).await
+        self.client
+            .create_channel(&name.into(), self.channel_id)
+            .await
     }
 
     /// Delete this channel.
     pub async fn delete(&self) -> Result<()> {
-        self.client.send_proto(MessageType::ChannelRemove, &mumbleproto::ChannelRemove {
-            channel_id: self.channel_id,
-        })
+        self.client.send_proto(
+            MessageType::ChannelRemove,
+            &mumbleproto::ChannelRemove {
+                channel_id: self.channel_id,
+            },
+        )
     }
 
     /// Rename the channel.
@@ -109,20 +114,26 @@ impl<'a> ChannelRef<'a> {
 
     /// Send a text message into this channel.
     pub async fn send_text(&self, text: impl Into<String>) -> Result<()> {
-        self.client.send_proto(MessageType::TextMessage, &mumbleproto::TextMessage {
-            channel_id: vec![self.channel_id],
-            message: text.into(),
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::TextMessage,
+            &mumbleproto::TextMessage {
+                channel_id: vec![self.channel_id],
+                message: text.into(),
+                ..Default::default()
+            },
+        )
     }
 
     /// Send a text message recursively to this channel and all its sub-channels.
     pub async fn send_text_tree(&self, text: impl Into<String>) -> Result<()> {
-        self.client.send_proto(MessageType::TextMessage, &mumbleproto::TextMessage {
-            tree_id: vec![self.channel_id],
-            message: text.into(),
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::TextMessage,
+            &mumbleproto::TextMessage {
+                tree_id: vec![self.channel_id],
+                message: text.into(),
+                ..Default::default()
+            },
+        )
     }
 
     /// Begin listening to this channel (link as listener).
@@ -137,19 +148,25 @@ impl<'a> ChannelRef<'a> {
 
     /// Request the channel's full description blob from the server.
     pub async fn request_description(&self) -> Result<()> {
-        self.client.send_proto(MessageType::RequestBlob, &mumbleproto::RequestBlob {
-            channel_description: vec![self.channel_id],
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::RequestBlob,
+            &mumbleproto::RequestBlob {
+                channel_description: vec![self.channel_id],
+                ..Default::default()
+            },
+        )
     }
 
     /// Send a `PermissionQuery` for this channel.
     pub async fn query_permission(&self, mask: u32) -> Result<()> {
-        self.client.send_proto(MessageType::PermissionQuery, &mumbleproto::PermissionQuery {
-            channel_id: Some(self.channel_id),
-            permissions: Some(mask),
-            flush: Some(false),
-        })
+        self.client.send_proto(
+            MessageType::PermissionQuery,
+            &mumbleproto::PermissionQuery {
+                channel_id: Some(self.channel_id),
+                permissions: Some(mask),
+                flush: Some(false),
+            },
+        )
     }
 
     /// Send a permission query and await the server's response.
@@ -160,9 +177,10 @@ impl<'a> ChannelRef<'a> {
         timeout(wait, async move {
             loop {
                 match sub.recv().await {
-                    Ok(ClientEvent::PermissionQuery { channel_id, permissions })
-                        if channel_id == id =>
-                    {
+                    Ok(ClientEvent::PermissionQuery {
+                        channel_id,
+                        permissions,
+                    }) if channel_id == id => {
                         return Ok(permissions);
                     }
                     Ok(_) => continue,

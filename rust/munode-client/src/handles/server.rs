@@ -28,10 +28,13 @@ impl<'a> Server<'a> {
     /// Send a `BanList` query to the server. The server's response will
     /// arrive as `ClientEvent::BanList`.
     pub async fn request_bans(&self) -> Result<()> {
-        self.client.send_proto(MessageType::BanList, &mumbleproto::BanList {
-            query: Some(true),
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::BanList,
+            &mumbleproto::BanList {
+                query: Some(true),
+                ..Default::default()
+            },
+        )
     }
 
     /// Query the ban list and wait for the response.
@@ -62,10 +65,13 @@ impl<'a> Server<'a> {
     /// Replace the entire ban list with the given entries (Mumble protocol
     /// semantics: sending `BanList` with `query=false` overwrites the list).
     pub async fn save_bans(&self, bans: &[Ban]) -> Result<()> {
-        self.client.send_proto(MessageType::BanList, &mumbleproto::BanList {
-            bans: bans.iter().map(Ban::to_proto).collect(),
-            query: Some(false),
-        })
+        self.client.send_proto(
+            MessageType::BanList,
+            &mumbleproto::BanList {
+                bans: bans.iter().map(Ban::to_proto).collect(),
+                query: Some(false),
+            },
+        )
     }
 
     /// Low-level escape hatch: send a raw `BanList` protobuf message.
@@ -100,7 +106,8 @@ impl<'a> Server<'a> {
 
     /// Request the list of registered users (`UserList` message).
     pub async fn request_registered_users(&self) -> Result<()> {
-        self.client.send_proto(MessageType::UserList, &mumbleproto::UserList::default())
+        self.client
+            .send_proto(MessageType::UserList, &mumbleproto::UserList::default())
     }
 
     /// Query and await the registered user list.
@@ -124,9 +131,12 @@ impl<'a> Server<'a> {
     /// blank `name`; rename by setting a new `name`. Mirrors the C++
     /// UserList editor behaviour.
     pub async fn save_registered_users(&self, users: &[RegisteredUser]) -> Result<()> {
-        self.client.send_proto(MessageType::UserList, &mumbleproto::UserList {
-            users: users.iter().map(RegisteredUser::to_proto).collect(),
-        })
+        self.client.send_proto(
+            MessageType::UserList,
+            &mumbleproto::UserList {
+                users: users.iter().map(RegisteredUser::to_proto).collect(),
+            },
+        )
     }
 
     /// Convenience: rename a single registered user.
@@ -156,7 +166,10 @@ impl<'a> Server<'a> {
     /// Resolve user IDs ↔ names via `QueryUsers`. The response arrives as
     /// `ClientEvent::QueryUsers` (re-fired by the client).
     pub async fn query_users(&self, ids: Vec<u32>, names: Vec<String>) -> Result<()> {
-        self.client.send_proto(MessageType::QueryUsers, &mumbleproto::QueryUsers { ids, names })
+        self.client.send_proto(
+            MessageType::QueryUsers,
+            &mumbleproto::QueryUsers { ids, names },
+        )
     }
 
     /// Resolve and wait for the `QueryUsers` response.
@@ -222,11 +235,14 @@ impl<'a> Server<'a> {
         session: Option<u32>,
         channel_id: Option<u32>,
     ) -> Result<()> {
-        self.client.send_proto(MessageType::ContextAction, &mumbleproto::ContextAction {
-            action: action.to_owned(),
-            session,
-            channel_id,
-        })
+        self.client.send_proto(
+            MessageType::ContextAction,
+            &mumbleproto::ContextAction {
+                action: action.to_owned(),
+                session,
+                channel_id,
+            },
+        )
     }
 
     // ── Plugin data ───────────────────────────────────────────────────────

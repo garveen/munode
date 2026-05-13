@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::Instant;
 
 use bytes::BytesMut;
 use prost::Message;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::warn;
 
 use munode_protocol::message_type::MessageType;
@@ -206,11 +206,7 @@ impl ClientManager {
     ///
     /// Once registered, [`send_close_signal`] will trigger the signal,
     /// causing the per-client read loop to break and the TCP connection to close.
-    pub async fn register_close_signal(
-        &self,
-        session: u32,
-        tx: oneshot::Sender<()>,
-    ) {
+    pub async fn register_close_signal(&self, session: u32, tx: oneshot::Sender<()>) {
         if let Some(entry) = self.sessions.write().await.get_mut(&session) {
             entry.close_signal = Some(tx);
         }
@@ -254,25 +250,39 @@ impl ClientManager {
         // Insert session entry — one write lock for all per-session state.
         {
             let mut sess = self.sessions.write().await;
-            sess.insert(session, SessionEntry {
-                info: client,
-                crypt_state: None,
-                bandwidth: Arc::clone(&bw_arc),
-                close_signal: None,
-                ping_stats: Arc::new(std::sync::Mutex::new(PingStats::default())),
-                ready: ready_flag.clone(),
-            });
+            sess.insert(
+                session,
+                SessionEntry {
+                    info: client,
+                    crypt_state: None,
+                    bandwidth: Arc::clone(&bw_arc),
+                    close_signal: None,
+                    ping_stats: Arc::new(std::sync::Mutex::new(PingStats::default())),
+                    ready: ready_flag.clone(),
+                },
+            );
         }
 
         // Register sender in the lightweight broadcast registry (sync write, non-blocking).
-        self.sender_registry.write().unwrap()
+        self.sender_registry
+            .write()
+            .unwrap()
             .insert(session, (sender.clone(), ready_flag));
 
         // Register in HotSlot for lock-free voice-routing reads.
         // bandwidth is stored before active=true so the hot path always finds it.
         crate::hot_slot::get_hot_slot(session).register(
-            session, channel_id, deaf, self_deaf, suppress, mute, self_mute, sender.clone_sender(), bw_arc,
-            client_groups, plugin_context,
+            session,
+            channel_id,
+            deaf,
+            self_deaf,
+            suppress,
+            mute,
+            self_mute,
+            sender.clone_sender(),
+            bw_arc,
+            client_groups,
+            plugin_context,
         );
 
         // Register in channel membership index.
@@ -322,12 +332,18 @@ impl ClientManager {
         {
             let slot = crate::hot_slot::get_hot_slot(session);
             if slot.is_active_for(session) {
-                slot.deaf.store(new_deaf, std::sync::atomic::Ordering::Relaxed);
-                slot.self_deaf.store(new_self_deaf, std::sync::atomic::Ordering::Relaxed);
-                slot.suppress.store(new_suppress, std::sync::atomic::Ordering::Relaxed);
-                slot.mute.store(new_mute, std::sync::atomic::Ordering::Relaxed);
-                slot.self_mute.store(new_self_mute, std::sync::atomic::Ordering::Relaxed);
-                slot.channel_id.store(new_channel_id, std::sync::atomic::Ordering::Relaxed);
+                slot.deaf
+                    .store(new_deaf, std::sync::atomic::Ordering::Relaxed);
+                slot.self_deaf
+                    .store(new_self_deaf, std::sync::atomic::Ordering::Relaxed);
+                slot.suppress
+                    .store(new_suppress, std::sync::atomic::Ordering::Relaxed);
+                slot.mute
+                    .store(new_mute, std::sync::atomic::Ordering::Relaxed);
+                slot.self_mute
+                    .store(new_self_mute, std::sync::atomic::Ordering::Relaxed);
+                slot.channel_id
+                    .store(new_channel_id, std::sync::atomic::Ordering::Relaxed);
                 slot.groups.store(client_groups);
                 slot.plugin_context.store(plugin_context);
             }
@@ -384,8 +400,10 @@ impl ClientManager {
         {
             let slot = crate::hot_slot::get_hot_slot(session);
             if slot.is_active_for(session) {
-                slot.channel_id.store(new_channel, std::sync::atomic::Ordering::Relaxed);
-                slot.suppress.store(new_suppress, std::sync::atomic::Ordering::Relaxed);
+                slot.channel_id
+                    .store(new_channel, std::sync::atomic::Ordering::Relaxed);
+                slot.suppress
+                    .store(new_suppress, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -465,8 +483,10 @@ impl ClientManager {
         {
             let slot = crate::hot_slot::get_hot_slot(session);
             if slot.is_active_for(session) {
-                slot.channel_id.store(new_channel, std::sync::atomic::Ordering::Relaxed);
-                slot.suppress.store(new_suppress, std::sync::atomic::Ordering::Relaxed);
+                slot.channel_id
+                    .store(new_channel, std::sync::atomic::Ordering::Relaxed);
+                slot.suppress
+                    .store(new_suppress, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -564,12 +584,18 @@ impl ClientManager {
 
     /// Get a client by session ID.
     pub async fn get_client(&self, session: u32) -> Option<ClientInfo> {
-        self.sessions.read().await.get(&session).map(|e| e.info.clone())
+        self.sessions
+            .read()
+            .await
+            .get(&session)
+            .map(|e| e.info.clone())
     }
 
     /// Get the plugin_context for a session. Returns empty vec if not found.
     pub async fn get_plugin_context(&self, session: u32) -> Vec<u8> {
-        self.sessions.read().await
+        self.sessions
+            .read()
+            .await
             .get(&session)
             .map(|e| e.info.plugin_context.clone())
             .unwrap_or_default()
@@ -577,7 +603,11 @@ impl ClientManager {
 
     /// Get a sender for a specific client.
     pub async fn get_sender(&self, session: u32) -> Option<ClientSender> {
-        self.sender_registry.read().unwrap().get(&session).map(|(s, _)| s.clone())
+        self.sender_registry
+            .read()
+            .unwrap()
+            .get(&session)
+            .map(|(s, _)| s.clone())
     }
 
     /// Get the number of connected clients.
@@ -597,7 +627,12 @@ impl ClientManager {
 
     /// Get all connected clients.
     pub async fn get_all_clients(&self) -> Vec<ClientInfo> {
-        self.sessions.read().await.values().map(|e| e.info.clone()).collect()
+        self.sessions
+            .read()
+            .await
+            .values()
+            .map(|e| e.info.clone())
+            .collect()
     }
 
     /// Get all session IDs.
@@ -622,13 +657,7 @@ impl ClientManager {
             let ch_users = self.channel_users.read().await;
             channels
                 .iter()
-                .flat_map(|ch| {
-                    ch_users
-                        .get(ch)
-                        .into_iter()
-                        .flatten()
-                        .copied()
-                })
+                .flat_map(|ch| ch_users.get(ch).into_iter().flatten().copied())
                 .filter(|&s| s != exclude_session)
                 .collect()
         };
@@ -778,7 +807,12 @@ impl ClientManager {
 
     /// Get the CryptState handle for a session (shared, lockable).
     pub async fn get_crypt_state(&self, session: u32) -> Option<Arc<Mutex<CryptState>>> {
-        self.sessions.read().await.get(&session)?.crypt_state.clone()
+        self.sessions
+            .read()
+            .await
+            .get(&session)?
+            .crypt_state
+            .clone()
     }
 
     /// Restore a previously-saved CryptState Arc directly (used when re-adding a
@@ -795,7 +829,11 @@ impl ClientManager {
 
     /// Update the decrypt IV for a session (called on CryptSetup resync).
     pub async fn update_decrypt_iv(&self, session: u32, client_nonce: &[u8; 16]) {
-        if let Some(arc) = self.sessions.read().await.get(&session)
+        if let Some(arc) = self
+            .sessions
+            .read()
+            .await
+            .get(&session)
             .and_then(|e| e.crypt_state.clone())
         {
             arc.lock().unwrap().update_decrypt_iv(client_nonce);
@@ -804,7 +842,13 @@ impl ClientManager {
 
     /// Get the current encrypt IV for a session (to send in CryptSetup resync response).
     pub async fn get_encrypt_iv(&self, session: u32) -> Option<Vec<u8>> {
-        let cs_arc = self.sessions.read().await.get(&session)?.crypt_state.clone()?;
+        let cs_arc = self
+            .sessions
+            .read()
+            .await
+            .get(&session)?
+            .crypt_state
+            .clone()?;
         Some(cs_arc.lock().unwrap().encrypt_iv.to_vec())
     }
 
@@ -814,7 +858,13 @@ impl ClientManager {
             .read()
             .await
             .iter()
-            .filter_map(|(&s, e)| if e.crypt_state.is_some() { Some(s) } else { None })
+            .filter_map(|(&s, e)| {
+                if e.crypt_state.is_some() {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
@@ -827,11 +877,21 @@ impl ClientManager {
     pub async fn get_sender_voice_info(
         &self,
         session: u32,
-    ) -> Option<(Arc<Mutex<CryptState>>, u32, bool, Arc<Mutex<BandwidthRecord>>)> {
+    ) -> Option<(
+        Arc<Mutex<CryptState>>,
+        u32,
+        bool,
+        Arc<Mutex<BandwidthRecord>>,
+    )> {
         let sess = self.sessions.read().await;
         let entry = sess.get(&session)?;
         let cs = entry.crypt_state.clone()?;
-        Some((cs, entry.info.channel_id, entry.info.suppress, entry.bandwidth.clone()))
+        Some((
+            cs,
+            entry.info.channel_id,
+            entry.info.suppress,
+            entry.bandwidth.clone(),
+        ))
     }
 
     /// Snapshot all candidates for UDP session identification in a single lock acquisition.
@@ -843,14 +903,34 @@ impl ClientManager {
     pub async fn get_udp_identification_candidates(
         &self,
         already_mapped: &std::collections::HashSet<u32>,
-    ) -> Vec<(u32, Arc<Mutex<CryptState>>, u32, bool, bool, bool, Arc<Mutex<BandwidthRecord>>)> {
+    ) -> Vec<(
+        u32,
+        Arc<Mutex<CryptState>>,
+        u32,
+        bool,
+        bool,
+        bool,
+        Arc<Mutex<BandwidthRecord>>,
+    )> {
         self.sessions
             .read()
             .await
             .iter()
             .filter_map(|(&sid, e)| {
-                if already_mapped.contains(&sid) { return None; }
-                e.crypt_state.as_ref().map(|cs| (sid, Arc::clone(cs), e.info.channel_id, e.info.suppress, e.info.mute, e.info.self_mute, e.bandwidth.clone()))
+                if already_mapped.contains(&sid) {
+                    return None;
+                }
+                e.crypt_state.as_ref().map(|cs| {
+                    (
+                        sid,
+                        Arc::clone(cs),
+                        e.info.channel_id,
+                        e.info.suppress,
+                        e.info.mute,
+                        e.info.self_mute,
+                        e.bandwidth.clone(),
+                    )
+                })
             })
             .collect()
     }
@@ -892,7 +972,12 @@ impl ClientManager {
     /// Return the bytes-per-second in the most recently completed second for a session.
     /// Returns `0` if no bandwidth data has been recorded.
     pub async fn get_bandwidth_stats(&self, session: u32) -> u32 {
-        let arc = self.sessions.read().await.get(&session).map(|e| e.bandwidth.clone());
+        let arc = self
+            .sessions
+            .read()
+            .await
+            .get(&session)
+            .map(|e| e.bandwidth.clone());
         match arc {
             Some(r) => r.lock().map(|g| g.bytes_last_second()).unwrap_or(0),
             None => 0,
@@ -942,7 +1027,12 @@ impl ClientManager {
 
     /// Get a snapshot of ping statistics for a session.
     pub async fn get_ping_stats(&self, session: u32) -> Option<PingStats> {
-        let arc = self.sessions.read().await.get(&session).map(|e| e.ping_stats.clone())?;
+        let arc = self
+            .sessions
+            .read()
+            .await
+            .get(&session)
+            .map(|e| e.ping_stats.clone())?;
         arc.lock().ok().map(|p| p.clone())
     }
 
@@ -964,7 +1054,12 @@ impl ClientManager {
     /// competes with state-mutation operations (`update_client`, `move_client`,
     /// etc.).  Each send is non-blocking (`try_send`): a slow client drops the
     /// frame instead of stalling the caller's read loop.
-    pub async fn broadcast<M: Message>(&self, msg_type: MessageType, message: &M, exclude_session: Option<u32>) {
+    pub async fn broadcast<M: Message>(
+        &self,
+        msg_type: MessageType,
+        message: &M,
+        exclude_session: Option<u32>,
+    ) {
         let mut buf = BytesMut::new();
         encode_message(msg_type, message, &mut buf);
         let data = buf.freeze();
@@ -982,7 +1077,10 @@ impl ClientManager {
 
         for (session, sender) in targets {
             if !sender.try_send_raw(data.clone()) {
-                warn!("Dropped broadcast to session {} (send channel full)", session);
+                warn!(
+                    "Dropped broadcast to session {} (send channel full)",
+                    session
+                );
             }
         }
     }
@@ -1004,7 +1102,8 @@ impl ClientManager {
         // Sync read lock — no async suspension, no competition with state writes.
         let targets: Vec<(u32, ClientSender)> = {
             let reg = self.sender_registry.read().unwrap();
-            member_ids.iter()
+            member_ids
+                .iter()
                 .filter(|&&s| Some(s) != exclude_session)
                 .filter_map(|&s| {
                     reg.get(&s)
@@ -1016,17 +1115,29 @@ impl ClientManager {
 
         for (session, sender) in targets {
             if !sender.try_send_raw(data.clone()) {
-                warn!("Dropped channel broadcast to session {} (send channel full)", session);
+                warn!(
+                    "Dropped channel broadcast to session {} (send channel full)",
+                    session
+                );
             }
         }
     }
 
     /// Send a message to a specific client.
-    pub async fn send_to<M: Message>(&self, session: u32, msg_type: MessageType, message: &M) -> bool {
+    pub async fn send_to<M: Message>(
+        &self,
+        session: u32,
+        msg_type: MessageType,
+        message: &M,
+    ) -> bool {
         let mut buf = BytesMut::new();
         encode_message(msg_type, message, &mut buf);
-        let sender = self.sender_registry.read().unwrap()
-            .get(&session).map(|(s, _)| s.clone());
+        let sender = self
+            .sender_registry
+            .read()
+            .unwrap()
+            .get(&session)
+            .map(|(s, _)| s.clone());
         if let Some(s) = sender {
             s.send_raw(buf.freeze()).await
         } else {
@@ -1088,7 +1199,10 @@ impl ClientManager {
 
         // Drain sender_registry synchronously (sync write lock, no await).
         // We send to these handles after releasing all locks.
-        let senders: Vec<ClientSender> = self.sender_registry.write().unwrap()
+        let senders: Vec<ClientSender> = self
+            .sender_registry
+            .write()
+            .unwrap()
             .drain()
             .map(|(_, (s, _))| s)
             .collect();
@@ -1173,8 +1287,10 @@ mod tests {
         let (tx1, _rx1) = mpsc::channel(16);
         let (tx2, _rx2) = mpsc::channel(16);
 
-        mgr.add_client(make_test_client(1, 0), ClientSender::new(tx1)).await;
-        mgr.add_client(make_test_client(2, 0), ClientSender::new(tx2)).await;
+        mgr.add_client(make_test_client(1, 0), ClientSender::new(tx1))
+            .await;
+        mgr.add_client(make_test_client(2, 0), ClientSender::new(tx2))
+            .await;
 
         let sessions = mgr.get_channel_sessions(0).await;
         assert_eq!(sessions.len(), 2);
@@ -1249,7 +1365,8 @@ mod tests {
         let mgr = ClientManager::new();
         let (tx, _rx) = mpsc::channel(16);
         let session = 42u32;
-        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx)).await;
+        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx))
+            .await;
         let cap = 500u32;
         let frame_bytes = 100u32;
 
@@ -1268,7 +1385,10 @@ mod tests {
             }
         }
 
-        assert!(dropped, "cap of {cap} bps should have been exceeded within {max_iters} frames");
+        assert!(
+            dropped,
+            "cap of {cap} bps should have been exceeded within {max_iters} frames"
+        );
         // At most cap/frame_bytes frames should have been accepted before the cap was hit.
         assert!(
             accepted <= cap / frame_bytes,
@@ -1282,7 +1402,8 @@ mod tests {
         let mgr = ClientManager::new();
         let (tx, _rx) = mpsc::channel(16);
         let session = 99u32;
-        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx)).await;
+        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx))
+            .await;
 
         // cap = 0 means unlimited — all frames should be accepted.
         for _ in 0..10 {
@@ -1300,7 +1421,8 @@ mod tests {
         let mgr = ClientManager::new();
         let (tx, _rx) = mpsc::channel(16);
         let session = 7u32;
-        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx)).await;
+        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx))
+            .await;
 
         // Seed an initial record with a 60-s window.
         mgr.record_voice_bytes(session, 100, 0, 60).await;
@@ -1309,8 +1431,12 @@ mod tests {
         {
             let sess = mgr.sessions.read().await;
             assert_eq!(
-                sess.get(&session).expect("session should exist")
-                    .bandwidth.lock().unwrap().window_secs(),
+                sess.get(&session)
+                    .expect("session should exist")
+                    .bandwidth
+                    .lock()
+                    .unwrap()
+                    .window_secs(),
                 effective_window(60),
                 "initial window should be 60 slots"
             );
@@ -1323,8 +1449,12 @@ mod tests {
         {
             let sess = mgr.sessions.read().await;
             assert_eq!(
-                sess.get(&session).expect("session should exist after window resize")
-                    .bandwidth.lock().unwrap().window_secs(),
+                sess.get(&session)
+                    .expect("session should exist after window resize")
+                    .bandwidth
+                    .lock()
+                    .unwrap()
+                    .window_secs(),
                 effective_window(120),
                 "window should be updated to 120 slots after hot-reload"
             );

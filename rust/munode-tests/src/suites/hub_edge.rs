@@ -9,8 +9,8 @@ use anyhow::Result;
 use munode_client::ClientEvent;
 
 use crate::harness::{
-    cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig,
-    create_clients, TestEnvBuilder,
+    ClientConfig, TestEnvBuilder, cleanup_clients, create_clients, single_edge_env, sleep_ms,
+    standard_env,
 };
 
 // ── Environment & auth server ─────────────────────────────────────────────
@@ -134,7 +134,11 @@ async fn test_join_channel() -> Result<()> {
     sleep_ms(300).await;
 
     let session = client.session();
-    assert_eq!(session.map(|s| s.channel_id), Some(1), "User should be in channel 1");
+    assert_eq!(
+        session.map(|s| s.channel_id),
+        Some(1),
+        "User should be in channel 1"
+    );
 
     cleanup_clients(clients).await;
     Ok(())
@@ -160,10 +164,7 @@ async fn test_join_nonexistent_channel_does_not_crash() -> Result<()> {
 #[tokio::test]
 async fn test_users_can_see_each_other() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
 
     sleep_ms(200).await;
@@ -181,10 +182,7 @@ async fn test_users_can_see_each_other() -> Result<()> {
 #[tokio::test]
 async fn test_user_left_event_on_disconnect() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (c1, c2) = (&clients[0], &clients[1]);
 
@@ -211,7 +209,10 @@ async fn test_user_left_event_on_disconnect() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(got_leave, "Should receive UserLeft event when user disconnects");
+    assert!(
+        got_leave,
+        "Should receive UserLeft event when user disconnects"
+    );
 
     c2.disconnect().await?;
     Ok(())
@@ -306,10 +307,7 @@ async fn test_disconnect_and_reconnect() -> Result<()> {
 #[tokio::test]
 async fn test_users_on_different_edges_see_each_other() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 2),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 2)];
     let clients = create_clients(&env, &configs).await?;
     sleep_ms(800).await;
 
@@ -376,8 +374,7 @@ async fn test_pool_size_1_default_remains_functional() -> Result<()> {
         .start()
         .await?;
 
-    let clients =
-        create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     assert!(clients[0].is_connected());
     cleanup_clients(clients).await;
     Ok(())
@@ -397,8 +394,7 @@ async fn test_edge_with_explicit_external_port_serves_clients() -> Result<()> {
         .start()
         .await?;
 
-    let clients =
-        create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     assert!(
         clients[0].is_connected(),
         "Client must connect on real listen port despite external_port override"

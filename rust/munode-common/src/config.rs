@@ -279,7 +279,6 @@ impl Default for EdgeVoiceRoutingConfig {
     }
 }
 
-
 /// Network binding configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NetworkConfig {
@@ -1152,7 +1151,9 @@ pub struct HubGeoIpConfig {
     pub log_location: bool,
 }
 
-fn default_geoip_log() -> bool { true }
+fn default_geoip_log() -> bool {
+    true
+}
 
 fn default_rolling_stats_window() -> u32 {
     120

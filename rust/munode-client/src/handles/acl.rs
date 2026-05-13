@@ -20,11 +20,14 @@ pub struct Acl<'a> {
 impl<'a> Acl<'a> {
     /// Send an `ACL` query — the response will arrive as `ClientEvent::Acl`.
     pub async fn request(&self) -> Result<()> {
-        self.client.send_proto(MessageType::Acl, &mumbleproto::Acl {
-            channel_id: self.channel_id,
-            query: Some(true),
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::Acl,
+            &mumbleproto::Acl {
+                channel_id: self.channel_id,
+                query: Some(true),
+                ..Default::default()
+            },
+        )
     }
 
     /// Query and await the ACL message.
@@ -53,11 +56,7 @@ impl<'a> Acl<'a> {
     }
 
     /// Append an entry, then save (load → push → save round-trip).
-    pub async fn add_entry(
-        &self,
-        entry: mumbleproto::acl::ChanAcl,
-        wait: Duration,
-    ) -> Result<()> {
+    pub async fn add_entry(&self, entry: mumbleproto::acl::ChanAcl, wait: Duration) -> Result<()> {
         let mut acl = self.fetch(wait).await?;
         acl.acls.push(entry);
         self.save(acl).await
@@ -103,10 +102,7 @@ impl<'a> Acl<'a> {
         wait: Duration,
     ) -> Result<()> {
         let mut acl = self.fetch(wait).await?;
-        let group = acl
-            .groups
-            .iter_mut()
-            .find(|g| g.name == group_name);
+        let group = acl.groups.iter_mut().find(|g| g.name == group_name);
         match group {
             Some(g) => {
                 if !g.add.contains(&user_id) {
@@ -144,7 +140,11 @@ impl<'a> Acl<'a> {
             }
             self.save(acl).await
         } else {
-            Err(anyhow!("group {} not found on channel {}", group_name, self.channel_id))
+            Err(anyhow!(
+                "group {} not found on channel {}",
+                group_name,
+                self.channel_id
+            ))
         }
     }
 }

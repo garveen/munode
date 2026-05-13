@@ -13,8 +13,9 @@
 //! - **`ConnectOptions`** — `tokens`, `ping_interval`, cert pinning flags.
 //! - **`ClientError`** — typed errors for programmatic handling.
 
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::{BufMut, BytesMut};
@@ -39,6 +40,8 @@ use crate::handles::{Acl, ChannelRef, Me, Server, UserRef, Voice};
 use crate::state::{Channel, ClientState, ConnectionState, SessionState, User};
 use crate::voice::{build_udp_ping, build_voice_packet};
 
+const VOICE_TARGET_TCP_GRACE_WINDOW: Duration = Duration::from_millis(120);
+
 /// Optional client TLS certificate material to present during the TLS
 /// handshake — required when connecting to Mumble servers configured for
 /// certificate-based authentication.
@@ -50,7 +53,10 @@ pub enum ClientCertificate {
         key_pkcs8_der: Vec<u8>,
     },
     /// PEM-encoded certificate chain + key. Decoded inside `connect()`.
-    Pem { chain_pem: Vec<u8>, key_pem: Vec<u8> },
+    Pem {
+        chain_pem: Vec<u8>,
+        key_pem: Vec<u8>,
+    },
 }
 
 /// Options for connecting to a Mumble server.
@@ -143,6 +149,14 @@ struct ClientInner {
     port: RwLock<u16>,
     /// Whether to route voice via TCP UDPTunnel.
     force_tcp_voice: RwLock<bool>,
+    /// Recently updated whisper target IDs.
+    ///
+    /// The C++ client uploads VoiceTarget on whisper activation and only later
+    /// starts producing audio frames. A headless client can call `set_target()`
+    /// and `send()` back-to-back, so the first UDP packet may outrun the TCP
+    /// VoiceTarget update. Keep a short grace window during which packets for
+    /// the updated target are forced through TCP to preserve ordering.
+    recent_voice_target_updates: RwLock<HashMap<u8, Instant>>,
     /// Aggregate server information accumulated from `Version`/`ServerSync`/`ServerConfig`.
     server_info: Arc<RwLock<ServerInformation>>,
 }
@@ -166,6 +180,7 @@ impl MumbleClient {
                 host: RwLock::new(String::new()),
                 port: RwLock::new(64738),
                 force_tcp_voice: RwLock::new(false),
+                recent_voice_target_updates: RwLock::new(HashMap::new()),
                 server_info: Arc::new(RwLock::new(ServerInformation::default())),
             }),
         }
@@ -202,7 +217,10 @@ impl MumbleClient {
         // Decode optional client certificate.
         let client_cert = match options.client_cert.clone() {
             None => None,
-            Some(ClientCertificate::Der { chain, key_pkcs8_der }) => {
+            Some(ClientCertificate::Der {
+                chain,
+                key_pkcs8_der,
+            }) => {
                 let der_chain: Vec<CertificateDer<'static>> =
                     chain.into_iter().map(CertificateDer::from).collect();
                 let key = PrivateKeyDer::try_from(key_pkcs8_der)
@@ -223,7 +241,9 @@ impl MumbleClient {
             connection::connect_tls(&options.host, options.port, client_cert),
         )
         .await
-        .map_err(|_| ClientError::Timeout { secs: options.connect_timeout.as_secs() })?
+        .map_err(|_| ClientError::Timeout {
+            secs: options.connect_timeout.as_secs(),
+        })?
         .context("TLS connect failed")?;
 
         let (read_half, mut write_half) = tokio::io::split(tls_stream);
@@ -255,7 +275,10 @@ impl MumbleClient {
             };
             let mut buf = BytesMut::new();
             encode_message(MessageType::Authenticate, &auth, &mut buf);
-            write_half.write_all(&buf).await.context("send Authenticate")?;
+            write_half
+                .write_all(&buf)
+                .await
+                .context("send Authenticate")?;
         }
 
         // Send pre-connect UserState (self_mute / self_deaf) right after
@@ -354,7 +377,10 @@ impl MumbleClient {
         // Wait for ServerSync (→ Authenticated) or Reject (→ AuthenticationFailed)
         let auth_result = self
             .wait_for_event(options.connect_timeout, |ev| {
-                matches!(ev, ClientEvent::Authenticated { .. } | ClientEvent::AuthenticationFailed { .. })
+                matches!(
+                    ev,
+                    ClientEvent::Authenticated { .. } | ClientEvent::AuthenticationFailed { .. }
+                )
             })
             .await;
 
@@ -400,7 +426,10 @@ impl MumbleClient {
 
     /// Current connection state.
     pub fn connection_state(&self) -> ConnectionState {
-        self.inner.state.try_read().ok()
+        self.inner
+            .state
+            .try_read()
+            .ok()
             .map(|s| s.connection_state)
             .unwrap_or(ConnectionState::Disconnected)
     }
@@ -412,7 +441,10 @@ impl MumbleClient {
 
     /// Returns `true` if the TCP channel is still open (connected or authenticating).
     pub fn is_connected(&self) -> bool {
-        self.inner.tcp_tx.try_read().ok()
+        self.inner
+            .tcp_tx
+            .try_read()
+            .ok()
             .and_then(|g| g.as_ref().map(|tx| !tx.is_closed()))
             .unwrap_or(false)
     }
@@ -424,7 +456,6 @@ impl MumbleClient {
     pub fn is_crypto_ready(&self) -> bool {
         self.inner.crypt_rx.borrow().is_some()
     }
-
 
     /// Initiate the UDP handshake and wait for the first ping reply.
     ///
@@ -497,7 +528,19 @@ impl MumbleClient {
     /// Routes via UDP if ready and not in force-TCP mode; falls back to TCP
     /// UDPTunnel otherwise.
     pub async fn send_voice_packet(&self, packet: &[u8]) -> Result<()> {
-        let force_tcp = *self.inner.force_tcp_voice.read().await;
+        let target_id = packet.first().map(|header| header & 0x1F).unwrap_or(0);
+        let mut force_tcp = *self.inner.force_tcp_voice.read().await;
+        if !force_tcp && target_id > 0 && target_id < 31 {
+            let now = Instant::now();
+            let mut updates = self.inner.recent_voice_target_updates.write().await;
+            if let Some(updated_at) = updates.get(&target_id).copied() {
+                if now.duration_since(updated_at) <= VOICE_TARGET_TCP_GRACE_WINDOW {
+                    force_tcp = true;
+                } else {
+                    updates.remove(&target_id);
+                }
+            }
+        }
         let udp_ready = self.inner.udp_socket.read().await.is_some();
 
         if udp_ready && !force_tcp {
@@ -528,11 +571,14 @@ impl MumbleClient {
     /// Move the authenticated user to `channel_id`.
     pub async fn join_channel(&self, channel_id: u32) -> Result<()> {
         let session = self.my_session()?;
-        self.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(session),
-            channel_id: Some(channel_id),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(session),
+                channel_id: Some(channel_id),
+                ..Default::default()
+            },
+        )
     }
 
     /// Create a new channel under `parent` and wait for confirmation.
@@ -541,11 +587,14 @@ impl MumbleClient {
     /// `ChannelState` with the assigned `channel_id`.
     pub async fn create_channel(&self, name: &str, parent: u32) -> Result<u32> {
         let mut sub = self.subscribe();
-        self.send_proto(MessageType::ChannelState, &mumbleproto::ChannelState {
-            name: Some(name.to_owned()),
-            parent: Some(parent),
-            ..Default::default()
-        })?;
+        self.send_proto(
+            MessageType::ChannelState,
+            &mumbleproto::ChannelState {
+                name: Some(name.to_owned()),
+                parent: Some(parent),
+                ..Default::default()
+            },
+        )?;
         let name_owned = name.to_owned();
         timeout(Duration::from_secs(10), async move {
             loop {
@@ -564,7 +613,10 @@ impl MumbleClient {
 
     /// Delete a channel.
     pub async fn delete_channel(&self, channel_id: u32) -> Result<()> {
-        self.send_proto(MessageType::ChannelRemove, &mumbleproto::ChannelRemove { channel_id })
+        self.send_proto(
+            MessageType::ChannelRemove,
+            &mumbleproto::ChannelRemove { channel_id },
+        )
     }
 
     /// Send a raw `ChannelState` update (e.g. to add/remove links, rename, etc.).
@@ -582,61 +634,79 @@ impl MumbleClient {
     /// Set own self-mute.
     pub async fn set_self_mute(&self, mute: bool) -> Result<()> {
         let session = self.my_session()?;
-        self.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(session),
-            self_mute: Some(mute),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(session),
+                self_mute: Some(mute),
+                ..Default::default()
+            },
+        )
     }
 
     /// Set own self-deaf.
     pub async fn set_self_deaf(&self, deaf: bool) -> Result<()> {
         let session = self.my_session()?;
-        self.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(session),
-            self_deaf: Some(deaf),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(session),
+                self_deaf: Some(deaf),
+                ..Default::default()
+            },
+        )
     }
 
     /// Mute/unmute another user (requires admin permissions).
     pub async fn mute_user(&self, target_session: u32, mute: bool) -> Result<()> {
-        self.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(target_session),
-            mute: Some(mute),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(target_session),
+                mute: Some(mute),
+                ..Default::default()
+            },
+        )
     }
 
     /// Kick a user from the server.
     pub async fn kick_user(&self, target_session: u32, reason: Option<&str>) -> Result<()> {
         let actor = self.my_session()?;
-        self.send_proto(MessageType::UserRemove, &mumbleproto::UserRemove {
-            session: target_session,
-            actor: Some(actor),
-            reason: reason.map(str::to_owned),
-            ban: Some(false),
-        })
+        self.send_proto(
+            MessageType::UserRemove,
+            &mumbleproto::UserRemove {
+                session: target_session,
+                actor: Some(actor),
+                reason: reason.map(str::to_owned),
+                ban: Some(false),
+            },
+        )
     }
 
     // ── Text messages ──────────────────────────────────────────────────────
 
     /// Send a text message to a channel.
     pub async fn send_text_to_channel(&self, channel_id: u32, message: &str) -> Result<()> {
-        self.send_proto(MessageType::TextMessage, &mumbleproto::TextMessage {
-            channel_id: vec![channel_id],
-            message: message.to_owned(),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::TextMessage,
+            &mumbleproto::TextMessage {
+                channel_id: vec![channel_id],
+                message: message.to_owned(),
+                ..Default::default()
+            },
+        )
     }
 
     /// Send a text message directly to a user.
     pub async fn send_text_to_user(&self, target_session: u32, message: &str) -> Result<()> {
-        self.send_proto(MessageType::TextMessage, &mumbleproto::TextMessage {
-            session: vec![target_session],
-            message: message.to_owned(),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::TextMessage,
+            &mumbleproto::TextMessage {
+                session: vec![target_session],
+                message: message.to_owned(),
+                ..Default::default()
+            },
+        )
     }
 
     /// Alias for [`send_text_to_user`] (send a private text message by session).
@@ -646,11 +716,14 @@ impl MumbleClient {
 
     /// Send a text message to the subtree rooted at `channel_id`.
     pub async fn send_text_to_tree(&self, channel_id: u32, message: &str) -> Result<()> {
-        self.send_proto(MessageType::TextMessage, &mumbleproto::TextMessage {
-            tree_id: vec![channel_id],
-            message: message.to_owned(),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::TextMessage,
+            &mumbleproto::TextMessage {
+                tree_id: vec![channel_id],
+                message: message.to_owned(),
+                ..Default::default()
+            },
+        )
     }
 
     // ── ACL & permissions ─────────────────────────────────────────────────
@@ -658,11 +731,14 @@ impl MumbleClient {
     /// Query the ACL for a channel.  Returns the decoded `Acl` message.
     pub async fn query_acl(&self, channel_id: u32) -> Result<mumbleproto::Acl> {
         let mut sub = self.subscribe();
-        self.send_proto(MessageType::Acl, &mumbleproto::Acl {
-            channel_id,
-            query: Some(true),
-            ..Default::default()
-        })?;
+        self.send_proto(
+            MessageType::Acl,
+            &mumbleproto::Acl {
+                channel_id,
+                query: Some(true),
+                ..Default::default()
+            },
+        )?;
         timeout(Duration::from_secs(10), async move {
             loop {
                 match sub.recv().await {
@@ -690,11 +766,14 @@ impl MumbleClient {
 
     /// Send a `PermissionQuery` for a channel.
     pub async fn check_permission(&self, channel_id: u32, permission: u32) -> Result<()> {
-        self.send_proto(MessageType::PermissionQuery, &mumbleproto::PermissionQuery {
-            channel_id: Some(channel_id),
-            permissions: Some(permission),
-            flush: Some(false),
-        })
+        self.send_proto(
+            MessageType::PermissionQuery,
+            &mumbleproto::PermissionQuery {
+                channel_id: Some(channel_id),
+                permissions: Some(permission),
+                flush: Some(false),
+            },
+        )
     }
 
     /// Alias for [`check_permission`].
@@ -707,21 +786,27 @@ impl MumbleClient {
     /// Start listening to an additional channel.
     pub async fn add_listening_channel(&self, channel_id: u32) -> Result<()> {
         let session = self.my_session()?;
-        self.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(session),
-            listening_channel_add: vec![channel_id],
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(session),
+                listening_channel_add: vec![channel_id],
+                ..Default::default()
+            },
+        )
     }
 
     /// Stop listening to a channel.
     pub async fn remove_listening_channel(&self, channel_id: u32) -> Result<()> {
         let session = self.my_session()?;
-        self.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(session),
-            listening_channel_remove: vec![channel_id],
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(session),
+                listening_channel_remove: vec![channel_id],
+                ..Default::default()
+            },
+        )
     }
 
     // ── Voice targets (whisper) ────────────────────────────────────────────
@@ -732,20 +817,34 @@ impl MumbleClient {
         id: u32,
         targets: Vec<mumbleproto::voice_target::Target>,
     ) -> Result<()> {
-        self.send_proto(MessageType::VoiceTarget, &mumbleproto::VoiceTarget {
-            id: Some(id),
-            targets,
-        })
+        self.send_proto(
+            MessageType::VoiceTarget,
+            &mumbleproto::VoiceTarget {
+                id: Some(id),
+                targets,
+            },
+        )?;
+        if (1..=30).contains(&id) {
+            self.inner
+                .recent_voice_target_updates
+                .write()
+                .await
+                .insert(id as u8, Instant::now());
+        }
+        Ok(())
     }
 
     // ── Ban management ─────────────────────────────────────────────────────
 
     /// Request the ban list from the server.
     pub async fn query_ban_list(&self) -> Result<()> {
-        self.send_proto(MessageType::BanList, &mumbleproto::BanList {
-            query: Some(true),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::BanList,
+            &mumbleproto::BanList {
+                query: Some(true),
+                ..Default::default()
+            },
+        )
     }
 
     /// Upload a new ban list.
@@ -774,12 +873,15 @@ impl MumbleClient {
         _duration: Option<u32>,
     ) -> Result<()> {
         let actor = self.my_session()?;
-        self.send_proto(MessageType::UserRemove, &mumbleproto::UserRemove {
-            session: target_session,
-            actor: Some(actor),
-            reason: reason.map(str::to_owned),
-            ban: Some(true),
-        })
+        self.send_proto(
+            MessageType::UserRemove,
+            &mumbleproto::UserRemove {
+                session: target_session,
+                actor: Some(actor),
+                reason: reason.map(str::to_owned),
+                ban: Some(true),
+            },
+        )
     }
 
     // ── User statistics ────────────────────────────────────────────────────
@@ -790,24 +892,33 @@ impl MumbleClient {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
             .unwrap_or(0);
-        self.send_proto(MessageType::Ping, &mumbleproto::Ping {
-            timestamp: Some(ts),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::Ping,
+            &mumbleproto::Ping {
+                timestamp: Some(ts),
+                ..Default::default()
+            },
+        )
     }
 
     /// Send a `QueryUsers` request (look up users by registered ID or name).
     pub async fn query_users(&self, ids: Vec<u32>, names: Vec<String>) -> Result<()> {
-        self.send_proto(MessageType::QueryUsers, &mumbleproto::QueryUsers { ids, names })
+        self.send_proto(
+            MessageType::QueryUsers,
+            &mumbleproto::QueryUsers { ids, names },
+        )
     }
 
     /// Request user statistics from the server.
     pub async fn request_user_stats(&self, target_session: u32, stats_only: bool) -> Result<()> {
-        self.send_proto(MessageType::UserStats, &mumbleproto::UserStats {
-            session: Some(target_session),
-            stats_only: Some(stats_only),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserStats,
+            &mumbleproto::UserStats {
+                session: Some(target_session),
+                stats_only: Some(stats_only),
+                ..Default::default()
+            },
+        )
     }
 
     // ── Plugin data ────────────────────────────────────────────────────────
@@ -819,12 +930,15 @@ impl MumbleClient {
         data: &[u8],
         receivers: &[u32],
     ) -> Result<()> {
-        self.send_proto(MessageType::PluginDataTransmission, &mumbleproto::PluginDataTransmission {
-            sender_session: None,
-            receiver_sessions: receivers.to_vec(),
-            data: Some(data.to_vec()),
-            data_id: Some(plugin_id.to_owned()),
-        })
+        self.send_proto(
+            MessageType::PluginDataTransmission,
+            &mumbleproto::PluginDataTransmission {
+                sender_session: None,
+                receiver_sessions: receivers.to_vec(),
+                data: Some(data.to_vec()),
+                data_id: Some(plugin_id.to_owned()),
+            },
+        )
     }
 
     // ── Blob / texture / comment ───────────────────────────────────────────
@@ -836,31 +950,40 @@ impl MumbleClient {
         sessions_comment: Vec<u32>,
         channel_description: Vec<u32>,
     ) -> Result<()> {
-        self.send_proto(MessageType::RequestBlob, &mumbleproto::RequestBlob {
-            session_texture: sessions_texture,
-            session_comment: sessions_comment,
-            channel_description,
-        })
+        self.send_proto(
+            MessageType::RequestBlob,
+            &mumbleproto::RequestBlob {
+                session_texture: sessions_texture,
+                session_comment: sessions_comment,
+                channel_description,
+            },
+        )
     }
 
     /// Set own avatar texture.
     pub async fn set_texture(&self, texture: &[u8]) -> Result<()> {
         let session = self.my_session()?;
-        self.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(session),
-            texture: Some(texture.to_vec()),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(session),
+                texture: Some(texture.to_vec()),
+                ..Default::default()
+            },
+        )
     }
 
     /// Set own comment.
     pub async fn set_comment(&self, comment: &str) -> Result<()> {
         let session = self.my_session()?;
-        self.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(session),
-            comment: Some(comment.to_owned()),
-            ..Default::default()
-        })
+        self.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(session),
+                comment: Some(comment.to_owned()),
+                ..Default::default()
+            },
+        )
     }
 
     // ── Context actions ────────────────────────────────────────────────────
@@ -872,12 +995,15 @@ impl MumbleClient {
         text: &str,
         context: u32,
     ) -> Result<()> {
-        self.send_proto(MessageType::ContextActionModify, &mumbleproto::ContextActionModify {
-            action: action.to_owned(),
-            text: Some(text.to_owned()),
-            context: Some(context),
-            operation: Some(0), // Add
-        })
+        self.send_proto(
+            MessageType::ContextActionModify,
+            &mumbleproto::ContextActionModify {
+                action: action.to_owned(),
+                text: Some(text.to_owned()),
+                context: Some(context),
+                operation: Some(0), // Add
+            },
+        )
     }
 
     // ── State queries ──────────────────────────────────────────────────────
@@ -894,26 +1020,44 @@ impl MumbleClient {
 
     /// All known channels.
     pub fn channels(&self) -> Vec<Channel> {
-        self.inner.state.try_read().ok()
+        self.inner
+            .state
+            .try_read()
+            .ok()
             .map(|s| s.channels.values().cloned().collect())
             .unwrap_or_default()
     }
 
     /// Look up a channel snapshot by ID.
     pub fn channel_info(&self, channel_id: u32) -> Option<Channel> {
-        self.inner.state.try_read().ok()?.channels.get(&channel_id).cloned()
+        self.inner
+            .state
+            .try_read()
+            .ok()?
+            .channels
+            .get(&channel_id)
+            .cloned()
     }
 
     /// All known users.
     pub fn users(&self) -> Vec<User> {
-        self.inner.state.try_read().ok()
+        self.inner
+            .state
+            .try_read()
+            .ok()
             .map(|s| s.users.values().cloned().collect())
             .unwrap_or_default()
     }
 
     /// Look up a user snapshot by session ID.
     pub fn user_info(&self, session: u32) -> Option<User> {
-        self.inner.state.try_read().ok()?.users.get(&session).cloned()
+        self.inner
+            .state
+            .try_read()
+            .ok()?
+            .users
+            .get(&session)
+            .cloned()
     }
 
     /// Snapshot of accumulated server information.
@@ -930,12 +1074,18 @@ impl MumbleClient {
 
     /// Operations on a remote user identified by session ID.
     pub fn user(&self, session: u32) -> UserRef<'_> {
-        UserRef { client: self, session }
+        UserRef {
+            client: self,
+            session,
+        }
     }
 
     /// Operations on a channel identified by channel ID.
     pub fn channel(&self, channel_id: u32) -> ChannelRef<'_> {
-        ChannelRef { client: self, channel_id }
+        ChannelRef {
+            client: self,
+            channel_id,
+        }
     }
 
     /// Server-wide / admin operations.
@@ -950,7 +1100,10 @@ impl MumbleClient {
 
     /// ACL editor for a single channel.
     pub fn acl(&self, channel_id: u32) -> Acl<'_> {
-        Acl { client: self, channel_id }
+        Acl {
+            client: self,
+            channel_id,
+        }
     }
 
     // ── Event subscription ─────────────────────────────────────────────────
@@ -983,7 +1136,9 @@ impl MumbleClient {
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("event channel lagged, dropped {n} messages — increase channel capacity");
+                        warn!(
+                            "event channel lagged, dropped {n} messages — increase channel capacity"
+                        );
                     }
                     Err(e) => return Err(anyhow!("event channel closed: {e}")),
                 }
@@ -997,14 +1152,20 @@ impl MumbleClient {
 
     /// Get own session ID, returning an error if not authenticated.
     fn my_session(&self) -> Result<u32> {
-        self.inner.state.try_read().ok()
+        self.inner
+            .state
+            .try_read()
+            .ok()
             .and_then(|s| s.session.as_ref().map(|ss| ss.session))
             .ok_or_else(|| ClientError::NotConnected.into())
     }
 
     /// Encode a protobuf message and queue it for TCP transmission.
     pub(crate) fn send_proto<M: ProstMessage>(&self, msg_type: MessageType, msg: &M) -> Result<()> {
-        let guard = self.inner.tcp_tx.try_read()
+        let guard = self
+            .inner
+            .tcp_tx
+            .try_read()
             .map_err(|_| anyhow!("tcp_tx lock unavailable"))?;
         let tx = guard.as_ref().ok_or(ClientError::NotConnected)?;
         send_message(tx, msg_type, msg)
@@ -1016,7 +1177,10 @@ impl MumbleClient {
         buf.put_u16(msg_type as u16);
         buf.put_u32(payload.len() as u32);
         buf.put_slice(payload);
-        let guard = self.inner.tcp_tx.try_read()
+        let guard = self
+            .inner
+            .tcp_tx
+            .try_read()
             .map_err(|_| anyhow!("tcp_tx lock unavailable"))?;
         let tx = guard.as_ref().ok_or(ClientError::NotConnected)?;
         connection::send_raw(tx, buf.to_vec())
@@ -1031,6 +1195,26 @@ impl MumbleClient {
 
     pub(crate) async fn set_force_tcp_voice(&self, force_tcp: bool) {
         *self.inner.force_tcp_voice.write().await = force_tcp;
+    }
+
+    pub(crate) async fn mark_recent_voice_target_update(&self, id: u32) {
+        if (1..=30).contains(&id) {
+            self.inner
+                .recent_voice_target_updates
+                .write()
+                .await
+                .insert(id as u8, Instant::now());
+        }
+    }
+
+    pub(crate) async fn clear_recent_voice_target_update(&self, id: u32) {
+        if (1..=30).contains(&id) {
+            self.inner
+                .recent_voice_target_updates
+                .write()
+                .await
+                .remove(&(id as u8));
+        }
     }
 
     pub(crate) async fn send_encrypted_udp_packet(&self, packet: &[u8]) -> Result<()> {
@@ -1209,7 +1393,10 @@ pub(crate) async fn dispatch_frame(
                     info.max_bandwidth = max_bandwidth;
                     let _ = event_tx.send(ClientEvent::ServerInformation(info.clone()));
                 }
-                let _ = event_tx.send(ClientEvent::Authenticated { session, max_bandwidth });
+                let _ = event_tx.send(ClientEvent::Authenticated {
+                    session,
+                    max_bandwidth,
+                });
             }
         }
         ChannelState => {
@@ -1228,7 +1415,9 @@ pub(crate) async fn dispatch_frame(
         ChannelRemove => {
             if let Ok(msg) = mumbleproto::ChannelRemove::decode(&*frame.payload) {
                 state.write().await.remove_channel(msg.channel_id);
-                let _ = event_tx.send(ClientEvent::ChannelRemoved { channel_id: msg.channel_id });
+                let _ = event_tx.send(ClientEvent::ChannelRemoved {
+                    channel_id: msg.channel_id,
+                });
             }
         }
         UserState => {
@@ -1376,8 +1565,7 @@ pub(crate) async fn dispatch_frame(
             }
         }
         // Server-initiated messages we intentionally ignore on the client side
-        CodecVersion | ContextActionModify
-        | VoiceTarget | RequestBlob | Authenticate => {
+        CodecVersion | ContextActionModify | VoiceTarget | RequestBlob | Authenticate => {
             debug!(msg_type = ?frame.message_type, "ignored server-sent message");
         }
     }

@@ -63,7 +63,11 @@ fn get_peers_of_excludes_self() {
     topo.add_edge(make_edge(2));
     topo.add_edge(make_edge(3));
 
-    let peers: Vec<u32> = topo.get_peers_of(1).into_iter().map(|e| e.edge_id).collect();
+    let peers: Vec<u32> = topo
+        .get_peers_of(1)
+        .into_iter()
+        .map(|e| e.edge_id)
+        .collect();
     assert!(!peers.contains(&1), "get_peers_of must not include self");
     assert_eq!(peers.len(), 2, "must return the other 2 edges");
 }
@@ -86,7 +90,10 @@ fn remove_edge_cleans_up_link_quality() {
     // All quality entries referencing edge 1 must be gone.
     let qualities = topo.get_link_qualities();
     let involves_1 = qualities.keys().any(|(a, b)| *a == 1 || *b == 1);
-    assert!(!involves_1, "link quality entries for removed edge must be purged");
+    assert!(
+        !involves_1,
+        "link quality entries for removed edge must be purged"
+    );
     // Quality between 2↔3 (if any) must be unaffected.
     // There was none, so the map should be empty.
     assert!(qualities.is_empty());
@@ -98,7 +105,7 @@ fn remove_edge_cleans_up_disconnect_reports() {
     let mut topo = TopologyManager::new();
     // Edge 1 reports that edge 2 disconnected, then we remove edge 2.
     topo.arbitrate_disconnect(1, 2); // edge 1 reports edge 2 gone
-    topo.remove_edge(2);             // Hub removes edge 2
+    topo.remove_edge(2); // Hub removes edge 2
 
     // Now if edge 1 re-reports edge 2 as disconnected, it should be a fresh first report.
     match topo.arbitrate_disconnect(1, 2) {
@@ -142,7 +149,11 @@ fn isolated_edge_is_its_own_partition() {
     topo.add_edge(make_edge(3));
 
     let parts = topo.detect_partitions();
-    assert_eq!(parts.len(), 2, "isolated edge must form its own partition; got: {parts:?}");
+    assert_eq!(
+        parts.len(),
+        2,
+        "isolated edge must form its own partition; got: {parts:?}"
+    );
 }
 
 // ── Dijkstra path selection ───────────────────────────────────────────────────
@@ -184,10 +195,13 @@ fn relay_path_preferred_when_direct_link_is_degraded() {
 
     // The primary (lowest cost) candidate for target 2 should be a relay via edge 3.
     // route_type 1 = RelayChain
-    let relay_to_2 = routes.iter().find(|(target, rtype, chain, _)| {
-        *target == 2 && *rtype == 1 && chain.contains(&3)
-    });
-    assert!(relay_to_2.is_some(), "relay via edge 3 should be in route table; got: {routes:?}");
+    let relay_to_2 = routes
+        .iter()
+        .find(|(target, rtype, chain, _)| *target == 2 && *rtype == 1 && chain.contains(&3));
+    assert!(
+        relay_to_2.is_some(),
+        "relay via edge 3 should be in route table; got: {routes:?}"
+    );
 }
 
 /// A link above the `failed_packet_loss` threshold must be excluded from path
@@ -213,10 +227,13 @@ fn failed_link_is_excluded_from_dijkstra_path() {
 
     // Direct 1→2 is failed; the route table should contain a relay chain via 3.
     // route_type 1 = RelayChain
-    let relay_via_3 = routes.iter().any(|(target, rtype, chain, _)| {
-        *target == 2 && *rtype == 1 && chain.contains(&3)
-    });
-    assert!(relay_via_3, "relay via edge 3 must be present because direct link is failed; got: {routes:?}");
+    let relay_via_3 = routes
+        .iter()
+        .any(|(target, rtype, chain, _)| *target == 2 && *rtype == 1 && chain.contains(&3));
+    assert!(
+        relay_via_3,
+        "relay via edge 3 must be present because direct link is failed; got: {routes:?}"
+    );
 }
 
 /// A link whose RTT exceeds `failed_rtt_ms` must be excluded from the Dijkstra
@@ -242,9 +259,9 @@ fn high_rtt_link_excluded_by_failed_rtt_threshold() {
 
     let routes = topo.compute_route_table(1, &cfg);
 
-    let relay_via_3 = routes.iter().any(|(target, rtype, chain, _)| {
-        *target == 2 && *rtype == 1 && chain.contains(&3)
-    });
+    let relay_via_3 = routes
+        .iter()
+        .any(|(target, rtype, chain, _)| *target == 2 && *rtype == 1 && chain.contains(&3));
     assert!(
         relay_via_3,
         "relay via edge 3 must be chosen when direct link exceeds failed_rtt_ms; got: {routes:?}"
@@ -284,10 +301,13 @@ fn relay_hop_penalty_discourages_longer_chains() {
     let routes = topo.compute_route_table(1, &cfg);
 
     // DirectUdp candidate (type 0, empty chain) for target 2 must be present.
-    let has_direct = routes.iter().any(|(t, rtype, chain, _)| {
-        *t == 2 && *rtype == 0 && chain.is_empty()
-    });
-    assert!(has_direct, "direct path must exist in route table; got: {routes:?}");
+    let has_direct = routes
+        .iter()
+        .any(|(t, rtype, chain, _)| *t == 2 && *rtype == 0 && chain.is_empty());
+    assert!(
+        has_direct,
+        "direct path must exist in route table; got: {routes:?}"
+    );
 
     // The FIRST candidate (best cost) for target 2 should NOT be a relay chain
     // when hop penalty makes relay more expensive.
@@ -302,8 +322,10 @@ fn relay_hop_penalty_discourages_longer_chains() {
 
     // find_best_path uses the no-config version which does no per-hop penalty.
     // Both 1→2 and 1→3→2 are reachable; we only verify the output is a valid path.
-    assert!(path.first() == Some(&1) && path.last() == Some(&2),
-        "path must start at 1 and end at 2; got: {path:?}");
+    assert!(
+        path.first() == Some(&1) && path.last() == Some(&2),
+        "path must start at 1 and end at 2; got: {path:?}"
+    );
 }
 
 // ── compute_route_table candidate types ──────────────────────────────────────
@@ -320,10 +342,13 @@ fn route_table_always_includes_hub_tcp_fallback() {
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
 
     // route_type 2 = HubTcp
-    let has_hub_tcp = routes.iter().any(|(target, rtype, chain, _)| {
-        *target == 2 && *rtype == 2 && chain.is_empty()
-    });
-    assert!(has_hub_tcp, "HubTcp candidate must always be emitted; got: {routes:?}");
+    let has_hub_tcp = routes
+        .iter()
+        .any(|(target, rtype, chain, _)| *target == 2 && *rtype == 2 && chain.is_empty());
+    assert!(
+        has_hub_tcp,
+        "HubTcp candidate must always be emitted; got: {routes:?}"
+    );
 }
 
 /// The route table must always include a `DirectTcp` candidate (type 3) for every
@@ -338,10 +363,13 @@ fn route_table_always_includes_direct_tcp_candidate() {
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
 
     // route_type 3 = DirectTcp
-    let has_direct_tcp = routes.iter().any(|(target, rtype, _, _)| {
-        *target == 2 && *rtype == 3
-    });
-    assert!(has_direct_tcp, "DirectTcp candidate must always be emitted; got: {routes:?}");
+    let has_direct_tcp = routes
+        .iter()
+        .any(|(target, rtype, _, _)| *target == 2 && *rtype == 3);
+    assert!(
+        has_direct_tcp,
+        "DirectTcp candidate must always be emitted; got: {routes:?}"
+    );
 }
 
 /// When a direct link is available with acceptable quality, the table must contain
@@ -356,10 +384,13 @@ fn route_table_has_direct_udp_for_good_link() {
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
 
     // route_type 0 = DirectUdp
-    let has_direct_udp = routes.iter().any(|(target, rtype, chain, _)| {
-        *target == 2 && *rtype == 0 && chain.is_empty()
-    });
-    assert!(has_direct_udp, "DirectUdp candidate must be present for a good link; got: {routes:?}");
+    let has_direct_udp = routes
+        .iter()
+        .any(|(target, rtype, chain, _)| *target == 2 && *rtype == 0 && chain.is_empty());
+    assert!(
+        has_direct_udp,
+        "DirectUdp candidate must be present for a good link; got: {routes:?}"
+    );
 }
 
 /// The DirectUdp cost must equal `rtt_ms + loss * 500` for the direct link.
@@ -373,7 +404,8 @@ fn route_table_direct_udp_cost_equals_rtt_plus_loss_penalty() {
 
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
 
-    let direct_cost = routes.iter()
+    let direct_cost = routes
+        .iter()
         .find(|(t, rtype, chain, _)| *t == 2 && *rtype == 0 && chain.is_empty())
         .map(|(_, _, _, cost)| *cost);
 
@@ -412,10 +444,13 @@ fn route_table_has_relay_chain_for_three_edge_topology() {
     let routes = topo.compute_route_table(1, &cfg);
 
     // route_type 1 = RelayChain with intermediate = [3]
-    let relay_via_3 = routes.iter().any(|(target, rtype, chain, _)| {
-        *target == 2 && *rtype == 1 && chain.contains(&3)
-    });
-    assert!(relay_via_3, "RelayChain via edge 3 must be present; got: {routes:?}");
+    let relay_via_3 = routes
+        .iter()
+        .any(|(target, rtype, chain, _)| *target == 2 && *rtype == 1 && chain.contains(&3));
+    assert!(
+        relay_via_3,
+        "RelayChain via edge 3 must be present; got: {routes:?}"
+    );
 }
 
 /// Relay chains longer than `max_relay_hops` must be replaced with `HubTcp` (type 2).
@@ -442,9 +477,9 @@ fn relay_chain_exceeding_hop_limit_falls_back_to_hub_tcp() {
     let routes = topo.compute_route_table(1, &cfg);
 
     // For target 5, there should be a HubTcp (type 2) entry with an empty chain.
-    let hub_tcp_for_5 = routes.iter().any(|(target, rtype, chain, _)| {
-        *target == 5 && *rtype == 2 && chain.is_empty()
-    });
+    let hub_tcp_for_5 = routes
+        .iter()
+        .any(|(target, rtype, chain, _)| *target == 5 && *rtype == 2 && chain.is_empty());
     assert!(
         hub_tcp_for_5,
         "long relay chain should produce HubTcp for target 5; got: {routes:?}"
@@ -525,18 +560,22 @@ fn partitions_are_sorted_by_aggregated_user_count() {
     topo.report_quality(1, 2, make_quality(10.0, 0.0));
     // Partition B = {3} with 5 total users.
 
-    let users_per_edge = std::collections::HashMap::from([
-        (1, 1usize),
-        (2, 0usize),
-        (3, 5usize),
-    ]);
+    let users_per_edge = std::collections::HashMap::from([(1, 1usize), (2, 0usize), (3, 5usize)]);
 
     let sorted = topo.partitions_by_user_count(&users_per_edge);
-    assert_eq!(sorted.len(), 2, "two sorted partitions expected; got: {sorted:?}");
+    assert_eq!(
+        sorted.len(),
+        2,
+        "two sorted partitions expected; got: {sorted:?}"
+    );
 
     let (smallest_partition, smallest_users) = &sorted[0];
     assert_eq!(*smallest_users, 1, "smallest partition should have 1 user");
-    assert_eq!(smallest_partition.len(), 2, "the chosen partition may still have more edges");
+    assert_eq!(
+        smallest_partition.len(),
+        2,
+        "the chosen partition may still have more edges"
+    );
     assert!(smallest_partition.contains(&1) && smallest_partition.contains(&2));
 
     let (largest_partition, largest_users) = &sorted[1];

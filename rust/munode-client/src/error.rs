@@ -37,11 +37,15 @@ pub enum ClientError {
 impl ClientError {
     #[allow(dead_code)]
     pub(crate) fn io(e: impl std::fmt::Display) -> Self {
-        ClientError::Io { detail: e.to_string() }
+        ClientError::Io {
+            detail: e.to_string(),
+        }
     }
 
     #[allow(dead_code)]
     pub(crate) fn protocol(detail: impl Into<String>) -> Self {
-        ClientError::Protocol { detail: detail.into() }
+        ClientError::Protocol {
+            detail: detail.into(),
+        }
     }
 }

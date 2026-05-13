@@ -116,7 +116,10 @@ impl ClientState {
 
         // Compute updated links
         let links = if !msg.links_add.is_empty() || !msg.links_remove.is_empty() {
-            let mut ls: Vec<u32> = existing.as_ref().map(|c| c.links.clone()).unwrap_or_default();
+            let mut ls: Vec<u32> = existing
+                .as_ref()
+                .map(|c| c.links.clone())
+                .unwrap_or_default();
             for &id in &msg.links_add {
                 if !ls.contains(&id) {
                     ls.push(id);
@@ -127,30 +130,37 @@ impl ClientState {
         } else if !msg.links.is_empty() {
             msg.links.clone()
         } else {
-            existing.as_ref().map(|c| c.links.clone()).unwrap_or_default()
+            existing
+                .as_ref()
+                .map(|c| c.links.clone())
+                .unwrap_or_default()
         };
 
         let channel = Channel {
             channel_id,
-            parent: msg.parent.unwrap_or_else(|| {
-                existing.as_ref().map(|c| c.parent).unwrap_or(0)
-            }),
+            parent: msg
+                .parent
+                .unwrap_or_else(|| existing.as_ref().map(|c| c.parent).unwrap_or(0)),
             name: msg.name.clone().unwrap_or_else(|| {
-                existing.as_ref().map(|c| c.name.clone()).unwrap_or_default()
+                existing
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default()
             }),
-            description: msg.description.clone().or_else(|| {
-                existing.as_ref().and_then(|c| c.description.clone())
-            }),
-            temporary: msg.temporary.unwrap_or_else(|| {
-                existing.as_ref().map(|c| c.temporary).unwrap_or(false)
-            }),
-            position: msg.position.unwrap_or_else(|| {
-                existing.as_ref().map(|c| c.position).unwrap_or(0)
-            }),
+            description: msg
+                .description
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|c| c.description.clone())),
+            temporary: msg
+                .temporary
+                .unwrap_or_else(|| existing.as_ref().map(|c| c.temporary).unwrap_or(false)),
+            position: msg
+                .position
+                .unwrap_or_else(|| existing.as_ref().map(|c| c.position).unwrap_or(0)),
             links,
-            max_users: msg.max_users.unwrap_or_else(|| {
-                existing.as_ref().map(|c| c.max_users).unwrap_or(0)
-            }),
+            max_users: msg
+                .max_users
+                .unwrap_or_else(|| existing.as_ref().map(|c| c.max_users).unwrap_or(0)),
         };
         self.channels.insert(channel_id, channel);
         is_new
@@ -164,10 +174,7 @@ impl ClientState {
     // ── UserState handling ─────────────────────────────────────────────────
 
     /// Apply a `UserState` message, returning whether this is a new user.
-    pub fn apply_user_state(
-        &mut self,
-        msg: &munode_protocol::mumbleproto::UserState,
-    ) -> bool {
+    pub fn apply_user_state(&mut self, msg: &munode_protocol::mumbleproto::UserState) -> bool {
         let session = msg.session();
         let is_new = !self.users.contains_key(&session);
         let existing = self.users.get(&session).cloned();
@@ -190,47 +197,58 @@ impl ClientState {
             session,
             user_id: msg.user_id,
             name: msg.name.clone().unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.name.clone()).unwrap_or_default()
+                existing
+                    .as_ref()
+                    .map(|u| u.name.clone())
+                    .unwrap_or_default()
             }),
-            channel_id: msg.channel_id.unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.channel_id).unwrap_or(0)
-            }),
-            mute: msg.mute.unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.mute).unwrap_or(false)
-            }),
-            deaf: msg.deaf.unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.deaf).unwrap_or(false)
-            }),
-            suppress: msg.suppress.unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.suppress).unwrap_or(false)
-            }),
-            self_mute: msg.self_mute.unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.self_mute).unwrap_or(false)
-            }),
-            self_deaf: msg.self_deaf.unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.self_deaf).unwrap_or(false)
-            }),
-            recording: msg.recording.unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.recording).unwrap_or(false)
-            }),
+            channel_id: msg
+                .channel_id
+                .unwrap_or_else(|| existing.as_ref().map(|u| u.channel_id).unwrap_or(0)),
+            mute: msg
+                .mute
+                .unwrap_or_else(|| existing.as_ref().map(|u| u.mute).unwrap_or(false)),
+            deaf: msg
+                .deaf
+                .unwrap_or_else(|| existing.as_ref().map(|u| u.deaf).unwrap_or(false)),
+            suppress: msg
+                .suppress
+                .unwrap_or_else(|| existing.as_ref().map(|u| u.suppress).unwrap_or(false)),
+            self_mute: msg
+                .self_mute
+                .unwrap_or_else(|| existing.as_ref().map(|u| u.self_mute).unwrap_or(false)),
+            self_deaf: msg
+                .self_deaf
+                .unwrap_or_else(|| existing.as_ref().map(|u| u.self_deaf).unwrap_or(false)),
+            recording: msg
+                .recording
+                .unwrap_or_else(|| existing.as_ref().map(|u| u.recording).unwrap_or(false)),
             priority_speaker: msg.priority_speaker.unwrap_or_else(|| {
-                existing.as_ref().map(|u| u.priority_speaker).unwrap_or(false)
+                existing
+                    .as_ref()
+                    .map(|u| u.priority_speaker)
+                    .unwrap_or(false)
             }),
-            hash: msg.hash.clone().or_else(|| {
-                existing.as_ref().and_then(|u| u.hash.clone())
-            }),
-            comment: msg.comment.clone().or_else(|| {
-                existing.as_ref().and_then(|u| u.comment.clone())
-            }),
-            texture: msg.texture.clone().or_else(|| {
-                existing.as_ref().and_then(|u| u.texture.clone())
-            }),
-            comment_hash: msg.comment_hash.clone().or_else(|| {
-                existing.as_ref().and_then(|u| u.comment_hash.clone())
-            }),
-            texture_hash: msg.texture_hash.clone().or_else(|| {
-                existing.as_ref().and_then(|u| u.texture_hash.clone())
-            }),
+            hash: msg
+                .hash
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|u| u.hash.clone())),
+            comment: msg
+                .comment
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|u| u.comment.clone())),
+            texture: msg
+                .texture
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|u| u.texture.clone())),
+            comment_hash: msg
+                .comment_hash
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|u| u.comment_hash.clone())),
+            texture_hash: msg
+                .texture_hash
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|u| u.texture_hash.clone())),
             listening_channels: updated_listeners,
         };
         self.users.insert(session, user.clone());
@@ -254,10 +272,7 @@ impl ClientState {
     }
 
     /// Apply a `ServerSync` message to initialise the session state.
-    pub fn apply_server_sync(
-        &mut self,
-        msg: &munode_protocol::mumbleproto::ServerSync,
-    ) {
+    pub fn apply_server_sync(&mut self, msg: &munode_protocol::mumbleproto::ServerSync) {
         let session = msg.session();
         let max_bandwidth = msg.max_bandwidth.unwrap_or(0);
         let welcome_text = msg.welcome_text.clone();

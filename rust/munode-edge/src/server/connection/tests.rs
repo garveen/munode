@@ -1,21 +1,105 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use bytes::BytesMut;
-use prost::Message;
-use tokio::sync::mpsc;
-use munode_common::config::{
-    EdgeConfig, HubServerConfig, NetworkConfig, ServerConfig, TlsConfig,
-};
-use munode_common::permission as perm;
-use munode_protocol::message_type::MessageType;
-use munode_protocol::mumbleproto;
-use munode_protocol::transport::decode_frame;
+use super::user_state::{handle_admin_user_state_update, handle_user_state_update};
 use crate::channel_manager::ChannelManager;
 use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
 use crate::hub_client::HubClient;
 use crate::server::event_listener::hub_event_listener;
 use crate::state::{EdgeEvent, EdgeState};
-use super::user_state::{handle_user_state_update, handle_admin_user_state_update};
+use bytes::{Bytes, BytesMut};
+use munode_common::config::{EdgeConfig, HubServerConfig, NetworkConfig, ServerConfig, TlsConfig};
+use munode_common::permission as perm;
+use munode_protocol::message_type::MessageType;
+use munode_protocol::mumbleproto;
+use munode_protocol::transport::decode_frame;
+use prost::Message;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+
+struct ShortWriteSink {
+    max_per_write: usize,
+    written: Vec<u8>,
+    vectored_calls: usize,
+}
+
+impl ShortWriteSink {
+    fn new(max_per_write: usize) -> Self {
+        Self {
+            max_per_write,
+            written: Vec::new(),
+            vectored_calls: 0,
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for ShortWriteSink {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let len = buf.len().min(self.max_per_write);
+        self.written.extend_from_slice(&buf[..len]);
+        std::task::Poll::Ready(Ok(len))
+    }
+
+    fn poll_write_vectored(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.vectored_calls += 1;
+        let mut remaining = self.max_per_write;
+        let mut total = 0;
+        for buf in bufs {
+            if remaining == 0 {
+                break;
+            }
+            let len = buf.len().min(remaining);
+            self.written.extend_from_slice(&buf[..len]);
+            remaining -= len;
+            total += len;
+        }
+        std::task::Poll::Ready(Ok(total))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn test_writer_batch_retries_partial_vectored_writes() {
+    let pending = vec![
+        Bytes::from_static(b"abcdef"),
+        Bytes::from_static(b"123456"),
+        Bytes::from_static(b"XYZ"),
+    ];
+    let mut writer = ShortWriteSink::new(5);
+
+    super::write_pending_batch(&mut writer, &pending)
+        .await
+        .expect("batch write should complete");
+
+    assert_eq!(writer.written, b"abcdef123456XYZ");
+    assert!(
+        writer.vectored_calls > 1,
+        "test must exercise partial vectored writes"
+    );
+}
 
 /// Construct a minimal `EdgeConfig` suitable for unit tests.
 fn test_config() -> EdgeConfig {
@@ -96,7 +180,11 @@ fn decode_user_state(data: &[u8]) -> mumbleproto::UserState {
     let frame = decode_frame(&mut buf)
         .expect("decode_frame ok")
         .expect("frame present");
-    assert_eq!(frame.message_type, MessageType::UserState, "expected UserState frame");
+    assert_eq!(
+        frame.message_type,
+        MessageType::UserState,
+        "expected UserState frame"
+    );
     mumbleproto::UserState::decode(&frame.payload[..]).expect("decode UserState")
 }
 
@@ -120,11 +208,19 @@ async fn test_self_mute_broadcast_to_self_and_others() {
     // Register two Ready clients.
     let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
     let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_a)).await;
-    es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_b)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_a))
+        .await;
+    es.client_manager
+        .add_client(ready_client(2, 0), ClientSender::new(tx_b))
+        .await;
 
     // User 1 mutes themselves.
-    let us = mumbleproto::UserState { session: Some(1), self_mute: Some(true), ..Default::default() };
+    let us = mumbleproto::UserState {
+        session: Some(1),
+        self_mute: Some(true),
+        ..Default::default()
+    };
     handle_user_state_update(&es, &hub, 1, &us).await;
 
     // Both clients must receive self_mute=true.
@@ -134,7 +230,11 @@ async fn test_self_mute_broadcast_to_self_and_others() {
 
     let msg_b = decode_user_state(&rx_b.recv().await.unwrap());
     assert_eq!(msg_b.session, Some(1));
-    assert_eq!(msg_b.self_mute, Some(true), "observer: must see self_mute=true");
+    assert_eq!(
+        msg_b.self_mute,
+        Some(true),
+        "observer: must see self_mute=true"
+    );
 
     // Internal state must be updated.
     let c = es.client_manager.get_client(1).await.unwrap();
@@ -156,22 +256,46 @@ async fn test_self_unmute_broadcast_carries_false() {
     // Start with user 1 already muted.
     let mut client1 = ready_client(1, 0);
     client1.self_mute = true;
-    es.client_manager.add_client(client1, ClientSender::new(tx_a)).await;
-    es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_b)).await;
+    es.client_manager
+        .add_client(client1, ClientSender::new(tx_a))
+        .await;
+    es.client_manager
+        .add_client(ready_client(2, 0), ClientSender::new(tx_b))
+        .await;
 
     // User 1 un-mutes.
-    let us = mumbleproto::UserState { session: Some(1), self_mute: Some(false), ..Default::default() };
+    let us = mumbleproto::UserState {
+        session: Some(1),
+        self_mute: Some(false),
+        ..Default::default()
+    };
     handle_user_state_update(&es, &hub, 1, &us).await;
 
     // CRITICAL: un-mute must deliver self_mute=Some(false), NOT None.
     let msg_a = decode_user_state(&rx_a.recv().await.unwrap());
-    assert_eq!(msg_a.self_mute, Some(false), "self: self_mute must be Some(false) on un-mute");
+    assert_eq!(
+        msg_a.self_mute,
+        Some(false),
+        "self: self_mute must be Some(false) on un-mute"
+    );
     // Un-muting also clears deaf (coupling).
-    assert_eq!(msg_a.self_deaf, Some(false), "self: un-muting must also clear self_deaf");
+    assert_eq!(
+        msg_a.self_deaf,
+        Some(false),
+        "self: un-muting must also clear self_deaf"
+    );
 
     let msg_b = decode_user_state(&rx_b.recv().await.unwrap());
-    assert_eq!(msg_b.self_mute, Some(false), "observer: self_mute must be Some(false) on un-mute");
-    assert_eq!(msg_b.self_deaf, Some(false), "observer: un-muting must also clear self_deaf");
+    assert_eq!(
+        msg_b.self_mute,
+        Some(false),
+        "observer: self_mute must be Some(false) on un-mute"
+    );
+    assert_eq!(
+        msg_b.self_deaf,
+        Some(false),
+        "observer: un-muting must also clear self_deaf"
+    );
 
     let c = es.client_manager.get_client(1).await.unwrap();
     assert!(!c.self_mute);
@@ -187,24 +311,47 @@ async fn test_self_deaf_implies_self_mute() {
 
     let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
     let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_a)).await;
-    es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_b)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_a))
+        .await;
+    es.client_manager
+        .add_client(ready_client(2, 0), ClientSender::new(tx_b))
+        .await;
 
     // Client only sends self_deaf=true; self_mute is absent in the message.
-    let us = mumbleproto::UserState { session: Some(1), self_deaf: Some(true), ..Default::default() };
+    let us = mumbleproto::UserState {
+        session: Some(1),
+        self_deaf: Some(true),
+        ..Default::default()
+    };
     handle_user_state_update(&es, &hub, 1, &us).await;
 
     let msg_a = decode_user_state(&rx_a.recv().await.unwrap());
-    assert_eq!(msg_a.self_deaf, Some(true),  "self: self_deaf must be true");
-    assert_eq!(msg_a.self_mute, Some(true),  "self: self_deaf=true must imply self_mute=true");
+    assert_eq!(msg_a.self_deaf, Some(true), "self: self_deaf must be true");
+    assert_eq!(
+        msg_a.self_mute,
+        Some(true),
+        "self: self_deaf=true must imply self_mute=true"
+    );
 
     let msg_b = decode_user_state(&rx_b.recv().await.unwrap());
-    assert_eq!(msg_b.self_deaf, Some(true),  "observer: self_deaf must be true");
-    assert_eq!(msg_b.self_mute, Some(true),  "observer: self_deaf=true must imply self_mute=true");
+    assert_eq!(
+        msg_b.self_deaf,
+        Some(true),
+        "observer: self_deaf must be true"
+    );
+    assert_eq!(
+        msg_b.self_mute,
+        Some(true),
+        "observer: self_deaf=true must imply self_mute=true"
+    );
 
     let c = es.client_manager.get_client(1).await.unwrap();
     assert!(c.self_deaf);
-    assert!(c.self_mute, "client.self_mute must be set when self_deaf=true");
+    assert!(
+        c.self_mute,
+        "client.self_mute must be set when self_deaf=true"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -219,16 +366,25 @@ async fn test_un_deaf_does_not_clear_self_mute() {
     let mut c1 = ready_client(1, 0);
     c1.self_mute = true;
     c1.self_deaf = true;
-    es.client_manager.add_client(c1, ClientSender::new(tx_a)).await;
+    es.client_manager
+        .add_client(c1, ClientSender::new(tx_a))
+        .await;
 
     // Un-deafen only.
-    let us = mumbleproto::UserState { session: Some(1), self_deaf: Some(false), ..Default::default() };
+    let us = mumbleproto::UserState {
+        session: Some(1),
+        self_deaf: Some(false),
+        ..Default::default()
+    };
     handle_user_state_update(&es, &hub, 1, &us).await;
 
     let msg = decode_user_state(&rx_a.recv().await.unwrap());
     assert_eq!(msg.self_deaf, Some(false), "self_deaf must be false");
     // self_mute was NOT touched – field should be absent (None).
-    assert_eq!(msg.self_mute, None, "un-deaf alone must not change self_mute");
+    assert_eq!(
+        msg.self_mute, None,
+        "un-deaf alone must not change self_mute"
+    );
 
     let c = es.client_manager.get_client(1).await.unwrap();
     assert!(!c.self_deaf);
@@ -245,13 +401,23 @@ async fn test_recording_flag_false_is_broadcast() {
     let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
     let mut c1 = ready_client(1, 0);
     c1.recording = true;
-    es.client_manager.add_client(c1, ClientSender::new(tx_a)).await;
+    es.client_manager
+        .add_client(c1, ClientSender::new(tx_a))
+        .await;
 
-    let us = mumbleproto::UserState { session: Some(1), recording: Some(false), ..Default::default() };
+    let us = mumbleproto::UserState {
+        session: Some(1),
+        recording: Some(false),
+        ..Default::default()
+    };
     handle_user_state_update(&es, &hub, 1, &us).await;
 
     let msg = decode_user_state(&rx_a.recv().await.unwrap());
-    assert_eq!(msg.recording, Some(false), "recording=false must be explicitly broadcast");
+    assert_eq!(
+        msg.recording,
+        Some(false),
+        "recording=false must be explicitly broadcast"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -266,10 +432,14 @@ async fn test_admin_mute_and_unmute_broadcast_false() {
 
     let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
     let (tx_target, mut rx_target) = mpsc::channel::<bytes::Bytes>(16);
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_admin))
+        .await;
     let mut target = ready_client(2, 0);
     target.mute = true;
-    es.client_manager.add_client(target, ClientSender::new(tx_target)).await;
+    es.client_manager
+        .add_client(target, ClientSender::new(tx_target))
+        .await;
 
     // Admin (session 1) un-mutes user 2.
     let us = mumbleproto::UserState {
@@ -282,11 +452,23 @@ async fn test_admin_mute_and_unmute_broadcast_false() {
     // Both admin and target must receive mute=Some(false).
     let msg_admin = decode_user_state(&rx_admin.recv().await.unwrap());
     assert_eq!(msg_admin.session, Some(2));
-    assert_eq!(msg_admin.actor,   Some(1), "actor must be set to admin session");
-    assert_eq!(msg_admin.mute,    Some(false), "admin: mute=false must be explicit");
+    assert_eq!(
+        msg_admin.actor,
+        Some(1),
+        "actor must be set to admin session"
+    );
+    assert_eq!(
+        msg_admin.mute,
+        Some(false),
+        "admin: mute=false must be explicit"
+    );
 
     let msg_target = decode_user_state(&rx_target.recv().await.unwrap());
-    assert_eq!(msg_target.mute, Some(false), "target: mute=false must be explicit");
+    assert_eq!(
+        msg_target.mute,
+        Some(false),
+        "target: mute=false must be explicit"
+    );
 
     let c = es.client_manager.get_client(2).await.unwrap();
     assert!(!c.mute);
@@ -342,10 +524,14 @@ async fn test_remote_user_joined_no_false_booleans() {
 
     // One local observer.
     let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .await;
 
     // Remote user (all defaults – nothing true).
-    es.channel_manager.upsert_remote_user(remote_user(10, 0)).await;
+    es.channel_manager
+        .upsert_remote_user(remote_user(10, 0))
+        .await;
     let es = run_event_listener_task(es).await;
 
     es.emit(EdgeEvent::RemoteUserJoined {
@@ -360,13 +546,22 @@ async fn test_remote_user_joined_no_false_booleans() {
     assert_eq!(msg.name.as_deref(), Some("remote10"), "name must be set");
 
     // All boolean fields must be ABSENT (None) – not Some(false).
-    assert_eq!(msg.mute,             None, "mute must be absent for default-false user");
-    assert_eq!(msg.deaf,             None, "deaf must be absent");
-    assert_eq!(msg.suppress,         None, "suppress must be absent");
-    assert_eq!(msg.self_mute,        None, "self_mute must be absent (prevents 'user unmuted' notification)");
-    assert_eq!(msg.self_deaf,        None, "self_deaf must be absent");
-    assert_eq!(msg.priority_speaker, None, "priority_speaker must be absent");
-    assert_eq!(msg.recording,        None, "recording must be absent (prevents 'user stopped recording' notification)");
+    assert_eq!(msg.mute, None, "mute must be absent for default-false user");
+    assert_eq!(msg.deaf, None, "deaf must be absent");
+    assert_eq!(msg.suppress, None, "suppress must be absent");
+    assert_eq!(
+        msg.self_mute, None,
+        "self_mute must be absent (prevents 'user unmuted' notification)"
+    );
+    assert_eq!(msg.self_deaf, None, "self_deaf must be absent");
+    assert_eq!(
+        msg.priority_speaker, None,
+        "priority_speaker must be absent"
+    );
+    assert_eq!(
+        msg.recording, None,
+        "recording must be absent (prevents 'user stopped recording' notification)"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -377,7 +572,9 @@ async fn test_remote_user_joined_true_flags_are_included() {
     let (es, _hub) = test_edge_and_hub();
 
     let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .await;
 
     let mut ru = remote_user(11, 0);
     ru.self_mute = true;
@@ -393,9 +590,9 @@ async fn test_remote_user_joined_true_flags_are_included() {
     });
 
     let msg = decode_user_state(&rx_obs.recv().await.unwrap());
-    assert_eq!(msg.self_mute, Some(true),  "self_mute=true must be present");
-    assert_eq!(msg.recording, Some(true),  "recording=true must be present");
-    assert_eq!(msg.self_deaf, None,         "unset flags must remain absent");
+    assert_eq!(msg.self_mute, Some(true), "self_mute=true must be present");
+    assert_eq!(msg.recording, Some(true), "recording=true must be present");
+    assert_eq!(msg.self_deaf, None, "unset flags must remain absent");
 }
 
 // -----------------------------------------------------------------------
@@ -410,8 +607,12 @@ async fn test_remote_user_state_changed_only_broadcasts_delta() {
     let (es, _hub) = test_edge_and_hub();
 
     let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
-    es.channel_manager.upsert_remote_user(remote_user(12, 0)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .await;
+    es.channel_manager
+        .upsert_remote_user(remote_user(12, 0))
+        .await;
     let es = run_event_listener_task(es).await;
 
     // Only self_mute changed – all other fields are absent in the delta.
@@ -428,14 +629,17 @@ async fn test_remote_user_state_changed_only_broadcasts_delta() {
     });
 
     let msg = decode_user_state(&rx_obs.recv().await.unwrap());
-    assert_eq!(msg.session,   Some(12));
+    assert_eq!(msg.session, Some(12));
     assert_eq!(msg.self_mute, Some(true), "changed field must be included");
     // All unchanged fields must be absent (None) – not Some(false).
-    assert_eq!(msg.self_deaf,        None, "unchanged self_deaf must be absent");
-    assert_eq!(msg.mute,             None, "unchanged mute must be absent");
-    assert_eq!(msg.deaf,             None, "unchanged deaf must be absent");
-    assert_eq!(msg.recording,        None, "unchanged recording must be absent");
-    assert_eq!(msg.priority_speaker, None, "unchanged priority_speaker must be absent");
+    assert_eq!(msg.self_deaf, None, "unchanged self_deaf must be absent");
+    assert_eq!(msg.mute, None, "unchanged mute must be absent");
+    assert_eq!(msg.deaf, None, "unchanged deaf must be absent");
+    assert_eq!(msg.recording, None, "unchanged recording must be absent");
+    assert_eq!(
+        msg.priority_speaker, None,
+        "unchanged priority_speaker must be absent"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -448,7 +652,9 @@ async fn test_remote_user_state_changed_unmute_carries_false() {
     let (es, _hub) = test_edge_and_hub();
 
     let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .await;
     let mut ru = remote_user(13, 0);
     ru.self_mute = false; // now false after update
     es.channel_manager.upsert_remote_user(ru).await;
@@ -467,7 +673,11 @@ async fn test_remote_user_state_changed_unmute_carries_false() {
     });
 
     let msg = decode_user_state(&rx_obs.recv().await.unwrap());
-    assert_eq!(msg.self_mute, Some(false), "un-mute delta must carry Some(false)");
+    assert_eq!(
+        msg.self_mute,
+        Some(false),
+        "un-mute delta must carry Some(false)"
+    );
     // Other fields still absent.
     assert_eq!(msg.recording, None);
 }
@@ -493,8 +703,12 @@ async fn test_admin_move_denied_when_hub_unreachable() {
     let (tx_victim, _rx_victim) = mpsc::channel::<bytes::Bytes>(16);
 
     // Admin in channel 0, victim starts in channel 0.
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
-    es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_victim)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_admin))
+        .await;
+    es.client_manager
+        .add_client(ready_client(2, 0), ClientSender::new(tx_victim))
+        .await;
 
     // Admin tries to drag victim to channel 1.
     let us = mumbleproto::UserState {
@@ -541,8 +755,12 @@ async fn test_admin_mute_without_move_succeeds_when_hub_unreachable() {
 
     let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
     let (tx_victim, mut rx_victim) = mpsc::channel::<bytes::Bytes>(16);
-    es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
-    es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_victim)).await;
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_admin))
+        .await;
+    es.client_manager
+        .add_client(ready_client(2, 0), ClientSender::new(tx_victim))
+        .await;
 
     // Admin mutes victim (no channel_id → no Move perm check).
     let us = mumbleproto::UserState {
@@ -554,10 +772,18 @@ async fn test_admin_mute_without_move_succeeds_when_hub_unreachable() {
 
     // Both admin and victim must receive UserState (not PermissionDenied).
     let msg_admin = decode_user_state(&rx_admin.recv().await.unwrap());
-    assert_eq!(msg_admin.mute, Some(true), "admin: victim mute must propagate");
+    assert_eq!(
+        msg_admin.mute,
+        Some(true),
+        "admin: victim mute must propagate"
+    );
 
     let msg_victim = decode_user_state(&rx_victim.recv().await.unwrap());
-    assert_eq!(msg_victim.mute, Some(true), "victim: must be notified of mute");
+    assert_eq!(
+        msg_victim.mute,
+        Some(true),
+        "victim: must be notified of mute"
+    );
 
     let victim = es.client_manager.get_client(2).await.unwrap();
     assert!(victim.mute, "victim.mute must be updated");

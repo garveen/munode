@@ -1,10 +1,15 @@
 //! Shared voice packet utilities used by both the TCP (server.rs) and UDP (udp.rs) paths.
 
-use smallvec::SmallVec;
-use std::sync::Arc;
-use tracing::{debug, trace};
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
+use dashmap::DashMap;
+use smallvec::SmallVec;
+use std::net::SocketAddr;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+use std::sync::Arc;
+use tokio::net::UdpSocket;
+use tracing::{debug, trace};
 
 pub const AUDIO_CONTEXT_NORMAL: u8 = 0;
 pub const AUDIO_CONTEXT_SHOUT: u8 = 1;
@@ -45,6 +50,79 @@ pub fn local_delivery_groups<'a>(
 }
 
 #[inline]
+fn rewrite_voice_context(data: &[u8], context: u8) -> bytes::Bytes {
+    use bytes::BytesMut;
+
+    if data.is_empty() {
+        return bytes::Bytes::new();
+    }
+
+    let mut buf = BytesMut::with_capacity(data.len());
+    buf.extend_from_slice(&[((data[0] & 0xe0) | (context & 0x1f))]);
+    buf.extend_from_slice(&data[1..]);
+    buf.freeze()
+}
+
+#[inline]
+pub fn deliver_voice_locally_prefer_udp(
+    sessions: &[u32],
+    payload: &bytes::Bytes,
+    udp_socket: Option<&Arc<UdpSocket>>,
+    session_to_addr: &DashMap<u32, SocketAddr>,
+) -> usize {
+    let mut delivered = 0;
+    let mut tcp_targets: SmallVec<[u32; 8]> = SmallVec::new();
+
+    if let Some(socket) = udp_socket {
+        let mut client_batch: Vec<(Vec<u8>, SocketAddr)> = Vec::with_capacity(sessions.len());
+
+        for &target in sessions {
+            let Some(addr) = session_to_addr.get(&target).map(|entry| *entry.value()) else {
+                tcp_targets.push(target);
+                continue;
+            };
+
+            match crate::udp::encrypt_voice_for_addr(target, addr, payload.as_ref()) {
+                Some(packet) => client_batch.push(packet),
+                None => tcp_targets.push(target),
+            }
+        }
+
+        if !client_batch.is_empty() {
+            let sent = {
+                #[cfg(target_os = "linux")]
+                {
+                    crate::udp::batch_sendmmsg(socket.as_raw_fd(), &client_batch)
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    crate::udp::batch_sendmmsg_fallback_seq(socket, &client_batch)
+                }
+            };
+
+            if sent < client_batch.len() {
+                debug!(
+                    "sendmmsg partial: sent {}/{} UDP packets to local sessions",
+                    sent,
+                    client_batch.len()
+                );
+            }
+
+            delivered += sent;
+        }
+    } else {
+        tcp_targets.extend_from_slice(sessions);
+    }
+
+    if !tcp_targets.is_empty() {
+        let frame = wrap_udptunnel(payload.as_ref());
+        delivered += deliver_voice_tcp(&tcp_targets, &frame);
+    }
+
+    delivered
+}
+
+#[inline]
 fn write_mumble_varint_stack(value: u32, dst: &mut [u8; 5]) -> usize {
     if value < 0x80 {
         dst[0] = value as u8;
@@ -73,19 +151,35 @@ fn write_mumble_varint_stack(value: u32, dst: &mut [u8; 5]) -> usize {
 #[inline]
 fn decode_varint(data: &[u8]) -> Option<(u32, usize)> {
     let v = *data.first()?;
-    if v & 0x80 == 0 { return Some((v as u32, 1)); }
+    if v & 0x80 == 0 {
+        return Some((v as u32, 1));
+    }
     if v & 0xC0 == 0x80 {
-        if data.len() < 2 { return None; }
+        if data.len() < 2 {
+            return None;
+        }
         return Some((((v & 0x3F) as u32) << 8 | data[1] as u32, 2));
     }
     if v & 0xE0 == 0xC0 {
-        if data.len() < 3 { return None; }
-        return Some((((v & 0x1F) as u32) << 16 | (data[1] as u32) << 8 | data[2] as u32, 3));
+        if data.len() < 3 {
+            return None;
+        }
+        return Some((
+            ((v & 0x1F) as u32) << 16 | (data[1] as u32) << 8 | data[2] as u32,
+            3,
+        ));
     }
     if v & 0xF0 == 0xE0 {
-        if data.len() < 4 { return None; }
-        return Some((((v & 0x0F) as u32) << 24 | (data[1] as u32) << 16
-            | (data[2] as u32) << 8 | data[3] as u32, 4));
+        if data.len() < 4 {
+            return None;
+        }
+        return Some((
+            ((v & 0x0F) as u32) << 24
+                | (data[1] as u32) << 16
+                | (data[2] as u32) << 8
+                | data[3] as u32,
+            4,
+        ));
     }
     None
 }
@@ -119,16 +213,25 @@ pub async fn deliver_relayed_voice(
         }
     };
 
-    trace!("edge={} RelayedVoice recv: len={} header=0x{:02X} target={} session={}",
-        state.get_edge_id(), voice_packet.len(), voice_packet[0], raw_target, sender_session);
+    trace!(
+        "edge={} RelayedVoice recv: len={} header=0x{:02X} target={} session={}",
+        state.get_edge_id(),
+        voice_packet.len(),
+        voice_packet[0],
+        raw_target,
+        sender_session
+    );
 
     // For PTT (target=0), the sender's channel is required by compute_voice_targets.
     let sender_channel = if raw_target == 0 {
         match state.channel_manager.get_remote_user(sender_session).await {
             Some(ru) => ru.channel_id,
             None => {
-                debug!("edge={} RelayedVoice PTT: unknown remote session {}",
-                    state.get_edge_id(), sender_session);
+                debug!(
+                    "edge={} RelayedVoice PTT: unknown remote session {}",
+                    state.get_edge_id(),
+                    sender_session
+                );
                 return;
             }
         }
@@ -141,32 +244,63 @@ pub async fn deliver_relayed_voice(
     // relay_edge_ids is intentionally ignored: the sending edge already handled
     // inter-edge relay for this packet.
     let Some(targets) = crate::routing::compute_voice_targets(
-        &voice_packet, sender_session, sender_channel, state, hub_client,
-    ).await else {
-        debug!("edge={} RelayedVoice: no targets for session {} target {}",
-            state.get_edge_id(), sender_session, raw_target);
+        &voice_packet,
+        sender_session,
+        sender_channel,
+        state,
+        hub_client,
+    )
+    .await
+    else {
+        debug!(
+            "edge={} RelayedVoice: no targets for session {} target {}",
+            state.get_edge_id(),
+            sender_session,
+            raw_target
+        );
         return;
+    };
+
+    let client_udp_socket = {
+        let socket_guard = state.client_udp_socket.load();
+        match &**socket_guard {
+            Some(socket) => Some(Arc::clone(socket)),
+            None => None,
+        }
     };
 
     let mut delivered = 0;
     for group in local_delivery_groups(&targets) {
-        let frame = if group.context == AUDIO_CONTEXT_NORMAL {
+        let payload = if group.context == AUDIO_CONTEXT_NORMAL {
             // Relay payloads already preserve the original regular-speech context.
-            wrap_udptunnel(voice_packet.as_ref())
+            voice_packet.clone()
         } else {
             // Relayed whisper payloads preserve the original target slot; rewrite to
-            // receiver-facing AudioContext while building the TCP frame.
-            wrap_udptunnel_with_context(voice_packet.as_ref(), group.context)
+            // receiver-facing AudioContext before local delivery.
+            rewrite_voice_context(voice_packet.as_ref(), group.context)
         };
-        delivered += deliver_voice_tcp(group.sessions, &frame);
+        delivered += deliver_voice_locally_prefer_udp(
+            group.sessions,
+            &payload,
+            client_udp_socket.as_ref(),
+            state.udp_session_to_addr.as_ref(),
+        );
     }
 
     if targets.is_whisper {
-        trace!("edge={} Delivered relayed whisper from session {} to {} targets",
-            state.get_edge_id(), sender_session, delivered);
+        trace!(
+            "edge={} Delivered relayed whisper from session {} to {} targets",
+            state.get_edge_id(),
+            sender_session,
+            delivered
+        );
     } else {
-        trace!("edge={} Delivered relayed broadcast from session {} to {} local clients",
-            state.get_edge_id(), sender_session, delivered);
+        trace!(
+            "edge={} Delivered relayed broadcast from session {} to {} local clients",
+            state.get_edge_id(),
+            sender_session,
+            delivered
+        );
     }
 }
 
@@ -221,23 +355,6 @@ pub fn wrap_udptunnel(data: &[u8]) -> bytes::Bytes {
     buf.freeze()
 }
 
-#[inline]
-fn wrap_udptunnel_with_context(data: &[u8], context: u8) -> bytes::Bytes {
-    use bytes::BytesMut;
-    use munode_protocol::message_type::MessageType;
-
-    if data.is_empty() {
-        return bytes::Bytes::new();
-    }
-
-    let mut buf = BytesMut::with_capacity(6 + data.len());
-    bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-    bytes::BufMut::put_u32(&mut buf, data.len() as u32);
-    buf.extend_from_slice(&[((data[0] & 0xe0) | (context & 0x1f))]);
-    buf.extend_from_slice(&data[1..]);
-    buf.freeze()
-}
-
 /// Send `frame` to each session in `sessions` via its hot_slot TCP sender channel.
 ///
 /// Sessions that are inactive or have no sender are silently skipped (voice is
@@ -257,4 +374,123 @@ pub fn deliver_voice_tcp(sessions: &[u32], frame: &bytes::Bytes) -> usize {
         }
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deliver_voice_locally_prefer_udp;
+    use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
+    use crate::crypto::CryptState;
+    use dashmap::DashMap;
+    use munode_protocol::message_type::MessageType;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::net::UdpSocket;
+    use tokio::sync::mpsc;
+    use tokio::time::{Duration, timeout};
+
+    fn ready_client(session: u32) -> ClientInfo {
+        ClientInfo {
+            session,
+            user_id: session,
+            username: format!("user-{session}"),
+            channel_id: 1,
+            state: ClientState::Ready,
+            mute: false,
+            deaf: false,
+            suppress: false,
+            self_mute: false,
+            self_deaf: false,
+            priority_speaker: false,
+            recording: false,
+            ip_address: "127.0.0.1".to_string(),
+            connected_at: std::time::Instant::now(),
+            last_active: std::time::Instant::now(),
+            cert_hash: None,
+            groups: Vec::new(),
+            opus_supported: true,
+            listening_channels: Vec::new(),
+            listening_volume_adjustments: HashMap::new(),
+            texture_hash: None,
+            comment_hash: None,
+            client_version: None,
+            client_release: String::new(),
+            client_os: String::new(),
+            client_os_version: String::new(),
+            plugin_context: Vec::new(),
+            client_cert_chain: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn deliver_voice_locally_prefer_udp_uses_udp_when_mapping_exists() {
+        let session = 90_001;
+        let client_manager = ClientManager::new();
+        let (tcp_tx, mut tcp_rx) = mpsc::channel(4);
+
+        client_manager
+            .add_client(ready_client(session), ClientSender::new(tcp_tx))
+            .await;
+
+        let mut crypt = CryptState::new();
+        crypt.set_key(&[1u8; 16], &[2u8; 16], &[3u8; 16]);
+        client_manager.set_crypt_state(session, crypt).await;
+
+        let send_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let recv_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+
+        let session_to_addr: DashMap<u32, std::net::SocketAddr> = DashMap::new();
+        session_to_addr.insert(session, recv_socket.local_addr().unwrap());
+
+        let payload = bytes::Bytes::from_static(&[0x80, 0x01, 0x02, 0x03]);
+        let delivered = deliver_voice_locally_prefer_udp(
+            &[session],
+            &payload,
+            Some(&send_socket),
+            &session_to_addr,
+        );
+
+        assert_eq!(delivered, 1);
+
+        let mut buf = [0u8; 64];
+        let (len, from_addr) = timeout(Duration::from_millis(200), recv_socket.recv_from(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(len > 0);
+        assert_eq!(from_addr, send_socket.local_addr().unwrap());
+        assert!(matches!(
+            tcp_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn deliver_voice_locally_prefer_udp_falls_back_to_tcp_without_mapping() {
+        let session = 90_002;
+        let client_manager = ClientManager::new();
+        let (tcp_tx, mut tcp_rx) = mpsc::channel(4);
+
+        client_manager
+            .add_client(ready_client(session), ClientSender::new(tcp_tx))
+            .await;
+
+        let session_to_addr: DashMap<u32, std::net::SocketAddr> = DashMap::new();
+        let payload = bytes::Bytes::from_static(&[0x80, 0x05, 0x06]);
+        let delivered =
+            deliver_voice_locally_prefer_udp(&[session], &payload, None, &session_to_addr);
+
+        assert_eq!(delivered, 1);
+
+        let frame = timeout(Duration::from_millis(200), tcp_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&frame[..2], &(MessageType::UdpTunnel as u16).to_be_bytes());
+        assert_eq!(
+            u32::from_be_bytes([frame[2], frame[3], frame[4], frame[5]]) as usize,
+            payload.len()
+        );
+        assert_eq!(&frame[6..], payload.as_ref());
+    }
 }

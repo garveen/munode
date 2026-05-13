@@ -1,7 +1,7 @@
 //! Standalone helper functions shared across the connection submodules.
-use std::sync::Arc;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
+use std::sync::Arc;
 use tracing::debug;
 
 use crate::hub_client::HubClient;
@@ -47,22 +47,29 @@ pub(super) async fn broadcast_text_message(
     if !text_msg.channel_id.is_empty() {
         // Send to users in specified channels
         for &channel_id in &text_msg.channel_id {
-            edge_state.client_manager.broadcast_to_channel(
-                channel_id,
-                MessageType::TextMessage,
-                &msg,
-                Some(sender_session),
-            ).await;
+            edge_state
+                .client_manager
+                .broadcast_to_channel(
+                    channel_id,
+                    MessageType::TextMessage,
+                    &msg,
+                    Some(sender_session),
+                )
+                .await;
         }
     } else if !text_msg.session.is_empty() {
         // Send to specific sessions
         for &target_session in &text_msg.session {
-            edge_state.client_manager.send_to(target_session, MessageType::TextMessage, &msg).await;
+            edge_state
+                .client_manager
+                .send_to(target_session, MessageType::TextMessage, &msg)
+                .await;
         }
     } else if !text_msg.tree_id.is_empty() {
         // Collect all channels in the tree (including sub-channels recursively)
         let mut all_channel_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        let mut to_visit: std::collections::VecDeque<u32> = text_msg.tree_id.iter().copied().collect();
+        let mut to_visit: std::collections::VecDeque<u32> =
+            text_msg.tree_id.iter().copied().collect();
         while let Some(ch_id) = to_visit.pop_front() {
             if all_channel_ids.insert(ch_id) {
                 let children = edge_state.channel_manager.get_children(ch_id).await;
@@ -72,12 +79,10 @@ pub(super) async fn broadcast_text_message(
             }
         }
         for ch_id in all_channel_ids {
-            edge_state.client_manager.broadcast_to_channel(
-                ch_id,
-                MessageType::TextMessage,
-                &msg,
-                Some(sender_session),
-            ).await;
+            edge_state
+                .client_manager
+                .broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, Some(sender_session))
+                .await;
         }
     }
 }
@@ -91,7 +96,10 @@ pub(crate) async fn broadcast_codec_version(edge_state: &Arc<EdgeState>) {
         prefer_alpha: false,
         opus: Some(true),
     };
-    edge_state.client_manager.broadcast(MessageType::CodecVersion, &msg, None).await;
+    edge_state
+        .client_manager
+        .broadcast(MessageType::CodecVersion, &msg, None)
+        .await;
 }
 
 /// Strip HTML tags from a string (simple tag removal for Mumble text messages).
@@ -153,8 +161,12 @@ pub(crate) async fn get_perm_cached_outcome(
     }
     match hub_client.handle_permission_query(session, channel).await {
         Ok(r) => {
-            let bitmask = r.permissions.unwrap_or(if fail_open { u32::MAX } else { 0 });
-            edge_state.permission_cache.insert((session, channel), bitmask);
+            let bitmask = r
+                .permissions
+                .unwrap_or(if fail_open { u32::MAX } else { 0 });
+            edge_state
+                .permission_cache
+                .insert((session, channel), bitmask);
             PermissionQueryOutcome {
                 permissions: bitmask,
                 authoritative: true,
@@ -180,7 +192,12 @@ pub(crate) async fn prefetch_whisper_permissions(
         .iter()
         .copied()
         .filter(|channel| seen.insert(*channel))
-        .filter(|channel| edge_state.permission_cache.get(&(session, *channel)).is_none())
+        .filter(|channel| {
+            edge_state
+                .permission_cache
+                .get(&(session, *channel))
+                .is_none()
+        })
         .collect();
 
     if missing_channels.is_empty() {
@@ -191,7 +208,9 @@ pub(crate) async fn prefetch_whisper_permissions(
         let batch_ok = match hub_client.batch_permission_query(session, chunk).await {
             Ok(result) if result.success => {
                 for entry in result.entries {
-                    edge_state.permission_cache.insert((session, entry.channel_id), entry.permissions);
+                    edge_state
+                        .permission_cache
+                        .insert((session, entry.channel_id), entry.permissions);
                 }
                 true
             }
@@ -199,7 +218,10 @@ pub(crate) async fn prefetch_whisper_permissions(
                 debug!(
                     session,
                     channel_count = chunk.len(),
-                    error = result.error.as_deref().unwrap_or("unknown batch permission failure"),
+                    error = result
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown batch permission failure"),
                     "whisper permission batch prefetch failed; falling back to per-channel queries"
                 );
                 false

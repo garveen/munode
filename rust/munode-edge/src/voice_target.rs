@@ -56,10 +56,13 @@ pub fn build_hot_vt_map(
     session_vts
         .iter()
         .map(|(&tid, vt)| {
-            (tid, Arc::new(crate::hot_slot::HotVoiceTarget {
-                sessions: vt.sessions.clone(),
-                resolved_channels: vt.resolved_channels.clone(),
-            }))
+            (
+                tid,
+                Arc::new(crate::hot_slot::HotVoiceTarget {
+                    sessions: vt.sessions.clone(),
+                    resolved_channels: vt.resolved_channels.clone(),
+                }),
+            )
         })
         .collect()
 }
@@ -89,9 +92,7 @@ pub async fn get_routing_voice_target(
         })
 }
 
-pub fn voice_target_config_to_proto(
-    config: &VoiceTargetConfig,
-) -> hubedge::VoiceTargetConfigProto {
+pub fn voice_target_config_to_proto(config: &VoiceTargetConfig) -> hubedge::VoiceTargetConfigProto {
     let sessions = config
         .sessions
         .iter()
@@ -252,7 +253,11 @@ pub async fn resolve_voice_target_channels(
 fn split_voice_target_proto(
     config: hubedge::VoiceTargetConfigProto,
 ) -> (Vec<u32>, Vec<VoiceTargetChannelConfig>) {
-    let sessions = config.sessions.into_iter().map(|session| session.session).collect();
+    let sessions = config
+        .sessions
+        .into_iter()
+        .map(|session| session.session)
+        .collect();
     let channels = config
         .channels
         .into_iter()
@@ -348,11 +353,8 @@ pub async fn apply_voice_target_proto(
     config: Option<hubedge::VoiceTargetConfigProto>,
 ) {
     let prepared = prepare_voice_target_config(&edge_state.channel_manager, config).await;
-    apply_prepared_voice_target_updates(
-        edge_state,
-        vec![(client_session, target_id, prepared)],
-    )
-    .await;
+    apply_prepared_voice_target_updates(edge_state, vec![(client_session, target_id, prepared)])
+        .await;
     edge_state.clear_cached_whisper_target(client_session, target_id);
 }
 
@@ -377,7 +379,11 @@ pub async fn clear_session_voice_targets(
     edge_state: &crate::state::EdgeState,
     client_session: u32,
 ) {
-    edge_state.voice_targets.write().await.remove(&client_session);
+    edge_state
+        .voice_targets
+        .write()
+        .await
+        .remove(&client_session);
 
     let slot = crate::hot_slot::get_hot_slot(client_session);
     if slot.is_active_for(client_session) {
@@ -397,11 +403,9 @@ pub async fn recompute_all_session_voice_targets(edge_state: &crate::state::Edge
         cache
             .iter()
             .flat_map(|(&session_id, targets)| {
-                targets
-                    .iter()
-                    .map(move |(&target_id, voice_target)| {
-                        (session_id, target_id, voice_target.channels.clone())
-                    })
+                targets.iter().map(move |(&target_id, voice_target)| {
+                    (session_id, target_id, voice_target.channels.clone())
+                })
             })
             .collect()
     };
@@ -430,15 +434,17 @@ pub async fn recompute_link_affected_voice_targets(
             .iter()
             .flat_map(|(&session_id, targets)| {
                 let affected_link_channels = &affected_link_channels;
-                targets.iter().filter_map(move |(&target_id, voice_target)| {
-                    voice_target
-                        .channels
-                        .iter()
-                        .any(|config| {
-                            config.links && affected_link_channels.contains(&config.channel_id)
-                        })
-                        .then(|| (session_id, target_id, voice_target.channels.clone()))
-                })
+                targets
+                    .iter()
+                    .filter_map(move |(&target_id, voice_target)| {
+                        voice_target
+                            .channels
+                            .iter()
+                            .any(|config| {
+                                config.links && affected_link_channels.contains(&config.channel_id)
+                            })
+                            .then(|| (session_id, target_id, voice_target.channels.clone()))
+                    })
             })
             .collect()
     };

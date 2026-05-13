@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::BytesMut;
 use prost::Message;
-use sha1::{Sha1, Digest as Sha1Digest};
+use sha1::{Digest as Sha1Digest, Sha1};
 use tracing::{debug, warn};
 
 use munode_common::config::EdgeConfig;
@@ -62,7 +62,13 @@ impl<'a> LoginHandler<'a> {
         edge_state: &'a Arc<EdgeState>,
         hub_client: &'a Arc<HubClient>,
     ) -> Self {
-        Self { sender, config, edge_state, hub_client, skip_crypt_setup: false }
+        Self {
+            sender,
+            config,
+            edge_state,
+            hub_client,
+            skip_crypt_setup: false,
+        }
     }
 
     /// Create a `LoginHandler` with `skip_crypt_setup` set.
@@ -73,7 +79,13 @@ impl<'a> LoginHandler<'a> {
         edge_state: &'a Arc<EdgeState>,
         hub_client: &'a Arc<HubClient>,
     ) -> Self {
-        Self { sender, config, edge_state, hub_client, skip_crypt_setup: true }
+        Self {
+            sender,
+            config,
+            edge_state,
+            hub_client,
+            skip_crypt_setup: true,
+        }
     }
 
     /// Execute the pre-ServerSync portion of the login sequence.
@@ -101,7 +113,10 @@ impl<'a> LoginHandler<'a> {
             debug!(session_id, "Step 1: sending CryptSetup");
             self.send_crypt_setup(session_id).await?;
         } else {
-            debug!(session_id, "Step 1: skipping CryptSetup (non-TLS transport)");
+            debug!(
+                session_id,
+                "Step 1: skipping CryptSetup (non-TLS transport)"
+            );
         }
 
         // 2. Send CodecVersion (Opus only)
@@ -111,20 +126,42 @@ impl<'a> LoginHandler<'a> {
         // Pre-fetch all channel permissions in a single Hub RPC call.
         // This includes the root channel (id=0) which is needed by ServerSync.
         // Doing it once here avoids N sequential RPCs during send_channel_tree.
-        debug!(session_id, "Step 3: fetching channel list and batch permission query");
+        debug!(
+            session_id,
+            "Step 3: fetching channel list and batch permission query"
+        );
         let channels = self.edge_state.channel_manager.get_channels_bfs().await;
         let channel_ids: Vec<u32> = channels.iter().map(|c| c.id).collect();
-        debug!(session_id, channel_count = channel_ids.len(), "Fetched {} channels, querying permissions", channel_ids.len());
+        debug!(
+            session_id,
+            channel_count = channel_ids.len(),
+            "Fetched {} channels, querying permissions",
+            channel_ids.len()
+        );
         // Collect unique IDs (channel 0 will be in the list; no need to add separately)
         // perm_map: channel_id → (effective_permissions, is_enter_restricted)
         let perm_map: std::collections::HashMap<u32, (u32, bool)> = {
-            match self.hub_client.batch_permission_query(session_id, &channel_ids).await {
-                Ok(result) => result.entries.iter().map(|e| {
-                    (e.channel_id, (e.permissions, e.is_enter_restricted.unwrap_or(false)))
-                }).collect(),
+            match self
+                .hub_client
+                .batch_permission_query(session_id, &channel_ids)
+                .await
+            {
+                Ok(result) => result
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        (
+                            e.channel_id,
+                            (e.permissions, e.is_enter_restricted.unwrap_or(false)),
+                        )
+                    })
+                    .collect(),
                 Err(e) => {
                     // Fail open: proceed without channel permissions rather than aborting login
-                    warn!("Batch permission query failed during login for session {}: {}", session_id, e);
+                    warn!(
+                        "Batch permission query failed during login for session {}: {}",
+                        session_id, e
+                    );
                     std::collections::HashMap::new()
                 }
             }
@@ -132,7 +169,8 @@ impl<'a> LoginHandler<'a> {
 
         // 3. Send channel tree (BFS order), using pre-fetched permissions
         debug!(session_id, "Step 4: sending channel tree (BFS order)");
-        self.send_channel_tree_with_perms(&channels, &perm_map).await?;
+        self.send_channel_tree_with_perms(&channels, &perm_map)
+            .await?;
 
         // 4. Send UserState for all remote users
         debug!(session_id, "Step 5: sending remote user states");
@@ -146,9 +184,15 @@ impl<'a> LoginHandler<'a> {
         //    userEnterChannel → sendClientPermission() calls.  This lets the client
         //    immediately cache its permissions in the joined channel without waiting
         //    for a client-initiated PermissionQuery round-trip.
-        let target_channel = auth_result.channel_id.unwrap_or(self.config.server.default_channel);
-        debug!(session_id, target_channel, "Step 7: sending PermissionQuery for target channel + parent");
-        self.send_channel_permission_queries(target_channel, &perm_map).await?;
+        let target_channel = auth_result
+            .channel_id
+            .unwrap_or(self.config.server.default_channel);
+        debug!(
+            session_id,
+            target_channel, "Step 7: sending PermissionQuery for target channel + parent"
+        );
+        self.send_channel_permission_queries(target_channel, &perm_map)
+            .await?;
 
         // Collect root-channel permissions for the caller to use in ServerSync.
         let root_permissions = perm_map.get(&0).map(|(p, _)| *p).unwrap_or(0);
@@ -171,16 +215,22 @@ impl<'a> LoginHandler<'a> {
 
         use ring::rand::{SecureRandom, SystemRandom};
         let rng = SystemRandom::new();
-        rng.fill(&mut key).map_err(|_| anyhow::anyhow!("RNG failed"))?;
-        rng.fill(&mut client_nonce).map_err(|_| anyhow::anyhow!("RNG failed"))?;
-        rng.fill(&mut server_nonce).map_err(|_| anyhow::anyhow!("RNG failed"))?;
+        rng.fill(&mut key)
+            .map_err(|_| anyhow::anyhow!("RNG failed"))?;
+        rng.fill(&mut client_nonce)
+            .map_err(|_| anyhow::anyhow!("RNG failed"))?;
+        rng.fill(&mut server_nonce)
+            .map_err(|_| anyhow::anyhow!("RNG failed"))?;
 
         // Build and store CryptState for this session
         let mut crypt = CryptState::new();
         // encrypt_iv = server_nonce (server→client)
         // decrypt_iv = client_nonce (client→server, so server decrypts using this)
         crypt.set_key(&key, &server_nonce, &client_nonce);
-        self.edge_state.client_manager.set_crypt_state(session_id, crypt).await;
+        self.edge_state
+            .client_manager
+            .set_crypt_state(session_id, crypt)
+            .await;
 
         let msg = mumbleproto::CryptSetup {
             key: Some(key.to_vec()),
@@ -244,7 +294,9 @@ impl<'a> LoginHandler<'a> {
                 let (perms, ch_restricted) = perm_map.get(&ch.id).copied().unwrap_or((0, false));
                 let enter = perms & perm::ENTER != 0;
                 // Populate enter_restricted_cache so AclUpdated events need no extra RPC.
-                self.edge_state.enter_restricted_cache.insert(ch.id, ch_restricted);
+                self.edge_state
+                    .enter_restricted_cache
+                    .insert(ch.id, ch_restricted);
                 (Some(enter), Some(ch_restricted))
             };
 
@@ -302,16 +354,26 @@ impl<'a> LoginHandler<'a> {
         // practice ninja_channels only changes on Hub config updates (rare), so a brief
         // inconsistency here is acceptable.
         let ninja_channels_snapshot: std::collections::HashSet<u32> = {
-            self.edge_state.ninja_channels.read().await.iter().copied().collect()
+            self.edge_state
+                .ninja_channels
+                .read()
+                .await
+                .iter()
+                .copied()
+                .collect()
         };
-        let ninja_visible_set: std::collections::HashSet<u32> = if ninja_channels_snapshot.is_empty() {
-            std::collections::HashSet::new()
-        } else {
-            self.edge_state.ninja_visible_to.read().await
-                .get(&self_session)
-                .cloned()
-                .unwrap_or_default()
-        };
+        let ninja_visible_set: std::collections::HashSet<u32> =
+            if ninja_channels_snapshot.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                self.edge_state
+                    .ninja_visible_to
+                    .read()
+                    .await
+                    .get(&self_session)
+                    .cloned()
+                    .unwrap_or_default()
+            };
 
         for user in &remote_users {
             if user.session_id == self_session {
@@ -329,7 +391,11 @@ impl<'a> LoginHandler<'a> {
             }
             let msg = mumbleproto::UserState {
                 session: Some(user.session_id),
-                user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
+                user_id: if user.user_id > 0 {
+                    Some(user.user_id)
+                } else {
+                    None
+                },
                 name: Some(user.username.clone()),
                 channel_id: Some(user.channel_id),
                 mute: if user.mute { Some(true) } else { None },
@@ -337,7 +403,11 @@ impl<'a> LoginHandler<'a> {
                 suppress: if user.suppress { Some(true) } else { None },
                 self_mute: if user.self_mute { Some(true) } else { None },
                 self_deaf: if user.self_deaf { Some(true) } else { None },
-                priority_speaker: if user.priority_speaker { Some(true) } else { None },
+                priority_speaker: if user.priority_speaker {
+                    Some(true)
+                } else {
+                    None
+                },
                 recording: if user.recording { Some(true) } else { None },
                 hash: user.cert_hash.clone(),
                 listening_channel_add: user.listening_channels.clone(),
@@ -346,7 +416,10 @@ impl<'a> LoginHandler<'a> {
             self.send(MessageType::UserState, &msg).await?;
         }
 
-        for client in local_clients.iter().filter(|c| c.state == crate::client::ClientState::Ready) {
+        for client in local_clients
+            .iter()
+            .filter(|c| c.state == crate::client::ClientState::Ready)
+        {
             if client.session == self_session {
                 continue;
             }
@@ -356,17 +429,22 @@ impl<'a> LoginHandler<'a> {
             {
                 continue;
             }
-            let listening_volume_adjustment: Vec<mumbleproto::user_state::VolumeAdjustment> = client
-                .listening_volume_adjustments
-                .iter()
-                .map(|(&ch, &vol)| mumbleproto::user_state::VolumeAdjustment {
-                    listening_channel: Some(ch),
-                    volume_adjustment: Some(vol),
-                })
-                .collect();
+            let listening_volume_adjustment: Vec<mumbleproto::user_state::VolumeAdjustment> =
+                client
+                    .listening_volume_adjustments
+                    .iter()
+                    .map(|(&ch, &vol)| mumbleproto::user_state::VolumeAdjustment {
+                        listening_channel: Some(ch),
+                        volume_adjustment: Some(vol),
+                    })
+                    .collect();
             let msg = mumbleproto::UserState {
                 session: Some(client.session),
-                user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
+                user_id: if client.user_id > 0 {
+                    Some(client.user_id)
+                } else {
+                    None
+                },
                 name: Some(client.username.clone()),
                 channel_id: Some(client.channel_id),
                 mute: if client.mute { Some(true) } else { None },
@@ -374,7 +452,11 @@ impl<'a> LoginHandler<'a> {
                 suppress: if client.suppress { Some(true) } else { None },
                 self_mute: if client.self_mute { Some(true) } else { None },
                 self_deaf: if client.self_deaf { Some(true) } else { None },
-                priority_speaker: if client.priority_speaker { Some(true) } else { None },
+                priority_speaker: if client.priority_speaker {
+                    Some(true)
+                } else {
+                    None
+                },
                 recording: if client.recording { Some(true) } else { None },
                 hash: client.cert_hash.clone(),
                 listening_channel_add: client.listening_channels.clone(),
@@ -384,7 +466,11 @@ impl<'a> LoginHandler<'a> {
             self.send(MessageType::UserState, &msg).await?;
         }
 
-        debug!("Sent {} remote + {} local user states", remote_users.len(), local_clients.len());
+        debug!(
+            "Sent {} remote + {} local user states",
+            remote_users.len(),
+            local_clients.len()
+        );
         Ok(())
     }
 
@@ -401,9 +487,13 @@ impl<'a> LoginHandler<'a> {
         session_id: u32,
         auth_result: &munode_protocol::hubedge::EdgeAuthenticateUserResult,
     ) -> Result<()> {
-        let channel_id = auth_result.channel_id.unwrap_or(self.config.server.default_channel);
+        let channel_id = auth_result
+            .channel_id
+            .unwrap_or(self.config.server.default_channel);
         // Prefer display_name over username (matches JS implementation behaviour).
-        let display_name = auth_result.display_name.clone()
+        let display_name = auth_result
+            .display_name
+            .clone()
             .or(auth_result.username.clone())
             .unwrap_or_default();
         // Only include user_id for registered users (user_id > 0).
@@ -411,7 +501,11 @@ impl<'a> LoginHandler<'a> {
         // registered account with id=0 rather than as a guest.
         let user_id = auth_result.user_id.filter(|&id| id > 0);
         // Include cert hash, matching Murmur's `mpus.set_hash(uSource->qsHash)` in msgAuthenticate.
-        let cert_hash = self.edge_state.client_manager.get_client(session_id).await
+        let cert_hash = self
+            .edge_state
+            .client_manager
+            .get_client(session_id)
+            .await
             .and_then(|c| c.cert_hash.clone());
         let msg = mumbleproto::UserState {
             session: Some(session_id),
@@ -457,7 +551,12 @@ impl<'a> LoginHandler<'a> {
         }
 
         // Parent channel permissions (Murmur also sends for c->cParent in userEnterChannel)
-        if let Some(ch) = self.edge_state.channel_manager.get_channel(target_channel_id).await {
+        if let Some(ch) = self
+            .edge_state
+            .channel_manager
+            .get_channel(target_channel_id)
+            .await
+        {
             if let Some(parent_id) = ch.parent_id {
                 if let Some((parent_perms, _)) = perm_map.get(&parent_id) {
                     let pq = mumbleproto::PermissionQuery {
@@ -483,7 +582,8 @@ impl<'a> LoginHandler<'a> {
     pub async fn send_server_sync(&self, session_id: u32, root_permissions: u32) -> Result<()> {
         let hub_limits = self.edge_state.hub_limits.read().await;
         let max_bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth);
-        let welcome = hub_limits.as_ref()
+        let welcome = hub_limits
+            .as_ref()
             .and_then(|l| l.welcome_text.clone())
             .or_else(|| self.config.server.welcome_text.clone())
             .unwrap_or_else(|| "Welcome to MuNode Server".to_string());
@@ -506,18 +606,26 @@ impl<'a> LoginHandler<'a> {
     /// notifications on some clients.
     pub async fn send_server_config(&self) -> Result<()> {
         let hub_limits = self.edge_state.hub_limits.read().await;
-        let text_message_length = hub_limits.as_ref()
+        let text_message_length = hub_limits
+            .as_ref()
             .and_then(|l| l.text_message_length)
             .unwrap_or(self.config.server.text_message_length);
-        let image_message_length = hub_limits.as_ref()
+        let image_message_length = hub_limits
+            .as_ref()
             .and_then(|l| l.image_message_length)
             .unwrap_or(self.config.server.image_message_length);
-        let max_users = hub_limits.as_ref()
+        let max_users = hub_limits
+            .as_ref()
             .and_then(|l| l.max_users)
             .unwrap_or(self.config.server.capacity);
-        let max_bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth)
+        let max_bandwidth = hub_limits
+            .as_ref()
+            .and_then(|l| l.max_bandwidth)
             .or_else(|| {
-                let bw = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
+                let bw = self
+                    .edge_state
+                    .max_bandwidth_bps
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 if bw > 0 { Some(bw) } else { None }
             });
         let suggest_version = hub_limits.as_ref().and_then(|l| l.suggest_version);
@@ -543,7 +651,11 @@ impl<'a> LoginHandler<'a> {
         // Send both version_v1 (field 1) and version_v2 (field 4) for full client compatibility:
         //   - Old clients (< 1.5): use version field (v1) only
         //   - New clients (>= 1.5): prefer version_v2, fall back to version
-        if suggest_version.is_some() || suggest_version_v2.is_some() || suggest_positional.is_some() || suggest_push_to_talk.is_some() {
+        if suggest_version.is_some()
+            || suggest_version_v2.is_some()
+            || suggest_positional.is_some()
+            || suggest_push_to_talk.is_some()
+        {
             let suggest_msg = mumbleproto::SuggestConfig {
                 version: suggest_version,
                 positional: suggest_positional,
@@ -606,7 +718,11 @@ pub fn build_user_state_msg(client: &ClientInfo) -> mumbleproto::UserState {
     mumbleproto::UserState {
         session: Some(client.session),
         // Only include user_id for registered users (user_id > 0); guests should have None.
-        user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
+        user_id: if client.user_id > 0 {
+            Some(client.user_id)
+        } else {
+            None
+        },
         name: Some(client.username.clone()),
         channel_id: Some(client.channel_id),
         mute: if client.mute { Some(true) } else { None },
@@ -614,7 +730,11 @@ pub fn build_user_state_msg(client: &ClientInfo) -> mumbleproto::UserState {
         suppress: if client.suppress { Some(true) } else { None },
         self_mute: if client.self_mute { Some(true) } else { None },
         self_deaf: if client.self_deaf { Some(true) } else { None },
-        priority_speaker: if client.priority_speaker { Some(true) } else { None },
+        priority_speaker: if client.priority_speaker {
+            Some(true)
+        } else {
+            None
+        },
         recording: if client.recording { Some(true) } else { None },
         hash: client.cert_hash.clone(),
         texture_hash: client.texture_hash.clone(),
@@ -650,11 +770,11 @@ pub fn build_channel_state_msg(channel: &ChannelData) -> mumbleproto::ChannelSta
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use prost::Message;
-    use munode_protocol::transport::decode_frame;
     use crate::client::ClientState;
     use bytes::BytesMut;
+    use munode_protocol::transport::decode_frame;
+    use prost::Message;
+    use std::collections::HashMap;
 
     #[test]
     fn test_encode_server_version() {

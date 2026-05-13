@@ -36,16 +36,24 @@ impl GeoIpService {
             return Self { reader: None };
         }
         if !Path::new(database_path).exists() {
-            warn!("GeoIP database not found at '{}', GeoIP disabled", database_path);
+            warn!(
+                "GeoIP database not found at '{}', GeoIP disabled",
+                database_path
+            );
             return Self { reader: None };
         }
         match maxminddb::Reader::open_readfile(database_path) {
             Ok(reader) => {
                 debug!("GeoIP database loaded from '{}'", database_path);
-                Self { reader: Some(reader) }
+                Self {
+                    reader: Some(reader),
+                }
             }
             Err(e) => {
-                warn!("Failed to open GeoIP database '{}': {}, GeoIP disabled", database_path, e);
+                warn!(
+                    "Failed to open GeoIP database '{}': {}, GeoIP disabled",
+                    database_path, e
+                );
                 Self { reader: None }
             }
         }
@@ -70,39 +78,51 @@ impl GeoIpService {
 
         // Try City database first, fall back to Country
         if let Ok(city) = reader.lookup::<geoip2::City>(*ip) {
-            let country_code = city.country
+            let country_code = city
+                .country
                 .as_ref()
                 .and_then(|c| c.iso_code)
                 .map(|s| s.to_string());
-            let country_name = city.country
+            let country_name = city
+                .country
                 .as_ref()
                 .and_then(|c| c.names.as_ref())
                 .and_then(|names| names.get("en"))
                 .map(|s| s.to_string());
-            let city_name = city.city
+            let city_name = city
+                .city
                 .as_ref()
                 .and_then(|c| c.names.as_ref())
                 .and_then(|names| names.get("en"))
                 .map(|s| s.to_string());
-            let continent_code = city.continent
+            let continent_code = city
+                .continent
                 .as_ref()
                 .and_then(|c| c.code)
                 .map(|s| s.to_string());
-            return Some(GeoLocation { country_code, country_name, city_name, continent_code });
+            return Some(GeoLocation {
+                country_code,
+                country_name,
+                city_name,
+                continent_code,
+            });
         }
 
         // Try Country database
         if let Ok(country) = reader.lookup::<geoip2::Country>(*ip) {
-            let country_code = country.country
+            let country_code = country
+                .country
                 .as_ref()
                 .and_then(|c| c.iso_code)
                 .map(|s| s.to_string());
-            let country_name = country.country
+            let country_name = country
+                .country
                 .as_ref()
                 .and_then(|c| c.names.as_ref())
                 .and_then(|names| names.get("en"))
                 .map(|s| s.to_string());
-            let continent_code = country.continent
+            let continent_code = country
+                .continent
                 .as_ref()
                 .and_then(|c| c.code)
                 .map(|s| s.to_string());
@@ -121,9 +141,7 @@ impl GeoIpService {
 /// Check if an IP address is in a private range.
 fn is_private(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            v4.is_private() || v4.is_link_local() || v4.is_broadcast()
-        }
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_broadcast(),
         IpAddr::V6(v6) => {
             v6.is_loopback() || v6.is_unspecified()
                 // `Ipv6Addr::segments()` always returns exactly 8 elements ([u16; 8]).

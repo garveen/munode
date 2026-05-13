@@ -1,5 +1,5 @@
-use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::time::Instant;
 
 use tracing::{debug, info, warn};
@@ -81,8 +81,13 @@ impl TopologyManager {
     pub fn add_edge(&mut self, edge: TopologyEdge) -> Vec<&TopologyEdge> {
         let edge_id = edge.edge_id;
         self.edges.insert(edge_id, edge);
-        info!("Topology: added edge {} — {} edges total", edge_id, self.edges.len());
-        self.edges.values()
+        info!(
+            "Topology: added edge {} — {} edges total",
+            edge_id,
+            self.edges.len()
+        );
+        self.edges
+            .values()
             .filter(|e| e.edge_id != edge_id)
             .collect()
     }
@@ -91,14 +96,18 @@ impl TopologyManager {
     pub fn mark_join_complete(&mut self, edge_id: u32, connected_peers: Vec<u32>) {
         if let Some(edge) = self.edges.get_mut(&edge_id) {
             edge.connected_peers = connected_peers.into_iter().collect();
-            debug!("Topology: edge {} join complete, peers={:?}", edge_id, edge.connected_peers);
+            debug!(
+                "Topology: edge {} join complete, peers={:?}",
+                edge_id, edge.connected_peers
+            );
         }
     }
 
     /// Remove an Edge from the topology (disconnect).
     pub fn remove_edge(&mut self, edge_id: u32) -> Option<TopologyEdge> {
         // Clean up link quality entries
-        self.link_quality.retain(|(a, b), _| *a != edge_id && *b != edge_id);
+        self.link_quality
+            .retain(|(a, b), _| *a != edge_id && *b != edge_id);
         // Clean up disconnect reports
         self.disconnect_reports.remove(&edge_id);
         for reporters in self.disconnect_reports.values_mut() {
@@ -110,14 +119,19 @@ impl TopologyManager {
         }
         let removed = self.edges.remove(&edge_id);
         if removed.is_some() {
-            info!("Topology: removed edge {} — {} edges remain", edge_id, self.edges.len());
+            info!(
+                "Topology: removed edge {} — {} edges remain",
+                edge_id,
+                self.edges.len()
+            );
         }
         removed
     }
 
     /// Get all edges except the given one (peers list).
     pub fn get_peers_of(&self, exclude_id: u32) -> Vec<&TopologyEdge> {
-        self.edges.values()
+        self.edges
+            .values()
             .filter(|e| e.edge_id != exclude_id)
             .collect()
     }
@@ -134,7 +148,13 @@ impl TopologyManager {
 
     /// Report link quality from one edge to another.
     pub fn report_quality(&mut self, from: u32, to: u32, quality: LinkQuality) {
-        debug!("Topology: quality {}->{}: rtt={:.1}ms loss={:.1}%", from, to, quality.rtt_ms, quality.packet_loss * 100.0);
+        debug!(
+            "Topology: quality {}->{}: rtt={:.1}ms loss={:.1}%",
+            from,
+            to,
+            quality.rtt_ms,
+            quality.packet_loss * 100.0
+        );
         self.link_quality.insert((from, to), quality);
     }
 
@@ -148,7 +168,8 @@ impl TopologyManager {
 
         // Use edge quality data to build graph weights
         // Weight = rtt_ms + packet_loss * PACKET_LOSS_PENALTY_MS (penalise lossy links)
-        let mut dist: HashMap<u32, f64> = self.edges.keys().map(|&id| (id, f64::INFINITY)).collect();
+        let mut dist: HashMap<u32, f64> =
+            self.edges.keys().map(|&id| (id, f64::INFINITY)).collect();
         let mut prev: HashMap<u32, u32> = HashMap::new();
         // BinaryHeap<Reverse<(ordered_float_bits, edge_id)>>
         let mut heap: BinaryHeap<Reverse<(u64, u32)>> = BinaryHeap::new();
@@ -229,7 +250,9 @@ impl TopologyManager {
             while cur != root {
                 let next = parent.get(&cur).copied().unwrap_or(root);
                 parent.insert(cur, root);
-                if next == cur { break; } // Defensive: avoid infinite loop
+                if next == cur {
+                    break;
+                } // Defensive: avoid infinite loop
                 cur = next;
             }
             root
@@ -315,16 +338,25 @@ impl TopologyManager {
         reporters.insert(disconnected);
 
         // Check if the disconnected edge also reported losing the reporter
-        let other_side_confirmed = self.disconnect_reports
+        let other_side_confirmed = self
+            .disconnect_reports
             .get(&disconnected)
             .map(|s| s.contains(&reporter))
             .unwrap_or(false);
 
         if other_side_confirmed {
-            info!("Topology: both edges {} and {} confirmed disconnect", reporter, disconnected);
-            ArbitrationResult::BothReported { edge_id: disconnected }
+            info!(
+                "Topology: both edges {} and {} confirmed disconnect",
+                reporter, disconnected
+            );
+            ArbitrationResult::BothReported {
+                edge_id: disconnected,
+            }
         } else {
-            debug!("Topology: awaiting confirmation from edge {} about disconnect from {}", disconnected, reporter);
+            debug!(
+                "Topology: awaiting confirmation from edge {} about disconnect from {}",
+                disconnected, reporter
+            );
             ArbitrationResult::AwaitConfirmation
         }
     }
@@ -354,7 +386,10 @@ impl TopologyManager {
         if let Some(reporters) = self.disconnect_reports.get_mut(&b) {
             reporters.remove(&a);
         }
-        debug!("Topology: removed direct link between edges {} and {}", a, b);
+        debug!(
+            "Topology: removed direct link between edges {} and {}",
+            a, b
+        );
     }
 
     /// Total number of edges in the topology.
@@ -379,7 +414,11 @@ impl TopologyManager {
     ///
     /// Every target always gets at least a DirectTcp (type 3) and a HubTcp (type 2)
     /// candidate so Edges always have fallback options.
-    pub fn compute_route_table(&self, for_edge_id: u32, config: &HubVoiceRoutingConfig) -> Vec<(u32, u32, Vec<u32>, f32)> {
+    pub fn compute_route_table(
+        &self,
+        for_edge_id: u32,
+        config: &HubVoiceRoutingConfig,
+    ) -> Vec<(u32, u32, Vec<u32>, f32)> {
         let mut result = Vec::new();
         let all_edge_ids: Vec<u32> = self.edges.keys().cloned().collect();
 
@@ -403,14 +442,16 @@ impl TopologyManager {
                 }
                 2 => {
                     // Direct route
-                    let cost = self.link_quality.get(&(for_edge_id, target_id))
+                    let cost = self
+                        .link_quality
+                        .get(&(for_edge_id, target_id))
                         .map(|q| (q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS) as f32)
                         .unwrap_or(100.0);
                     result.push((target_id, 0, vec![], cost));
                 }
                 _ => {
                     // Relay chain: intermediate nodes are path[1..len-1]
-                    let relay_chain: Vec<u32> = path[1..path.len()-1].to_vec();
+                    let relay_chain: Vec<u32> = path[1..path.len() - 1].to_vec();
                     let hop_count = relay_chain.len();
                     if hop_count > config.max_relay_hops {
                         // Too many hops — fall back to Hub TCP.
@@ -427,7 +468,9 @@ impl TopologyManager {
             }
 
             // DirectTcp candidate: always add so the Edge can choose TCP when UDP is degraded.
-            let tcp_cost = self.link_quality.get(&(for_edge_id, target_id))
+            let tcp_cost = self
+                .link_quality
+                .get(&(for_edge_id, target_id))
                 .map(|q| (q.rtt_ms * 1.5 + config.edge_tcp_penalty_ms) as f32)
                 .unwrap_or(200.0);
             result.push((target_id, 3, vec![], tcp_cost));
@@ -443,12 +486,18 @@ impl TopologyManager {
     }
 
     /// Find the best forwarding path with quality thresholds applied.
-    fn find_best_path_with_config(&self, from: u32, to: u32, config: &HubVoiceRoutingConfig) -> Vec<u32> {
+    fn find_best_path_with_config(
+        &self,
+        from: u32,
+        to: u32,
+        config: &HubVoiceRoutingConfig,
+    ) -> Vec<u32> {
         if from == to {
             return vec![from];
         }
 
-        let mut dist: HashMap<u32, f64> = self.edges.keys().map(|&id| (id, f64::INFINITY)).collect();
+        let mut dist: HashMap<u32, f64> =
+            self.edges.keys().map(|&id| (id, f64::INFINITY)).collect();
         let mut prev: HashMap<u32, u32> = HashMap::new();
         let mut heap: BinaryHeap<Reverse<(u64, u32)>> = BinaryHeap::new();
 
@@ -471,11 +520,14 @@ impl TopologyManager {
                 };
 
                 // Skip failed links
-                if quality.packet_loss > config.failed_packet_loss || quality.rtt_ms > config.failed_rtt_ms {
+                if quality.packet_loss > config.failed_packet_loss
+                    || quality.rtt_ms > config.failed_rtt_ms
+                {
                     continue;
                 }
 
-                let link_weight = quality.rtt_ms + quality.packet_loss * PACKET_LOSS_PENALTY_MS
+                let link_weight = quality.rtt_ms
+                    + quality.packet_loss * PACKET_LOSS_PENALTY_MS
                     + config.relay_hop_penalty_ms;
                 let next_cost = cost + link_weight;
 
@@ -510,13 +562,16 @@ impl TopologyManager {
         for i in 0..path.len().saturating_sub(1) {
             let a = path[i];
             let b = path[i + 1];
-            let cost = self.link_quality.get(&(a, b))
+            let cost = self
+                .link_quality
+                .get(&(a, b))
                 .or_else(|| self.link_quality.get(&(b, a)))
-                .map(|q| q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS + config.relay_hop_penalty_ms)
+                .map(|q| {
+                    q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS + config.relay_hop_penalty_ms
+                })
                 .unwrap_or(100.0);
             total += cost;
         }
         total
     }
 }
-

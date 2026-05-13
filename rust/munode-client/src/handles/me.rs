@@ -59,11 +59,14 @@ impl<'a> Me<'a> {
     /// Move the local user to a different channel.
     pub async fn move_to(&self, channel_id: u32) -> Result<()> {
         let session = self.session_id_required()?;
-        self.client.send_proto(MessageType::UserState, &mumbleproto::UserState {
-            session: Some(session),
-            channel_id: Some(channel_id),
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::UserState,
+            &mumbleproto::UserState {
+                session: Some(session),
+                channel_id: Some(channel_id),
+                ..Default::default()
+            },
+        )
     }
 
     /// Set the local user's comment (UTF-8).
@@ -122,30 +125,36 @@ impl<'a> Me<'a> {
             .map(|d| d.as_micros() as u64)
             .unwrap_or(0);
         let stats = self.client.crypt_stats();
-        self.client.send_proto(MessageType::Ping, &mumbleproto::Ping {
-            timestamp: Some(ts),
-            good: Some(stats.good),
-            late: Some(stats.late),
-            lost: Some(stats.lost),
-            resync: Some(stats.resync),
-            udp_packets: Some(stats.udp_packets),
-            tcp_packets: Some(stats.tcp_packets),
-            udp_ping_avg: Some(stats.udp_ping_avg),
-            udp_ping_var: Some(stats.udp_ping_var),
-            tcp_ping_avg: Some(stats.tcp_ping_avg),
-            tcp_ping_var: Some(stats.tcp_ping_var),
-        })
+        self.client.send_proto(
+            MessageType::Ping,
+            &mumbleproto::Ping {
+                timestamp: Some(ts),
+                good: Some(stats.good),
+                late: Some(stats.late),
+                lost: Some(stats.lost),
+                resync: Some(stats.resync),
+                udp_packets: Some(stats.udp_packets),
+                tcp_packets: Some(stats.tcp_packets),
+                udp_ping_avg: Some(stats.udp_ping_avg),
+                udp_ping_var: Some(stats.udp_ping_var),
+                tcp_ping_avg: Some(stats.tcp_ping_avg),
+                tcp_ping_var: Some(stats.tcp_ping_var),
+            },
+        )
     }
 
     /// Send a text message into the current channel. Returns `Err` if the
     /// session is not yet known.
     pub async fn say(&self, text: impl Into<String>) -> Result<()> {
         let channel_id = self.session().map(|s| s.channel_id).unwrap_or(0);
-        self.client.send_proto(MessageType::TextMessage, &mumbleproto::TextMessage {
-            channel_id: vec![channel_id],
-            message: text.into(),
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::TextMessage,
+            &mumbleproto::TextMessage {
+                channel_id: vec![channel_id],
+                message: text.into(),
+                ..Default::default()
+            },
+        )
     }
 
     fn session_id_required(&self) -> Result<u32> {

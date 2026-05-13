@@ -1,17 +1,17 @@
 //! Login task: authentication sequence for new client connections.
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tracing::{debug, error, info, warn};
-use munode_common::config::EdgeConfig;
-use munode_protocol::hubedge;
-use munode_protocol::message_type::MessageType;
-use munode_protocol::mumbleproto;
+use super::helpers::{broadcast_codec_version, get_perm_cached};
 use crate::client::{ClientInfo, ClientSender, ClientState};
 use crate::handler::{self, LoginHandler, LoginInfo};
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
-use super::helpers::{broadcast_codec_version, get_perm_cached};
+use munode_common::config::EdgeConfig;
+use munode_protocol::hubedge;
+use munode_protocol::message_type::MessageType;
+use munode_protocol::mumbleproto;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 
 pub(super) struct LoginTaskResult {
     pub(super) session_id: u32,
@@ -113,27 +113,44 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     };
 
     // Authenticate via Hub (permit limits concurrent auth RPCs to avoid Hub overload)
-    let _auth_permit = edge_state.auth_semaphore
+    let _auth_permit = edge_state
+        .auth_semaphore
         .acquire()
         .await
         .expect("auth semaphore closed");
-    let auth_result = match hub_client.authenticate_user(
-        sid, &username, &password, tokens, Some(client_info),
-        preconnect_self_mute, preconnect_self_deaf,
-    ).await {
+    let auth_result = match hub_client
+        .authenticate_user(
+            sid,
+            &username,
+            &password,
+            tokens,
+            Some(client_info),
+            preconnect_self_mute,
+            preconnect_self_deaf,
+        )
+        .await
+    {
         Ok(result) => result,
         Err(e) => {
             error!("Authentication RPC failed: {}", e);
-            client_sender.send_raw(handler::encode_reject(
-                Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
-                "Authentication failed",
-            ).into()).await;
+            client_sender
+                .send_raw(
+                    handler::encode_reject(
+                        Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
+                        "Authentication failed",
+                    )
+                    .into(),
+                )
+                .await;
             return None;
         }
     };
 
     if !auth_result.success {
-        let reason = auth_result.reason.clone().unwrap_or_else(|| "Authentication denied".to_string());
+        let reason = auth_result
+            .reason
+            .clone()
+            .unwrap_or_else(|| "Authentication denied".to_string());
         info!("Authentication failed for {}: {}", username, reason);
         if auth_result.cert_required.unwrap_or(false) {
             let pd = mumbleproto::PermissionDenied {
@@ -141,21 +158,35 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
                 session: Some(sid),
                 ..Default::default()
             };
-            client_sender.send_message(MessageType::PermissionDenied, &pd).await;
+            client_sender
+                .send_message(MessageType::PermissionDenied, &pd)
+                .await;
         }
-        client_sender.send_raw(handler::encode_reject(
-            auth_result.reject_type.map(|t| t as i32)
-                .or_else(|| if auth_result.cert_required.unwrap_or(false) {
-                    Some(mumbleproto::reject::RejectType::NoCertificate as i32)
-                } else { None }),
-            &reason,
-        ).into()).await;
+        client_sender
+            .send_raw(
+                handler::encode_reject(
+                    auth_result.reject_type.map(|t| t as i32).or_else(|| {
+                        if auth_result.cert_required.unwrap_or(false) {
+                            Some(mumbleproto::reject::RejectType::NoCertificate as i32)
+                        } else {
+                            None
+                        }
+                    }),
+                    &reason,
+                )
+                .into(),
+            )
+            .await;
         return None;
     }
 
     // Authentication succeeded — build and register the client.
-    let channel_id = auth_result.channel_id.unwrap_or(config.server.default_channel);
-    let display_name = auth_result.display_name.clone()
+    let channel_id = auth_result
+        .channel_id
+        .unwrap_or(config.server.default_channel);
+    let display_name = auth_result
+        .display_name
+        .clone()
         .or(auth_result.username.clone())
         .unwrap_or(username.clone());
 
@@ -204,9 +235,15 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     };
 
     // Add client to manager first so permission queries can resolve user_id.
-    edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
+    edge_state
+        .client_manager
+        .add_client(client.clone(), client_sender.clone())
+        .await;
     // Register the close signal so the main loop can force-disconnect on kick/ban.
-    edge_state.client_manager.register_close_signal(sid, close_tx).await;
+    edge_state
+        .client_manager
+        .register_close_signal(sid, close_tx)
+        .await;
 
     // Helper: remove the client from the manager and return None.
     // free_session_id and notify_user_left are intentionally NOT called here;
@@ -223,10 +260,14 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     // (done AFTER add_client so hub_client.handle_permission_query gets the right user_id)
     if !auth_result.suppress.unwrap_or(false) {
         let can_speak = get_perm_cached(&hub_client, &edge_state, sid, channel_id, true).await
-            & munode_common::permission::SPEAK != 0;
+            & munode_common::permission::SPEAK
+            != 0;
         if !can_speak {
             client.suppress = true;
-            edge_state.client_manager.update_client(client.clone()).await;
+            edge_state
+                .client_manager
+                .update_client(client.clone())
+                .await;
         }
     }
 
@@ -238,12 +279,18 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
             let mut visible_set = std::collections::HashSet::new();
             for &ch_id in &ninja_channels {
                 let perms = get_perm_cached(&hub_client, &edge_state, sid, ch_id, false).await;
-                let can_see = perms & (munode_common::permission::ENTER | munode_common::permission::LISTEN) != 0;
+                let can_see = perms
+                    & (munode_common::permission::ENTER | munode_common::permission::LISTEN)
+                    != 0;
                 if can_see {
                     visible_set.insert(ch_id);
                 }
             }
-            edge_state.ninja_visible_to.write().await.insert(sid, visible_set);
+            edge_state
+                .ninja_visible_to
+                .write()
+                .await
+                .insert(sid, visible_set);
         }
     }
 
@@ -257,7 +304,10 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     let login_info = match login.execute_login(sid, &auth_result).await {
         Ok(info) => info,
         Err(e) => {
-            info!("Login sequence failed for {} (session={}): {}", peer_addr, sid, e);
+            info!(
+                "Login sequence failed for {} (session={}): {}",
+                peer_addr, sid, e
+            );
             fail!();
         }
     };
@@ -278,7 +328,9 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
             suppress: Some(true),
             ..Default::default()
         };
-        client_sender.send_message(MessageType::UserState, &suppress_msg).await;
+        client_sender
+            .send_message(MessageType::UserState, &suppress_msg)
+            .await;
     }
 
     // Broadcast new user join to all other Ready clients.
@@ -288,13 +340,21 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     // user itself) with the correct actor field.
     let user_join_msg = mumbleproto::UserState {
         session: Some(client.session),
-        user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
+        user_id: if client.user_id > 0 {
+            Some(client.user_id)
+        } else {
+            None
+        },
         name: Some(client.username.clone()),
         channel_id: Some(client.channel_id),
         mute: if client.mute { Some(true) } else { None },
         deaf: if client.deaf { Some(true) } else { None },
         suppress: if client.suppress { Some(true) } else { None },
-        priority_speaker: if client.priority_speaker { Some(true) } else { None },
+        priority_speaker: if client.priority_speaker {
+            Some(true)
+        } else {
+            None
+        },
         recording: if client.recording { Some(true) } else { None },
         hash: client.cert_hash.clone(),
         texture_hash: client.texture_hash.clone(),
@@ -308,40 +368,57 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
             let all_clients = edge_state.client_manager.get_all_clients().await;
             let visible_cache = edge_state.ninja_visible_to.read().await;
             for observer in &all_clients {
-                if observer.session == sid { continue; }
+                if observer.session == sid {
+                    continue;
+                }
                 let can_see = visible_cache
                     .get(&observer.session)
                     .map(|set| set.contains(&client.channel_id))
                     .unwrap_or(false);
                 if can_see {
-                    edge_state.client_manager.send_to(observer.session, MessageType::UserState, &user_join_msg).await;
+                    edge_state
+                        .client_manager
+                        .send_to(observer.session, MessageType::UserState, &user_join_msg)
+                        .await;
                 }
             }
         } else {
-            edge_state.client_manager.broadcast(
-                MessageType::UserState,
-                &user_join_msg,
-                Some(sid),
-            ).await;
+            edge_state
+                .client_manager
+                .broadcast(MessageType::UserState, &user_join_msg, Some(sid))
+                .await;
         }
     }
     // Invalidate BroadcastCaches: a new user joined, routing targets changed.
-    edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
+    edge_state
+        .topology_version
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
 
     // If suppress was determined by the local ACL permission check (not from Hub auth response),
     // notify Hub and peer Edges about the correct suppress value.  Without this, the Hub session
     // would keep suppress=false (the auth-time value) and other edges would show this user as
     // unsuppressed even though they cannot speak.
     if client.suppress && !auth_result.suppress.unwrap_or(false) {
-        if let Err(e) = hub_client.rpc_user_state_changed(
-            sid,
-            None, None, None, None,
-            Some(true), // suppress
-            None, None,
-            vec![], vec![],
-            None, // no actor for server-side suppress
-        ).await {
-            warn!("Failed to report suppress=true to Hub for session {}: {:#}", sid, e);
+        if let Err(e) = hub_client
+            .rpc_user_state_changed(
+                sid,
+                None,
+                None,
+                None,
+                None,
+                Some(true), // suppress
+                None,
+                None,
+                vec![],
+                vec![],
+                None, // no actor for server-side suppress
+            )
+            .await
+        {
+            warn!(
+                "Failed to report suppress=true to Hub for session {}: {:#}",
+                sid, e
+            );
         }
     }
 
@@ -366,6 +443,15 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         Vec::new()
     };
 
-    info!("Client {} login task complete, outer loop will finalise (session={})", peer_addr, sid);
-    Some(LoginTaskResult { session_id: sid, login_info, client_sender, config, saved_listeners })
+    info!(
+        "Client {} login task complete, outer loop will finalise (session={})",
+        peer_addr, sid
+    );
+    Some(LoginTaskResult {
+        session_id: sid,
+        login_info,
+        client_sender,
+        config,
+        saved_listeners,
+    })
 }

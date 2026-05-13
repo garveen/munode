@@ -5,7 +5,9 @@ use std::time::Duration;
 use anyhow::Result;
 use munode_client::ClientEvent;
 
-use crate::harness::{cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig, create_clients};
+use crate::harness::{
+    ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms, standard_env,
+};
 
 // ── Plugin data basics ────────────────────────────────────────────────────
 
@@ -15,7 +17,10 @@ async fn test_send_plugin_data_does_not_crash() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     let client = &clients[0];
 
-    client.server().broadcast_plugin_data("test.plugin.v1", b"hello", &[]).await?;
+    client
+        .server()
+        .broadcast_plugin_data("test.plugin.v1", b"hello", &[])
+        .await?;
     sleep_ms(200).await;
 
     assert!(client.is_connected());
@@ -26,24 +31,26 @@ async fn test_send_plugin_data_does_not_crash() -> Result<()> {
 #[tokio::test]
 async fn test_plugin_data_received_by_same_edge_user() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
     let sender_session = sender.session_id().unwrap();
     let mut rx = receiver.subscribe();
 
-    sender.server().broadcast_plugin_data("org.munode.test", b"test payload", &[]).await?;
+    sender
+        .server()
+        .broadcast_plugin_data("org.munode.test", b"test payload", &[])
+        .await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::PluginData { sender, plugin_id: _, data: _ })
-                    if sender == sender_session =>
-                {
+                Ok(ClientEvent::PluginData {
+                    sender,
+                    plugin_id: _,
+                    data: _,
+                }) if sender == sender_session => {
                     break true;
                 }
                 Ok(_) => continue,
@@ -67,10 +74,16 @@ async fn test_plugin_data_with_empty_payload() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     let client = &clients[0];
 
-    client.server().broadcast_plugin_data("test.plugin", b"", &[]).await?;
+    client
+        .server()
+        .broadcast_plugin_data("test.plugin", b"", &[])
+        .await?;
     sleep_ms(200).await;
 
-    assert!(client.is_connected(), "Empty plugin data should not disconnect client");
+    assert!(
+        client.is_connected(),
+        "Empty plugin data should not disconnect client"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -82,10 +95,16 @@ async fn test_plugin_data_with_binary_payload() -> Result<()> {
     let client = &clients[0];
 
     let binary_data: Vec<u8> = (0u8..=255u8).collect();
-    client.server().broadcast_plugin_data("test.binary.plugin", &binary_data, &[]).await?;
+    client
+        .server()
+        .broadcast_plugin_data("test.binary.plugin", &binary_data, &[])
+        .await?;
     sleep_ms(200).await;
 
-    assert!(client.is_connected(), "Binary plugin data should be accepted");
+    assert!(
+        client.is_connected(),
+        "Binary plugin data should be accepted"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -93,15 +112,15 @@ async fn test_plugin_data_with_binary_payload() -> Result<()> {
 #[tokio::test]
 async fn test_plugin_data_cross_edge() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 2),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 2)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, _receiver) = (&clients[0], &clients[1]);
 
     // Cross-edge plugin data: just verify sender isn't crashed
-    sender.server().broadcast_plugin_data("cross.edge.plugin", b"data across edges", &[]).await?;
+    sender
+        .server()
+        .broadcast_plugin_data("cross.edge.plugin", b"data across edges", &[])
+        .await?;
     sleep_ms(300).await;
 
     assert!(sender.is_connected(), "Sender should remain connected");
@@ -123,7 +142,11 @@ async fn test_register_context_action() -> Result<()> {
 
     client
         .server()
-        .register_context_action("test_action", "Test Action", CTX_SERVER | CTX_CHANNEL | CTX_USER)
+        .register_context_action(
+            "test_action",
+            "Test Action",
+            CTX_SERVER | CTX_CHANNEL | CTX_USER,
+        )
         .await?;
     sleep_ms(200).await;
 
@@ -144,7 +167,10 @@ async fn test_register_multiple_context_actions() -> Result<()> {
         ("action3", "Action 3", CTX_USER),
     ];
     for (action, text, ctx) in actions {
-        client.server().register_context_action(action, text, *ctx).await?;
+        client
+            .server()
+            .register_context_action(action, text, *ctx)
+            .await?;
         sleep_ms(50).await;
     }
     sleep_ms(150).await;
@@ -165,7 +191,10 @@ async fn test_unregister_context_action() -> Result<()> {
         .register_context_action("temp_action", "Temp", CTX_SERVER)
         .await?;
     sleep_ms(100).await;
-    client.server().unregister_context_action("temp_action").await?;
+    client
+        .server()
+        .unregister_context_action("temp_action")
+        .await?;
     sleep_ms(100).await;
 
     assert!(client.is_connected());

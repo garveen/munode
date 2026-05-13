@@ -12,16 +12,16 @@
 //! | [`Voice`]   | Voice send / whisper target configuration |
 //! | [`Acl`]     | ACL editor for a single channel          |
 
-pub mod me;
-pub mod user;
-pub mod channel;
-pub mod server;
-pub mod voice;
 pub mod acl;
+pub mod channel;
+pub mod me;
+pub mod server;
+pub mod user;
+pub mod voice;
 
-pub use me::Me;
-pub use user::UserRef;
-pub use channel::ChannelRef;
-pub use server::Server;
-pub use voice::Voice;
 pub use acl::Acl;
+pub use channel::ChannelRef;
+pub use me::Me;
+pub use server::Server;
+pub use user::UserRef;
+pub use voice::Voice;

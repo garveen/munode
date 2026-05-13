@@ -18,13 +18,13 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
+    Router,
     extract::{Path, State},
-    http::{Method, Request, StatusCode},
     http::header,
+    http::{Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::{delete, get},
-    Router,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -459,12 +459,16 @@ async fn handle_clients(State(state): State<AppState>) -> Json<HubClientListResp
 fn entry_to_info(e: &crate::server::VoiceTargetEntry) -> VoiceTargetInfo {
     let config = e.config.as_ref().map(|c| VoiceTargetConfigInfo {
         sessions: c.sessions.iter().map(|s| s.session).collect(),
-        channels: c.channels.iter().map(|ch| VoiceTargetChannelInfo {
-            channel_id: ch.channel_id,
-            children: ch.children.unwrap_or(false),
-            links: ch.links.unwrap_or(false),
-            group: ch.group.clone(),
-        }).collect(),
+        channels: c
+            .channels
+            .iter()
+            .map(|ch| VoiceTargetChannelInfo {
+                channel_id: ch.channel_id,
+                children: ch.children.unwrap_or(false),
+                links: ch.links.unwrap_or(false),
+                group: ch.group.clone(),
+            })
+            .collect(),
     });
     VoiceTargetInfo {
         edge_id: e.edge_id,
@@ -558,10 +562,7 @@ async fn handle_bans(State(state): State<AppState>) -> impl IntoResponse {
         .into_response()
 }
 
-async fn handle_unban(
-    State(state): State<AppState>,
-    Path(ban_id): Path<i64>,
-) -> impl IntoResponse {
+async fn handle_unban(State(state): State<AppState>, Path(ban_id): Path<i64>) -> impl IntoResponse {
     match state.ban_store.delete_by_id(ban_id).await {
         Ok(true) => {
             info!("Ban {} removed via Web API", ban_id);
@@ -733,7 +734,9 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
             let safe_name = prometheus_escape(&e.name);
             buf.push_str(&format!(
                 "munode_hub_edge_online{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
-                e.id, safe_name, if e.is_online { 1 } else { 0 }
+                e.id,
+                safe_name,
+                if e.is_online { 1 } else { 0 }
             ));
         }
 
@@ -753,7 +756,10 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
 
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         buf,
     )
         .into_response()
@@ -774,9 +780,15 @@ pub fn build_router(state: Arc<HubState>) -> Router {
         .route("/api/bans", get(handle_bans))
         .route("/api/bans/:id", delete(handle_unban))
         .route("/api/voice_targets", get(handle_voice_targets))
-        .route("/api/voice_targets/session/:id", get(handle_voice_targets_by_session))
+        .route(
+            "/api/voice_targets/session/:id",
+            get(handle_voice_targets_by_session),
+        )
         .route("/metrics", get(handle_metrics))
-        .layer(middleware::from_fn_with_state(state.clone(), api_key_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            api_key_middleware,
+        ))
         .with_state(state)
 }
 
@@ -798,4 +810,3 @@ pub async fn run_web_api(host: &str, port: u16, state: Arc<HubState>) -> anyhow:
         .await
         .map_err(|e| anyhow::anyhow!("Web API server error: {}", e))
 }
-

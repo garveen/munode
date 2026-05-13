@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
-use tokio::sync::{broadcast, RwLock};
+use tokio::net::UdpSocket;
+use tokio::sync::{RwLock, broadcast};
 
 use munode_protocol::hubedge::ServerLimitsConfig;
 
@@ -11,11 +12,7 @@ use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
 use crate::edge_crypto::EdgeCrypto;
 use crate::peer_registry::{PeerRegistry, PeerVoiceTcpPool};
-use crate::voice_target::{
-    SessionWhisperRouteCache,
-    VoiceTargetConfig,
-    WhisperRouteCacheEntry,
-};
+use crate::voice_target::{SessionWhisperRouteCache, VoiceTargetConfig, WhisperRouteCacheEntry};
 
 /// Delta of boolean state fields for a remote user state change.
 /// Only fields that actually changed carry `Some(value)`; unchanged fields are `None`.
@@ -52,7 +49,12 @@ pub enum EdgeEvent {
     /// All connected clients should be disconnected and wait for Hub to recover.
     HubUnreachable,
     /// A remote user joined (from another Edge, synced via Hub).
-    RemoteUserJoined { session_id: u32, username: String, channel_id: u32, is_ninja: bool },
+    RemoteUserJoined {
+        session_id: u32,
+        username: String,
+        channel_id: u32,
+        is_ninja: bool,
+    },
     /// A remote user left.
     RemoteUserLeft { session_id: u32, channel_id: u32 },
     /// A remote user's state changed (mute, deaf, etc.).
@@ -64,14 +66,23 @@ pub enum EdgeEvent {
         actor_session: Option<u32>,
     },
     /// A remote user moved channels.
-    RemoteUserMoved { session_id: u32, from_channel_id: u32, channel_id: u32, actor_session: u32 },
+    RemoteUserMoved {
+        session_id: u32,
+        from_channel_id: u32,
+        channel_id: u32,
+        actor_session: u32,
+    },
     /// A channel was created.
     ChannelCreated { channel_id: u32 },
     /// A channel was removed.
     ChannelRemoved { channel_id: u32 },
     /// A channel was updated. `links_add` / `links_remove` carry the link delta
     /// so that connected clients can be notified via ChannelState messages.
-    ChannelUpdated { channel_id: u32, links_add: Vec<u32>, links_remove: Vec<u32> },
+    ChannelUpdated {
+        channel_id: u32,
+        links_add: Vec<u32>,
+        links_remove: Vec<u32>,
+    },
     /// A text message forwarded from another edge via Hub.
     TextMessageForward {
         actor: u32,
@@ -88,13 +99,14 @@ pub enum EdgeEvent {
         target_sessions: Vec<u32>,
     },
     /// Hub requested this Edge to shut down (cluster partition handling).
-    ShutdownRequested {
-        reason: String,
-    },
+    ShutdownRequested { reason: String },
     /// Hub ACL was updated for a channel; Edges should re-evaluate can_enter for all clients.
     /// `is_enter_restricted` is pre-computed by the Hub at ACL-save time and embedded in the
     /// notification so that Edges never need a separate RPC just for this channel-level flag.
-    AclUpdated { channel_id: u32, is_enter_restricted: bool },
+    AclUpdated {
+        channel_id: u32,
+        is_enter_restricted: bool,
+    },
     /// All TCP voice connections to a peer Edge have been down for an extended period.
     /// The event listener should call `edge.reportPeerDisconnect` so that the Hub can
     /// run partition-arbitration logic and — if both sides report — broadcast `hub.peerLeft`
@@ -107,7 +119,10 @@ pub const DEFAULT_MAX_TTL: u32 = 4;
 
 /// Transport layer for a hop in a relay chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HopTransport { Udp, Tcp }
+pub enum HopTransport {
+    Udp,
+    Tcp,
+}
 
 /// Route decision for reaching a target Edge.
 #[derive(Debug, Clone, PartialEq)]
@@ -279,6 +294,12 @@ pub struct EdgeState {
     /// indicates that bidirectional UDP is no longer working) or on
     /// disconnect.  `UdpServer` clones this Arc on construction.
     pub udp_session_to_addr: Arc<dashmap::DashMap<u32, std::net::SocketAddr>>,
+    /// Shared client-facing UDP socket used for local voice delivery.
+    ///
+    /// Populated by `UdpServer::new` once the client UDP socket has been bound,
+    /// so hot paths outside `udp.rs` can still honor the same UDP-first send
+    /// semantics when forwarding voice to local clients.
+    pub client_udp_socket: ArcSwap<Option<Arc<UdpSocket>>>,
 }
 
 impl EdgeState {
@@ -324,6 +345,7 @@ impl EdgeState {
             topology_version: AtomicU64::new(0),
             whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
+            client_udp_socket: ArcSwap::new(Arc::new(None)),
         })
     }
 
@@ -372,6 +394,7 @@ impl EdgeState {
             topology_version: AtomicU64::new(0),
             whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
+            client_udp_socket: ArcSwap::new(Arc::new(None)),
         })
     }
 
@@ -389,9 +412,7 @@ impl EdgeState {
         peer_voice_tcp_pool_size: usize,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(4096);
-        let edge_crypto = hmac_secret
-            .and_then(EdgeCrypto::from_secret)
-            .map(Arc::new);
+        let edge_crypto = hmac_secret.and_then(EdgeCrypto::from_secret).map(Arc::new);
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -428,6 +449,7 @@ impl EdgeState {
             topology_version: AtomicU64::new(0),
             whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
+            client_udp_socket: ArcSwap::new(Arc::new(None)),
         })
     }
 
@@ -436,8 +458,10 @@ impl EdgeState {
     /// Fields that require a full restart (ports, TLS, Hub address) are ignored.
     /// Fields that can be applied immediately are updated atomically.
     pub fn apply_hot_config(&self, config: &munode_common::config::EdgeConfig) {
-        self.allow_ping.store(config.server.allow_ping, Ordering::Relaxed);
-        self.rolling_stats_window.store(config.server.rolling_stats_window, Ordering::Relaxed);
+        self.allow_ping
+            .store(config.server.allow_ping, Ordering::Relaxed);
+        self.rolling_stats_window
+            .store(config.server.rolling_stats_window, Ordering::Relaxed);
     }
 
     /// Get the current edge ID (0 = not yet registered with Hub).
@@ -454,6 +478,11 @@ impl EdgeState {
     /// Set the edge ID after Hub registration.
     pub fn set_edge_id(&self, id: u32) {
         self.edge_id.store(id, Ordering::Release);
+    }
+
+    /// Publish the client-facing UDP socket for shared local voice delivery.
+    pub fn set_client_udp_socket(&self, socket: Arc<UdpSocket>) {
+        self.client_udp_socket.store(Arc::new(Some(socket)));
     }
 
     /// Get a receiver for edge events.
@@ -507,7 +536,10 @@ impl EdgeState {
 
     /// Remove all cached whisper routes for a sender.
     pub fn clear_cached_whisper_session(&self, sender_session: u32) {
-        self.whisper_route_cache.write().unwrap().remove(&sender_session);
+        self.whisper_route_cache
+            .write()
+            .unwrap()
+            .remove(&sender_session);
     }
 
     /// Remove all cached whisper routes.
@@ -535,7 +567,10 @@ impl EdgeState {
         old_links: &[u32],
         new_links: &[u32],
     ) {
-        crate::voice_target::recompute_link_affected_voice_targets(self, channel_id, old_links, new_links).await;
+        crate::voice_target::recompute_link_affected_voice_targets(
+            self, channel_id, old_links, new_links,
+        )
+        .await;
     }
 
     /// Allocate a session ID from this Edge's local pool.
@@ -561,7 +596,10 @@ impl EdgeState {
         // Scan from the current counter position to avoid reusing recently freed IDs.
         // The counter wraps around the pool; a full scan is still bounded at POOL_SIZE.
         for _ in 0..POOL_SIZE {
-            let offset = self.session_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % POOL_SIZE;
+            let offset = self
+                .session_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                % POOL_SIZE;
             let id = base + offset;
             if !used.contains(&id) {
                 used.insert(id);
@@ -591,10 +629,7 @@ mod tests {
     use crate::client::ClientManager;
     use crate::hot_slot::get_hot_slot;
     use crate::voice_target::{
-        VoiceTargetChannelConfig,
-        VoiceTargetConfig,
-        WhisperRouteCacheEntry,
-        build_hot_vt_map,
+        VoiceTargetChannelConfig, VoiceTargetConfig, WhisperRouteCacheEntry, build_hot_vt_map,
     };
     use smallvec::smallvec;
     use std::collections::HashMap;
@@ -800,35 +835,45 @@ mod tests {
 
         let affected_before = {
             let guard = get_hot_slot(affected_session).voice_targets.load();
-            (**guard).as_ref().expect("affected hot map missing").clone()
+            (**guard)
+                .as_ref()
+                .expect("affected hot map missing")
+                .clone()
         };
         let untouched_before = {
             let guard = get_hot_slot(untouched_session).voice_targets.load();
-            (**guard).as_ref().expect("untouched hot map missing").clone()
+            (**guard)
+                .as_ref()
+                .expect("untouched hot map missing")
+                .clone()
         };
 
-        channel_manager.upsert_channel(ChannelData {
-            id: 1,
-            name: "one".into(),
-            parent_id: None,
-            description: None,
-            position: 0,
-            max_users: 0,
-            temporary: false,
-            inherit_acl: true,
-            links: vec![],
-        }).await;
-        channel_manager.upsert_channel(ChannelData {
-            id: 2,
-            name: "two".into(),
-            parent_id: None,
-            description: None,
-            position: 0,
-            max_users: 0,
-            temporary: false,
-            inherit_acl: true,
-            links: vec![],
-        }).await;
+        channel_manager
+            .upsert_channel(ChannelData {
+                id: 1,
+                name: "one".into(),
+                parent_id: None,
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            })
+            .await;
+        channel_manager
+            .upsert_channel(ChannelData {
+                id: 2,
+                name: "two".into(),
+                parent_id: None,
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            })
+            .await;
 
         state
             .recompute_vt_channels_for_link_change(1, &[2], &[])
@@ -836,11 +881,17 @@ mod tests {
 
         let affected_after = {
             let guard = get_hot_slot(affected_session).voice_targets.load();
-            (**guard).as_ref().expect("affected hot map missing after recompute").clone()
+            (**guard)
+                .as_ref()
+                .expect("affected hot map missing after recompute")
+                .clone()
         };
         let untouched_after = {
             let guard = get_hot_slot(untouched_session).voice_targets.load();
-            (**guard).as_ref().expect("untouched hot map missing after recompute").clone()
+            (**guard)
+                .as_ref()
+                .expect("untouched hot map missing after recompute")
+                .clone()
         };
 
         let cache = state.voice_targets.read().await;
@@ -853,8 +904,12 @@ mod tests {
         assert!(!Arc::ptr_eq(&affected_before, &affected_after));
         assert!(Arc::ptr_eq(&untouched_before, &untouched_after));
 
-        get_hot_slot(affected_session).voice_targets.store(Arc::new(None));
-        get_hot_slot(untouched_session).voice_targets.store(Arc::new(None));
+        get_hot_slot(affected_session)
+            .voice_targets
+            .store(Arc::new(None));
+        get_hot_slot(untouched_session)
+            .voice_targets
+            .store(Arc::new(None));
     }
 
     #[tokio::test]
@@ -957,7 +1012,9 @@ mod tests {
         let hot_map = (**hot_guard)
             .as_ref()
             .expect("hot voice target map missing after recompute");
-        let hot_target = hot_map.get(&1).expect("hot voice target missing after recompute");
+        let hot_target = hot_map
+            .get(&1)
+            .expect("hot voice target missing after recompute");
         assert_eq!(hot_target.resolved_channels.len(), 3);
         assert!(hot_target.resolved_channels.contains_key(&1));
         assert!(hot_target.resolved_channels.contains_key(&2));
@@ -966,4 +1023,3 @@ mod tests {
         get_hot_slot(session_id).voice_targets.store(Arc::new(None));
     }
 }
-

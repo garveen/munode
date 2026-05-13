@@ -7,7 +7,7 @@ use anyhow::Result;
 use munode_client::{ClientEvent, ConnectOptions, MumbleClient};
 use serde_json::json;
 
-use crate::harness::{sleep_ms, TestEnvBuilder, TestEnvironment};
+use crate::harness::{TestEnvBuilder, TestEnvironment, sleep_ms};
 use crate::users::find_user;
 
 async fn env_with_suggest(suggest: serde_json::Value) -> Result<TestEnvironment> {
@@ -107,7 +107,10 @@ async fn test_no_suggest_config_when_unconfigured() -> Result<()> {
 
     // Drain the receiver looking for SuggestConfig — must not appear.
     let got_suggest = await_suggest(&mut rx, Duration::from_millis(800)).await;
-    assert!(got_suggest.is_none(), "should NOT receive SuggestConfig when unconfigured");
+    assert!(
+        got_suggest.is_none(),
+        "should NOT receive SuggestConfig when unconfigured"
+    );
 
     let _ = client.disconnect().await;
     Ok(())

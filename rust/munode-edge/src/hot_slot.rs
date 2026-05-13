@@ -17,14 +17,14 @@
 //! * `active` is set **last** when registering (Release) and cleared **first** when
 //!   clearing (Release), so readers see either a fully-populated slot or an empty one.
 
-use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-    Arc, Mutex,
-};
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use smallvec::SmallVec;
+use std::collections::HashMap;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+};
 use tokio::sync::mpsc;
 
 use crate::bandwidth::BandwidthRecord;
@@ -83,28 +83,28 @@ pub struct BroadcastCache {
 pub struct HotSlot {
     /// Whether this slot is currently occupied by an active session.
     /// Set **last** (Release) on `register`, cleared **first** (Release) on `clear`.
-    pub active:     AtomicBool,
+    pub active: AtomicBool,
     /// Session ID occupying this slot.  Used to detect stale data caused by bugs.
     pub session_id: AtomicU32,
     /// Server-side deaf flag.
-    pub deaf:       AtomicBool,
+    pub deaf: AtomicBool,
     /// Self-deaf flag (set by the client).
-    pub self_deaf:  AtomicBool,
+    pub self_deaf: AtomicBool,
     /// Suppress flag: the server has suppressed this user in their current channel.
-    pub suppress:   AtomicBool,
+    pub suppress: AtomicBool,
     /// Server-side mute flag.
-    pub mute:       AtomicBool,
+    pub mute: AtomicBool,
     /// Self-mute flag (set by the client).
-    pub self_mute:  AtomicBool,
+    pub self_mute: AtomicBool,
     /// Current channel ID.
     pub channel_id: AtomicU32,
     /// OCB2-AES128 crypto state for UDP voice delivery.  `None` until CryptSetup.
     pub crypt_state: ArcSwap<Option<Arc<Mutex<CryptState>>>>,
     /// TCP sender for delivering frames to this client (UDPTunnel and control).
-    pub sender:     ArcSwap<Option<mpsc::Sender<Bytes>>>,
+    pub sender: ArcSwap<Option<mpsc::Sender<Bytes>>>,
     /// Per-session group membership for lock-free group-filter whisper routing.
     /// Updated whenever the Hub sends a revised session list (same cadence as deaf/suppress).
-    pub groups:     ArcSwap<Vec<String>>,
+    pub groups: ArcSwap<Vec<String>>,
     /// Positional-audio plugin context mirrored for lock-free broadcast filtering.
     pub plugin_context: ArcSwap<Vec<u8>>,
     /// Per-session VoiceTarget map for lock-free whisper routing.
@@ -123,19 +123,19 @@ pub struct HotSlot {
 impl HotSlot {
     fn new() -> Self {
         HotSlot {
-            active:        AtomicBool::new(false),
-            session_id:    AtomicU32::new(0),
-            deaf:          AtomicBool::new(false),
-            self_deaf:     AtomicBool::new(false),
-            suppress:      AtomicBool::new(false),
-            mute:          AtomicBool::new(false),
-            self_mute:     AtomicBool::new(false),
-            channel_id:    AtomicU32::new(0),
-            crypt_state:   ArcSwap::new(Arc::new(None)),
-            sender:        ArcSwap::new(Arc::new(None)),
-            groups:        ArcSwap::new(Arc::new(Vec::new())),
+            active: AtomicBool::new(false),
+            session_id: AtomicU32::new(0),
+            deaf: AtomicBool::new(false),
+            self_deaf: AtomicBool::new(false),
+            suppress: AtomicBool::new(false),
+            mute: AtomicBool::new(false),
+            self_mute: AtomicBool::new(false),
+            channel_id: AtomicU32::new(0),
+            crypt_state: ArcSwap::new(Arc::new(None)),
+            sender: ArcSwap::new(Arc::new(None)),
+            groups: ArcSwap::new(Arc::new(Vec::new())),
             plugin_context: ArcSwap::new(Arc::new(Vec::new())),
-            bandwidth:     ArcSwap::new(Arc::new(None)),
+            bandwidth: ArcSwap::new(Arc::new(None)),
             voice_targets: ArcSwap::new(Arc::new(None)),
             broadcast_cache: ArcSwap::new(Arc::new(None)),
             broadcast_cache_version: AtomicU64::new(0),
@@ -240,4 +240,3 @@ pub fn get_hot_slot(session_id: u32) -> &'static HotSlot {
     let idx = (session_id as usize) % HOT_SLOT_COUNT;
     &hot_slots()[idx]
 }
-

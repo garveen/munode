@@ -12,7 +12,7 @@ use munode_client::{ClientEvent, ConnectOptions, MumbleClient};
 use munode_protocol::mumbleproto;
 use serde_json::json;
 
-use crate::harness::{sleep_ms, TestEnvBuilder};
+use crate::harness::{TestEnvBuilder, sleep_ms};
 
 const NINJA_CHANNEL_ID: u32 = 1;
 
@@ -109,10 +109,7 @@ async fn test_ninja_enabled_initial_sync_hides_ninja_users() -> Result<()> {
     // user1 (non-privileged) connects — must NOT see ninja_user1
     let normal = connect(env.edge1(), "user1", "password1").await?;
     sleep_ms(800).await;
-    let visible = normal
-        .users()
-        .iter()
-        .any(|u| u.session == ninja_session);
+    let visible = normal.users().iter().any(|u| u.session == ninja_session);
     assert!(
         !visible,
         "Unprivileged user must not see ninja-channel user in initial sync"
@@ -138,7 +135,10 @@ async fn test_ninja_enabled_move_into_emits_user_remove() -> Result<()> {
 
     let ninja_session = ninja.session_id().expect("ninja session");
     let visible_before = normal.users().iter().any(|u| u.session == ninja_session);
-    assert!(visible_before, "ninja_user1 should be visible while in root");
+    assert!(
+        visible_before,
+        "ninja_user1 should be visible while in root"
+    );
 
     let mut rx = normal.subscribe();
     ninja.channel(NINJA_CHANNEL_ID).join().await?;
@@ -146,7 +146,9 @@ async fn test_ninja_enabled_move_into_emits_user_remove() -> Result<()> {
     let got_remove = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::UserLeft { session, .. }) if session == ninja_session => break true,
+                Ok(ClientEvent::UserLeft { session, .. }) if session == ninja_session => {
+                    break true;
+                }
                 Ok(_) => continue,
                 Err(_) => break false,
             }
@@ -155,7 +157,10 @@ async fn test_ninja_enabled_move_into_emits_user_remove() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(got_remove, "Unprivileged observer should receive UserLeft on ninja entry");
+    assert!(
+        got_remove,
+        "Unprivileged observer should receive UserLeft on ninja entry"
+    );
     let _ = ninja.disconnect().await;
     let _ = normal.disconnect().await;
     Ok(())
@@ -174,7 +179,10 @@ async fn test_ninja_enabled_move_out_emits_user_state() -> Result<()> {
     let normal = connect(env.edge1(), "user1", "password1").await?;
     sleep_ms(700).await;
     let visible_at_login = normal.users().iter().any(|u| u.session == ninja_session);
-    assert!(!visible_at_login, "ninja_user1 should be invisible at login");
+    assert!(
+        !visible_at_login,
+        "ninja_user1 should be invisible at login"
+    );
 
     let mut rx = normal.subscribe();
     ninja.channel(0).join().await?;
@@ -196,7 +204,10 @@ async fn test_ninja_enabled_move_out_emits_user_state() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(appeared, "Unprivileged observer should see user reappear in root");
+    assert!(
+        appeared,
+        "Unprivileged observer should see user reappear in root"
+    );
     let _ = ninja.disconnect().await;
     let _ = normal.disconnect().await;
     Ok(())
@@ -302,8 +313,14 @@ async fn test_ninja_disabled_move_into_broadcasts_user_state() -> Result<()> {
     })
     .await;
 
-    assert!(got_move, "With ninja disabled, observer should receive UserState");
-    assert!(!got_remove, "With ninja disabled, observer should NOT see UserLeft");
+    assert!(
+        got_move,
+        "With ninja disabled, observer should receive UserState"
+    );
+    assert!(
+        !got_remove,
+        "With ninja disabled, observer should NOT see UserLeft"
+    );
     let _ = ninja.disconnect().await;
     let _ = normal.disconnect().await;
     Ok(())

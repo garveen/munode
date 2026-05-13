@@ -72,42 +72,54 @@ impl<'a> UserRef<'a> {
     /// Kick the user from the server.
     pub async fn kick(&self, reason: Option<&str>) -> Result<()> {
         let actor = self.client.session_id();
-        self.client.send_proto(MessageType::UserRemove, &mumbleproto::UserRemove {
-            session: self.session,
-            actor,
-            reason: reason.map(str::to_owned),
-            ban: Some(false),
-        })
+        self.client.send_proto(
+            MessageType::UserRemove,
+            &mumbleproto::UserRemove {
+                session: self.session,
+                actor,
+                reason: reason.map(str::to_owned),
+                ban: Some(false),
+            },
+        )
     }
 
     /// Kick + ban the user (Mumble protocol semantics: `UserRemove { ban: true }`).
     pub async fn ban(&self, reason: Option<&str>) -> Result<()> {
         let actor = self.client.session_id();
-        self.client.send_proto(MessageType::UserRemove, &mumbleproto::UserRemove {
-            session: self.session,
-            actor,
-            reason: reason.map(str::to_owned),
-            ban: Some(true),
-        })
+        self.client.send_proto(
+            MessageType::UserRemove,
+            &mumbleproto::UserRemove {
+                session: self.session,
+                actor,
+                reason: reason.map(str::to_owned),
+                ban: Some(true),
+            },
+        )
     }
 
     /// Send a private text message to this user.
     pub async fn send_text(&self, text: impl Into<String>) -> Result<()> {
-        self.client.send_proto(MessageType::TextMessage, &mumbleproto::TextMessage {
-            session: vec![self.session],
-            message: text.into(),
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::TextMessage,
+            &mumbleproto::TextMessage {
+                session: vec![self.session],
+                message: text.into(),
+                ..Default::default()
+            },
+        )
     }
 
     /// Request `UserStats` for this user. The server's response will arrive
     /// as `ClientEvent::UserStats`.
     pub async fn request_stats(&self, stats_only: bool) -> Result<()> {
-        self.client.send_proto(MessageType::UserStats, &mumbleproto::UserStats {
-            session: Some(self.session),
-            stats_only: Some(stats_only),
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::UserStats,
+            &mumbleproto::UserStats {
+                session: Some(self.session),
+                stats_only: Some(stats_only),
+                ..Default::default()
+            },
+        )
     }
 
     /// Block until a `UserStats` event for this user arrives or `wait` elapses.
@@ -130,18 +142,24 @@ impl<'a> UserRef<'a> {
 
     /// Request the server send the user's full texture blob.
     pub async fn request_texture(&self) -> Result<()> {
-        self.client.send_proto(MessageType::RequestBlob, &mumbleproto::RequestBlob {
-            session_texture: vec![self.session],
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::RequestBlob,
+            &mumbleproto::RequestBlob {
+                session_texture: vec![self.session],
+                ..Default::default()
+            },
+        )
     }
 
     /// Request the server send the user's full comment blob.
     pub async fn request_comment(&self) -> Result<()> {
-        self.client.send_proto(MessageType::RequestBlob, &mumbleproto::RequestBlob {
-            session_comment: vec![self.session],
-            ..Default::default()
-        })
+        self.client.send_proto(
+            MessageType::RequestBlob,
+            &mumbleproto::RequestBlob {
+                session_comment: vec![self.session],
+                ..Default::default()
+            },
+        )
     }
 
     /// Send plugin data targeted at this user only.

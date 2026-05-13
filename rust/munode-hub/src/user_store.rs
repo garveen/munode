@@ -43,7 +43,11 @@ impl UserStore {
         let opt = tokio::task::spawn_blocking(move || db.find_user(&username_owned))
             .await
             .context("spawn_blocking join error")??;
-        Ok(opt.map(|u| UserRecord { id: u.id, username: u.username, last_channel: u.last_channel }))
+        Ok(opt.map(|u| UserRecord {
+            id: u.id,
+            username: u.username,
+            last_channel: u.last_channel,
+        }))
     }
 
     /// Get the last channel for a user.  Returns 0 on DB error or not found.  Direct DB call.
@@ -62,8 +66,13 @@ impl UserStore {
         let rows = tokio::task::spawn_blocking(move || db.list_users())
             .await
             .context("spawn_blocking join error")??;
-        Ok(rows.into_iter()
-            .map(|u| UserRecord { id: u.id, username: u.username, last_channel: u.last_channel })
+        Ok(rows
+            .into_iter()
+            .map(|u| UserRecord {
+                id: u.id,
+                username: u.username,
+                last_channel: u.last_channel,
+            })
             .collect())
     }
 
@@ -163,8 +172,10 @@ impl UserStore {
         let db = self.db.clone();
         let blob_type_owned = blob_type.to_string();
         let hash_owned = hash.to_string();
-        tokio::task::spawn_blocking(move || db.set_user_blob_hash(user_id, &blob_type_owned, &hash_owned))
-            .await
-            .context("spawn_blocking join error")?
+        tokio::task::spawn_blocking(move || {
+            db.set_user_blob_hash(user_id, &blob_type_owned, &hash_owned)
+        })
+        .await
+        .context("spawn_blocking join error")?
     }
 }

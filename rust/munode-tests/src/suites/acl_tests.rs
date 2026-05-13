@@ -4,7 +4,7 @@ use anyhow::Result;
 use munode_client::ClientEvent;
 use std::time::Duration;
 
-use crate::harness::{cleanup_clients, single_edge_env, sleep_ms, ClientConfig, create_clients};
+use crate::harness::{ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms};
 
 // Permission flag constants (from Mumble protocol)
 const PERM_WRITE: u32 = 0x1;
@@ -25,7 +25,10 @@ async fn test_query_acl_root_channel() -> Result<()> {
     let client = &clients[0];
 
     let mut rx = client.subscribe();
-    client.acl(0).fetch(std::time::Duration::from_secs(10)).await?; // Root channel
+    client
+        .acl(0)
+        .fetch(std::time::Duration::from_secs(10))
+        .await?; // Root channel
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -51,7 +54,10 @@ async fn test_query_acl_lobby_channel() -> Result<()> {
     let client = &clients[0];
 
     let mut rx = client.subscribe();
-    client.acl(1).fetch(std::time::Duration::from_secs(10)).await?; // Lobby
+    client
+        .acl(1)
+        .fetch(std::time::Duration::from_secs(10))
+        .await?; // Lobby
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -77,12 +83,18 @@ async fn test_query_permission_for_channel() -> Result<()> {
     let client = &clients[0];
 
     let mut rx = client.subscribe();
-    client.channel(1).query_permission(PERM_ENTER | PERM_SPEAK).await?;
+    client
+        .channel(1)
+        .query_permission(PERM_ENTER | PERM_SPEAK)
+        .await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::PermissionQuery { channel_id, permissions: _ }) => {
+                Ok(ClientEvent::PermissionQuery {
+                    channel_id,
+                    permissions: _,
+                }) => {
                     break channel_id == 1;
                 }
                 Ok(_) => continue,
@@ -93,7 +105,10 @@ async fn test_query_permission_for_channel() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(got, "Should receive permission query response for channel 1");
+    assert!(
+        got,
+        "Should receive permission query response for channel 1"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -110,7 +125,10 @@ async fn test_admin_has_full_permissions() -> Result<()> {
     let permissions = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::PermissionQuery { channel_id, permissions }) if channel_id == 0 => {
+                Ok(ClientEvent::PermissionQuery {
+                    channel_id,
+                    permissions,
+                }) if channel_id == 0 => {
                     break Some(permissions);
                 }
                 Ok(_) => continue,
@@ -123,7 +141,11 @@ async fn test_admin_has_full_permissions() -> Result<()> {
 
     if let Some(perms) = permissions {
         // Admin should have at least traverse and enter
-        assert_ne!(perms & PERM_TRAVERSE, 0, "admin should have Traverse on root");
+        assert_ne!(
+            perms & PERM_TRAVERSE,
+            0,
+            "admin should have Traverse on root"
+        );
         assert_ne!(perms & PERM_ENTER, 0, "admin should have Enter on root");
     }
     // If no PermissionQuery response, that's also acceptable (different Hub implementation)
@@ -147,7 +169,10 @@ async fn test_set_acl_on_channel() -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let ch_id = client.channel(0).create_subchannel(&format!("AclTest_{ts}")).await?;
+    let ch_id = client
+        .channel(0)
+        .create_subchannel(&format!("AclTest_{ts}"))
+        .await?;
     sleep_ms(300).await;
 
     // Set an ACL entry: allow 'admin' group to do everything
@@ -172,7 +197,10 @@ async fn test_set_acl_on_channel() -> Result<()> {
     sleep_ms(300).await;
 
     // Verify channel still accessible
-    assert!(client.is_connected(), "Client should still be connected after ACL write");
+    assert!(
+        client.is_connected(),
+        "Client should still be connected after ACL write"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -192,7 +220,10 @@ async fn test_non_admin_lacks_kick_permission() -> Result<()> {
     let perms = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::PermissionQuery { channel_id, permissions }) if channel_id == 0 => {
+                Ok(ClientEvent::PermissionQuery {
+                    channel_id,
+                    permissions,
+                }) if channel_id == 0 => {
                     break Some(permissions);
                 }
                 Ok(_) => continue,
@@ -222,7 +253,10 @@ async fn test_acl_entry_lifecycle() -> Result<()> {
     let client = &clients[0];
 
     let ts = chrono_now_ms();
-    let ch = client.channel(0).create_subchannel(format!("AclLifecycle_{ts}")).await?;
+    let ch = client
+        .channel(0)
+        .create_subchannel(format!("AclLifecycle_{ts}"))
+        .await?;
     sleep_ms(300).await;
 
     // Add an entry granting Speak+Enter to group 'user'.
@@ -292,7 +326,10 @@ async fn test_channel_group_lifecycle() -> Result<()> {
     let client = &clients[0];
 
     let ts = chrono_now_ms();
-    let ch = client.channel(0).create_subchannel(format!("GroupLifecycle_{ts}")).await?;
+    let ch = client
+        .channel(0)
+        .create_subchannel(format!("GroupLifecycle_{ts}"))
+        .await?;
     sleep_ms(300).await;
 
     // Create group 'team'.
@@ -332,7 +369,10 @@ async fn test_channel_group_lifecycle() -> Result<()> {
         .iter()
         .find(|g| g.name == "team")
         .expect("team group should remain");
-    assert!(team.add.contains(&1), "user 1 should appear in group add list");
+    assert!(
+        team.add.contains(&1),
+        "user 1 should appear in group add list"
+    );
 
     // Remove the user.
     client
@@ -344,7 +384,10 @@ async fn test_channel_group_lifecycle() -> Result<()> {
     let acl = client.acl(ch).fetch(Duration::from_secs(5)).await?;
     let team = acl.groups.iter().find(|g| g.name == "team");
     if let Some(t) = team {
-        assert!(!t.add.contains(&1), "user 1 should not be in add list anymore");
+        assert!(
+            !t.add.contains(&1),
+            "user 1 should not be in add list anymore"
+        );
     }
 
     // Delete the group.
@@ -394,7 +437,10 @@ async fn test_acl_allows_group_user_to_enter_speak_listen() -> Result<()> {
     let (admin, user, observer) = (&clients[0], &clients[1], &clients[2]);
 
     let ts = chrono_now_ms();
-    let ch = admin.channel(0).create_subchannel(format!("AclAllow_{ts}")).await?;
+    let ch = admin
+        .channel(0)
+        .create_subchannel(format!("AclAllow_{ts}"))
+        .await?;
     sleep_ms(300).await;
 
     admin
@@ -402,7 +448,12 @@ async fn test_acl_allows_group_user_to_enter_speak_listen() -> Result<()> {
         .add_entry(
             group_entry(
                 "acl_testers",
-                PERM_ENTER | PERM_TRAVERSE | PERM_SPEAK | PERM_LISTEN | PERM_WHISPER | PERM_TEXT_MESSAGE,
+                PERM_ENTER
+                    | PERM_TRAVERSE
+                    | PERM_SPEAK
+                    | PERM_LISTEN
+                    | PERM_WHISPER
+                    | PERM_TEXT_MESSAGE,
                 0,
             ),
             Duration::from_secs(5),
@@ -429,7 +480,10 @@ async fn test_acl_allows_group_user_to_enter_speak_listen() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(!denied, "user should not get PermissionDenied entering allowed channel");
+    assert!(
+        !denied,
+        "user should not get PermissionDenied entering allowed channel"
+    );
 
     let me = user.me().user().expect("self user");
     assert_eq!(me.channel_id, ch, "user should be in target channel");
@@ -465,7 +519,10 @@ async fn test_acl_denies_entry_to_restricted_channel() -> Result<()> {
     let (admin, user) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let ch = admin.channel(0).create_subchannel(format!("AclDeny_{ts}")).await?;
+    let ch = admin
+        .channel(0)
+        .create_subchannel(format!("AclDeny_{ts}"))
+        .await?;
     sleep_ms(300).await;
 
     admin
@@ -474,7 +531,12 @@ async fn test_acl_denies_entry_to_restricted_channel() -> Result<()> {
             group_entry(
                 "acl_testers",
                 0,
-                PERM_ENTER | PERM_TRAVERSE | PERM_SPEAK | PERM_LISTEN | PERM_WHISPER | PERM_TEXT_MESSAGE,
+                PERM_ENTER
+                    | PERM_TRAVERSE
+                    | PERM_SPEAK
+                    | PERM_LISTEN
+                    | PERM_WHISPER
+                    | PERM_TEXT_MESSAGE,
             ),
             Duration::from_secs(5),
         )
@@ -498,7 +560,10 @@ async fn test_acl_denies_entry_to_restricted_channel() -> Result<()> {
     })
     .await
     .unwrap_or(false);
-    assert!(denied, "user should get PermissionDenied for restricted channel");
+    assert!(
+        denied,
+        "user should get PermissionDenied for restricted channel"
+    );
 
     let after = user.me().session().expect("session").channel_id;
     assert_eq!(after, original_ch, "user should remain in original channel");
@@ -520,7 +585,10 @@ async fn test_acl_denies_listener_on_restricted_channel() -> Result<()> {
     let (admin, user) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let ch = admin.channel(0).create_subchannel(format!("AclNoListen_{ts}")).await?;
+    let ch = admin
+        .channel(0)
+        .create_subchannel(format!("AclNoListen_{ts}"))
+        .await?;
     sleep_ms(300).await;
 
     admin
@@ -578,8 +646,14 @@ async fn test_acl_suppress_set_and_cleared_on_channel_move() -> Result<()> {
     let (admin, user) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let no_speak = admin.channel(0).create_subchannel(format!("NoSpeak_{ts}")).await?;
-    let can_speak = admin.channel(0).create_subchannel(format!("CanSpeak_{ts}")).await?;
+    let no_speak = admin
+        .channel(0)
+        .create_subchannel(format!("NoSpeak_{ts}"))
+        .await?;
+    let can_speak = admin
+        .channel(0)
+        .create_subchannel(format!("CanSpeak_{ts}"))
+        .await?;
     sleep_ms(300).await;
 
     admin
@@ -606,7 +680,10 @@ async fn test_acl_suppress_set_and_cleared_on_channel_move() -> Result<()> {
     sleep_ms(800).await;
     let me = user.me().user().expect("self");
     assert_eq!(me.channel_id, no_speak);
-    assert!(me.suppress, "user should be auto-suppressed in no-Speak channel");
+    assert!(
+        me.suppress,
+        "user should be auto-suppressed in no-Speak channel"
+    );
     assert!(!me.mute, "suppress is not admin mute");
     assert!(!me.self_mute, "suppress is not self mute");
 
@@ -615,7 +692,10 @@ async fn test_acl_suppress_set_and_cleared_on_channel_move() -> Result<()> {
     sleep_ms(800).await;
     let me = user.me().user().expect("self");
     assert_eq!(me.channel_id, can_speak);
-    assert!(!me.suppress, "suppress should clear in Speak-allowed channel");
+    assert!(
+        !me.suppress,
+        "suppress should clear in Speak-allowed channel"
+    );
 
     admin.channel(no_speak).delete().await?;
     admin.channel(can_speak).delete().await?;
@@ -657,7 +737,10 @@ async fn test_suppress_distinct_from_self_mute_and_admin_mute() -> Result<()> {
 
     // 3. ACL-induced suppress
     let ts = chrono_now_ms();
-    let ch = admin.channel(0).create_subchannel(format!("SuppressOnly_{ts}")).await?;
+    let ch = admin
+        .channel(0)
+        .create_subchannel(format!("SuppressOnly_{ts}"))
+        .await?;
     sleep_ms(300).await;
     admin
         .acl(ch)

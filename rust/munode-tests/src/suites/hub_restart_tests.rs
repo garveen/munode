@@ -6,17 +6,14 @@
 
 use anyhow::Result;
 
-use crate::harness::{cleanup_clients, create_clients, single_edge_env, sleep_ms, ClientConfig};
+use crate::harness::{ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms};
 
 #[tokio::test]
 async fn test_user_sync_after_hub_restart() -> Result<()> {
     let mut env = single_edge_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("user1", 1),
-            ClientConfig::new("user2", 1),
-        ],
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)],
     )
     .await?;
     sleep_ms(800).await;
@@ -51,8 +48,18 @@ async fn test_user_sync_after_hub_restart() -> Result<()> {
     let names_b: Vec<&str> = users_b.iter().map(|u| u.name.as_str()).collect();
     let unique_a: std::collections::HashSet<&str> = names_a.iter().copied().collect();
     let unique_b: std::collections::HashSet<&str> = names_b.iter().copied().collect();
-    assert_eq!(names_a.len(), unique_a.len(), "A user list has duplicates: {:?}", names_a);
-    assert_eq!(names_b.len(), unique_b.len(), "B user list has duplicates: {:?}", names_b);
+    assert_eq!(
+        names_a.len(),
+        unique_a.len(),
+        "A user list has duplicates: {:?}",
+        names_a
+    );
+    assert_eq!(
+        names_b.len(),
+        unique_b.len(),
+        "B user list has duplicates: {:?}",
+        names_b
+    );
 
     // Each still sees the other exactly once.
     let a_seen_by_b = users_b.iter().filter(|u| u.name == "user1").count();

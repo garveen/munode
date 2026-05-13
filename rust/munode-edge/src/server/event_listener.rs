@@ -1,26 +1,25 @@
 //! Hub event broadcast listener.
-use std::sync::Arc;
-use tokio::sync::watch;
-use tracing::{debug, info, warn};
-use munode_common::permission as perm;
-use munode_protocol::message_type::MessageType;
-use munode_protocol::mumbleproto;
+use super::connection::get_perm_cached;
 use crate::handler;
 use crate::hub_client::HubClient;
 use crate::state::{EdgeEvent, EdgeState};
-use super::connection::get_perm_cached;
+use munode_common::permission as perm;
+use munode_protocol::message_type::MessageType;
+use munode_protocol::mumbleproto;
+use std::sync::Arc;
+use tokio::sync::watch;
+use tracing::{debug, info, warn};
 
 /// Process a `HubRegistered` event: push fresh state to all authenticated local clients.
 ///
 /// Called both from the normal event loop (`EdgeEvent::HubRegistered`) and directly from
 /// the `Lagged` recovery path (where the event is drained from the channel inline to
 /// break the lag→sync→lag feedback loop).
-async fn handle_hub_registered(
-    disappeared_session_ids: Vec<u32>,
-    state: &Arc<EdgeState>,
-) {
+async fn handle_hub_registered(disappeared_session_ids: Vec<u32>, state: &Arc<EdgeState>) {
     // Hub reconnected — resume accepting new client connections.
-    state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
+    state
+        .accepting_connections
+        .store(true, std::sync::atomic::Ordering::Relaxed);
 
     let local_clients = state.client_manager.get_all_clients().await;
     let authenticated_clients: Vec<_> = local_clients
@@ -38,37 +37,54 @@ async fn handle_hub_registered(
     for &sid in &disappeared_session_ids {
         let remove_msg = handler::build_user_remove_msg(sid, None);
         for client in &authenticated_clients {
-            if client.session == sid { continue; }
-            state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
+            if client.session == sid {
+                continue;
+            }
+            state
+                .client_manager
+                .send_to(client.session, MessageType::UserRemove, &remove_msg)
+                .await;
         }
     }
     if !disappeared_session_ids.is_empty() {
-        info!("Hub registered — sent UserRemove for {} disappeared session(s)", disappeared_session_ids.len());
+        info!(
+            "Hub registered — sent UserRemove for {} disappeared session(s)",
+            disappeared_session_ids.len()
+        );
     }
 
     // 2. Re-announce all current remote users.
-    let ninja_channels_snap: std::collections::HashSet<u32> = {
-        state.ninja_channels.read().await.iter().copied().collect()
-    };
+    let ninja_channels_snap: std::collections::HashSet<u32> =
+        { state.ninja_channels.read().await.iter().copied().collect() };
     let ninja_visible = state.ninja_visible_to.read().await;
     let remote_users = state.channel_manager.get_all_remote_users().await;
     let local_session_set: std::collections::HashSet<u32> =
         authenticated_clients.iter().map(|c| c.session).collect();
 
     for user in &remote_users {
-        if local_session_set.contains(&user.session_id) { continue; }
+        if local_session_set.contains(&user.session_id) {
+            continue;
+        }
         let msg = mumbleproto::UserState {
             session: Some(user.session_id),
-            user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
+            user_id: if user.user_id > 0 {
+                Some(user.user_id)
+            } else {
+                None
+            },
             name: Some(user.username.clone()),
             channel_id: Some(user.channel_id),
-            mute:             if user.mute             { Some(true) } else { None },
-            deaf:             if user.deaf             { Some(true) } else { None },
-            suppress:         if user.suppress         { Some(true) } else { None },
-            self_mute:        if user.self_mute        { Some(true) } else { None },
-            self_deaf:        if user.self_deaf        { Some(true) } else { None },
-            priority_speaker: if user.priority_speaker { Some(true) } else { None },
-            recording:        if user.recording        { Some(true) } else { None },
+            mute: if user.mute { Some(true) } else { None },
+            deaf: if user.deaf { Some(true) } else { None },
+            suppress: if user.suppress { Some(true) } else { None },
+            self_mute: if user.self_mute { Some(true) } else { None },
+            self_deaf: if user.self_deaf { Some(true) } else { None },
+            priority_speaker: if user.priority_speaker {
+                Some(true)
+            } else {
+                None
+            },
+            recording: if user.recording { Some(true) } else { None },
             hash: user.cert_hash.clone(),
             listening_channel_add: user.listening_channels.clone(),
             ..Default::default()
@@ -80,31 +96,47 @@ async fn handle_hub_registered(
                     .map(|set| set.contains(&user.channel_id))
                     .unwrap_or(false);
                 if can_see {
-                    state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                    state
+                        .client_manager
+                        .send_to(client.session, MessageType::UserState, &msg)
+                        .await;
                 }
             }
         } else {
             for client in &authenticated_clients {
-                state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                state
+                    .client_manager
+                    .send_to(client.session, MessageType::UserState, &msg)
+                    .await;
             }
         }
     }
-    info!("Hub registered — re-announced {} remote user(s) to {} local client(s)",
-        remote_users.len(), authenticated_clients.len());
+    info!(
+        "Hub registered — re-announced {} remote user(s) to {} local client(s)",
+        remote_users.len(),
+        authenticated_clients.len()
+    );
 
     // 3. Re-broadcast channel states.
     let channels = state.channel_manager.get_channels_bfs().await;
     for ch in &channels {
         let ch_msg = handler::build_channel_state_msg(ch);
         for client in &authenticated_clients {
-            state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_msg).await;
+            state
+                .client_manager
+                .send_to(client.session, MessageType::ChannelState, &ch_msg)
+                .await;
         }
     }
-    debug!("Hub registered — re-broadcast {} channel(s) to local clients", channels.len());
+    debug!(
+        "Hub registered — re-broadcast {} channel(s) to local clients",
+        channels.len()
+    );
 }
 
 /// Listen for events from the Hub and broadcast them to local clients.
-pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
+pub(crate) async fn hub_event_listener(
+    state: Arc<EdgeState>,
     event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
     shutdown_tx: watch::Sender<bool>,
     hub_client: Arc<HubClient>,
@@ -115,10 +147,17 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
         match event_rx.recv().await {
             Ok(event) => {
                 match event {
-                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id, is_ninja } => {
+                    EdgeEvent::RemoteUserJoined {
+                        session_id,
+                        username,
+                        channel_id,
+                        is_ninja,
+                    } => {
                         // Only broadcast for REMOTE users (not local clients - handled by main task)
                         if state.client_manager.get_client(session_id).await.is_none() {
-                            if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
+                            if let Some(user) =
+                                state.channel_manager.get_remote_user(session_id).await
+                            {
                                 // When announcing a newly-joined user we must NOT include Some(false)
                                 // for boolean fields – the Mumble client interprets every present bool
                                 // field as "this just changed to that value", triggering spurious
@@ -128,23 +167,32 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                                 // sending user_id=0 wrongly marks the guest as SuperUser.
                                 let msg = mumbleproto::UserState {
                                     session: Some(user.session_id),
-                                    user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
+                                    user_id: if user.user_id > 0 {
+                                        Some(user.user_id)
+                                    } else {
+                                        None
+                                    },
                                     name: Some(user.username.clone()),
                                     channel_id: Some(user.channel_id),
-                                    mute:             if user.mute             { Some(true) } else { None },
-                                    deaf:             if user.deaf             { Some(true) } else { None },
-                                    suppress:         if user.suppress         { Some(true) } else { None },
-                                    self_mute:        if user.self_mute        { Some(true) } else { None },
-                                    self_deaf:        if user.self_deaf        { Some(true) } else { None },
-                                    priority_speaker: if user.priority_speaker { Some(true) } else { None },
-                                    recording:        if user.recording        { Some(true) } else { None },
+                                    mute: if user.mute { Some(true) } else { None },
+                                    deaf: if user.deaf { Some(true) } else { None },
+                                    suppress: if user.suppress { Some(true) } else { None },
+                                    self_mute: if user.self_mute { Some(true) } else { None },
+                                    self_deaf: if user.self_deaf { Some(true) } else { None },
+                                    priority_speaker: if user.priority_speaker {
+                                        Some(true)
+                                    } else {
+                                        None
+                                    },
+                                    recording: if user.recording { Some(true) } else { None },
                                     hash: user.cert_hash.clone(),
                                     ..Default::default()
                                 };
                                 if is_ninja {
                                     // Channel Ninja: only send to clients who have Enter permission
                                     // Clients lacking both Enter+Listen permission won't see the user
-                                    let local_clients = state.client_manager.get_all_clients().await;
+                                    let local_clients =
+                                        state.client_manager.get_all_clients().await;
                                     let visible_cache = state.ninja_visible_to.read().await;
                                     for client in local_clients {
                                         let can_see = visible_cache
@@ -152,17 +200,33 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                                             .map(|set| set.contains(&channel_id))
                                             .unwrap_or(false);
                                         if can_see {
-                                            state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                                            state
+                                                .client_manager
+                                                .send_to(
+                                                    client.session,
+                                                    MessageType::UserState,
+                                                    &msg,
+                                                )
+                                                .await;
                                         }
                                     }
                                 } else {
-                                    state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                                    state
+                                        .client_manager
+                                        .broadcast(MessageType::UserState, &msg, None)
+                                        .await;
                                 }
                             }
                         }
-                        debug!("Broadcast remote user joined: {} (session {}, channel {}, ninja={})", username, session_id, channel_id, is_ninja);
+                        debug!(
+                            "Broadcast remote user joined: {} (session {}, channel {}, ninja={})",
+                            username, session_id, channel_id, is_ninja
+                        );
                     }
-                    EdgeEvent::RemoteUserLeft { session_id, channel_id } => {
+                    EdgeEvent::RemoteUserLeft {
+                        session_id,
+                        channel_id,
+                    } => {
                         let msg = handler::build_user_remove_msg(session_id, None);
                         // Channel Ninja: only send UserRemove to clients who could see the user.
                         let ninja_channels_snap: std::collections::HashSet<u32> =
@@ -176,28 +240,43 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                                     .map(|set| set.contains(&channel_id))
                                     .unwrap_or(false);
                                 if can_see {
-                                    state.client_manager.send_to(client.session, MessageType::UserRemove, &msg).await;
+                                    state
+                                        .client_manager
+                                        .send_to(client.session, MessageType::UserRemove, &msg)
+                                        .await;
                                 }
                             }
                         } else {
-                            state.client_manager.broadcast(MessageType::UserRemove, &msg, None).await;
+                            state
+                                .client_manager
+                                .broadcast(MessageType::UserRemove, &msg, None)
+                                .await;
                         }
-                        debug!("Broadcast remote user left: session {} (channel {})", session_id, channel_id);
+                        debug!(
+                            "Broadcast remote user left: session {} (channel {})",
+                            session_id, channel_id
+                        );
                     }
-                    EdgeEvent::RemoteUserStateChanged { session_id, delta, listening_channel_add, listening_channel_remove, actor_session } => {
+                    EdgeEvent::RemoteUserStateChanged {
+                        session_id,
+                        delta,
+                        listening_channel_add,
+                        listening_channel_remove,
+                        actor_session,
+                    } => {
                         // Only forward fields that ACTUALLY changed (carried by delta).
                         // Broadcasting the full current state would include Some(false) for
                         // unchanged default-off fields, triggering spurious client notifications.
                         let mut msg = mumbleproto::UserState {
                             session: Some(session_id),
-                            actor:            delta.actor_session.or(actor_session),
-                            self_mute:        delta.self_mute,
-                            self_deaf:        delta.self_deaf,
-                            mute:             delta.mute,
-                            deaf:             delta.deaf,
-                            suppress:         delta.suppress,
+                            actor: delta.actor_session.or(actor_session),
+                            self_mute: delta.self_mute,
+                            self_deaf: delta.self_deaf,
+                            mute: delta.mute,
+                            deaf: delta.deaf,
+                            suppress: delta.suppress,
                             priority_speaker: delta.priority_speaker,
-                            recording:        delta.recording,
+                            recording: delta.recording,
                             ..Default::default()
                         };
                         if !listening_channel_add.is_empty() {
@@ -207,7 +286,11 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                             msg.listening_channel_remove = listening_channel_remove;
                         }
                         // Channel Ninja: filter state-change notifications for users in ninja channels
-                        let user_channel = state.channel_manager.get_remote_user(session_id).await.map(|u| u.channel_id);
+                        let user_channel = state
+                            .channel_manager
+                            .get_remote_user(session_id)
+                            .await
+                            .map(|u| u.channel_id);
                         let ninja_channels_snap: std::collections::HashSet<u32> =
                             state.ninja_channels.read().await.iter().copied().collect();
                         if let Some(ch) = user_channel {
@@ -220,20 +303,43 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                                         .map(|set| set.contains(&ch))
                                         .unwrap_or(false);
                                     if can_see {
-                                        state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                                        state
+                                            .client_manager
+                                            .send_to(client.session, MessageType::UserState, &msg)
+                                            .await;
                                     }
                                 }
-                                debug!("Broadcast remote user state changed (ninja): session {}", session_id);
+                                debug!(
+                                    "Broadcast remote user state changed (ninja): session {}",
+                                    session_id
+                                );
                             } else {
-                                state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
-                                debug!("Broadcast remote user state changed: session {}", session_id);
+                                state
+                                    .client_manager
+                                    .broadcast(MessageType::UserState, &msg, None)
+                                    .await;
+                                debug!(
+                                    "Broadcast remote user state changed: session {}",
+                                    session_id
+                                );
                             }
                         } else {
-                            state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
-                            debug!("Broadcast remote user state changed: session {}", session_id);
+                            state
+                                .client_manager
+                                .broadcast(MessageType::UserState, &msg, None)
+                                .await;
+                            debug!(
+                                "Broadcast remote user state changed: session {}",
+                                session_id
+                            );
                         }
                     }
-                    EdgeEvent::RemoteUserMoved { session_id, from_channel_id, channel_id, actor_session } => {
+                    EdgeEvent::RemoteUserMoved {
+                        session_id,
+                        from_channel_id,
+                        channel_id,
+                        actor_session,
+                    } => {
                         // Channel Ninja: apply three-way visibility logic per observer.
                         // was_visible = observer could see user in from_channel
                         // now_visible = observer can see user in channel
@@ -244,7 +350,7 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         let ninja_channels_snap: std::collections::HashSet<u32> =
                             state.ninja_channels.read().await.iter().copied().collect();
                         let from_is_ninja = ninja_channels_snap.contains(&from_channel_id);
-                        let to_is_ninja   = ninja_channels_snap.contains(&channel_id);
+                        let to_is_ninja = ninja_channels_snap.contains(&channel_id);
                         if !from_is_ninja && !to_is_ninja {
                             // Simple case: no ninja channels involved, broadcast normally.
                             let msg = mumbleproto::UserState {
@@ -253,29 +359,41 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                                 actor: Some(actor_session),
                                 ..Default::default()
                             };
-                            state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                            state
+                                .client_manager
+                                .broadcast(MessageType::UserState, &msg, None)
+                                .await;
                         } else {
                             // At least one side is a ninja channel — apply per-observer logic.
                             let all_clients = state.client_manager.get_all_clients().await;
                             let visible_cache = state.ninja_visible_to.read().await;
                             // Build the full UserState for the "appears" case.
-                            let full_msg_opt = state.channel_manager.get_remote_user(session_id).await.map(|user| {
-                                mumbleproto::UserState {
-                                    session: Some(user.session_id),
-                                    user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
-                                    name: Some(user.username.clone()),
-                                    channel_id: Some(user.channel_id),
-                                    mute:             if user.mute             { Some(true) } else { None },
-                                    deaf:             if user.deaf             { Some(true) } else { None },
-                                    suppress:         if user.suppress         { Some(true) } else { None },
-                                    self_mute:        if user.self_mute        { Some(true) } else { None },
-                                    self_deaf:        if user.self_deaf        { Some(true) } else { None },
-                                    priority_speaker: if user.priority_speaker { Some(true) } else { None },
-                                    recording:        if user.recording        { Some(true) } else { None },
-                                    hash: user.cert_hash.clone(),
-                                    ..Default::default()
-                                }
-                            });
+                            let full_msg_opt =
+                                state.channel_manager.get_remote_user(session_id).await.map(
+                                    |user| mumbleproto::UserState {
+                                        session: Some(user.session_id),
+                                        user_id: if user.user_id > 0 {
+                                            Some(user.user_id)
+                                        } else {
+                                            None
+                                        },
+                                        name: Some(user.username.clone()),
+                                        channel_id: Some(user.channel_id),
+                                        mute: if user.mute { Some(true) } else { None },
+                                        deaf: if user.deaf { Some(true) } else { None },
+                                        suppress: if user.suppress { Some(true) } else { None },
+                                        self_mute: if user.self_mute { Some(true) } else { None },
+                                        self_deaf: if user.self_deaf { Some(true) } else { None },
+                                        priority_speaker: if user.priority_speaker {
+                                            Some(true)
+                                        } else {
+                                            None
+                                        },
+                                        recording: if user.recording { Some(true) } else { None },
+                                        hash: user.cert_hash.clone(),
+                                        ..Default::default()
+                                    },
+                                );
                             let move_msg = mumbleproto::UserState {
                                 session: Some(session_id),
                                 channel_id: Some(channel_id),
@@ -285,53 +403,102 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                             let remove_msg = handler::build_user_remove_msg(session_id, None);
                             for client in &all_clients {
                                 let was_visible = if from_is_ninja {
-                                    visible_cache.get(&client.session).map(|s| s.contains(&from_channel_id)).unwrap_or(false)
-                                } else { true };
+                                    visible_cache
+                                        .get(&client.session)
+                                        .map(|s| s.contains(&from_channel_id))
+                                        .unwrap_or(false)
+                                } else {
+                                    true
+                                };
                                 let now_visible = if to_is_ninja {
-                                    visible_cache.get(&client.session).map(|s| s.contains(&channel_id)).unwrap_or(false)
-                                } else { true };
+                                    visible_cache
+                                        .get(&client.session)
+                                        .map(|s| s.contains(&channel_id))
+                                        .unwrap_or(false)
+                                } else {
+                                    true
+                                };
                                 match (was_visible, now_visible) {
                                     (true, true) => {
-                                        state.client_manager.send_to(client.session, MessageType::UserState, &move_msg).await;
+                                        state
+                                            .client_manager
+                                            .send_to(
+                                                client.session,
+                                                MessageType::UserState,
+                                                &move_msg,
+                                            )
+                                            .await;
                                     }
                                     (true, false) => {
-                                        state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
+                                        state
+                                            .client_manager
+                                            .send_to(
+                                                client.session,
+                                                MessageType::UserRemove,
+                                                &remove_msg,
+                                            )
+                                            .await;
                                     }
                                     (false, true) => {
                                         if let Some(ref full_msg) = full_msg_opt {
-                                            state.client_manager.send_to(client.session, MessageType::UserState, full_msg).await;
+                                            state
+                                                .client_manager
+                                                .send_to(
+                                                    client.session,
+                                                    MessageType::UserState,
+                                                    full_msg,
+                                                )
+                                                .await;
                                         }
                                     }
                                     (false, false) => {}
                                 }
                             }
                         }
-                        debug!("Broadcast remote user moved: session {} {} -> channel {}", session_id, from_channel_id, channel_id);
+                        debug!(
+                            "Broadcast remote user moved: session {} {} -> channel {}",
+                            session_id, from_channel_id, channel_id
+                        );
                     }
                     EdgeEvent::ChannelCreated { channel_id } => {
                         if let Some(ch) = state.channel_manager.get_channel(channel_id).await {
                             let msg = handler::build_channel_state_msg(&ch);
-                            state.client_manager.broadcast(MessageType::ChannelState, &msg, None).await;
+                            state
+                                .client_manager
+                                .broadcast(MessageType::ChannelState, &msg, None)
+                                .await;
                         }
                         debug!("Broadcast channel created: {}", channel_id);
                     }
                     EdgeEvent::ChannelRemoved { channel_id } => {
                         let msg = mumbleproto::ChannelRemove { channel_id };
-                        state.client_manager.broadcast(MessageType::ChannelRemove, &msg, None).await;
+                        state
+                            .client_manager
+                            .broadcast(MessageType::ChannelRemove, &msg, None)
+                            .await;
                         // Clean up the enter_restricted_cache for the deleted channel.
                         state.enter_restricted_cache.remove(&channel_id);
                         debug!("Broadcast channel removed: {}", channel_id);
                     }
-                    EdgeEvent::ChannelUpdated { channel_id, links_add, links_remove } => {
+                    EdgeEvent::ChannelUpdated {
+                        channel_id,
+                        links_add,
+                        links_remove,
+                    } => {
                         if let Some(ch) = state.channel_manager.get_channel(channel_id).await {
                             let mut msg = handler::build_channel_state_msg(&ch);
                             msg.links_add = links_add;
                             msg.links_remove = links_remove;
-                            state.client_manager.broadcast(MessageType::ChannelState, &msg, None).await;
+                            state
+                                .client_manager
+                                .broadcast(MessageType::ChannelState, &msg, None)
+                                .await;
                         }
                         debug!("Broadcast channel updated: {}", channel_id);
                     }
-                    EdgeEvent::HubRegistered { disappeared_session_ids } => {
+                    EdgeEvent::HubRegistered {
+                        disappeared_session_ids,
+                    } => {
                         handle_hub_registered(disappeared_session_ids, &state).await;
                     }
                     EdgeEvent::HubDisconnected => {
@@ -351,8 +518,17 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                             for &sid in &session_ids {
                                 let remove_msg = handler::build_user_remove_msg(sid, None);
                                 for client in &authenticated_clients {
-                                    if client.session == sid { continue; }
-                                    state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
+                                    if client.session == sid {
+                                        continue;
+                                    }
+                                    state
+                                        .client_manager
+                                        .send_to(
+                                            client.session,
+                                            MessageType::UserRemove,
+                                            &remove_msg,
+                                        )
+                                        .await;
                                 }
                             }
                             info!(
@@ -363,13 +539,26 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         }
                     }
                     EdgeEvent::HubUnreachable => {
-                        warn!("Hub is unreachable (>30s without connection) — disconnecting all clients and refusing new connections");
-                        state.accepting_connections.store(false, std::sync::atomic::Ordering::Relaxed);
-                        state.client_manager.close_all_connections(
-                            "Server temporarily unavailable, please reconnect later",
-                        ).await;
+                        warn!(
+                            "Hub is unreachable (>30s without connection) — disconnecting all clients and refusing new connections"
+                        );
+                        state
+                            .accepting_connections
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
+                        state
+                            .client_manager
+                            .close_all_connections(
+                                "Server temporarily unavailable, please reconnect later",
+                            )
+                            .await;
                     }
-                    EdgeEvent::TextMessageForward { actor, message, channel_id, tree_id, session } => {
+                    EdgeEvent::TextMessageForward {
+                        actor,
+                        message,
+                        channel_id,
+                        tree_id,
+                        session,
+                    } => {
                         let msg = mumbleproto::TextMessage {
                             actor: Some(actor),
                             message,
@@ -380,16 +569,29 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         // Send to targeted sessions on this edge, or broadcast to channels
                         if !msg.session.is_empty() {
                             for &target_session in &msg.session {
-                                state.client_manager.send_to(target_session, MessageType::TextMessage, &msg).await;
+                                state
+                                    .client_manager
+                                    .send_to(target_session, MessageType::TextMessage, &msg)
+                                    .await;
                             }
                         } else if !msg.channel_id.is_empty() {
                             for &ch_id in &msg.channel_id {
-                                state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
+                                state
+                                    .client_manager
+                                    .broadcast_to_channel(
+                                        ch_id,
+                                        MessageType::TextMessage,
+                                        &msg,
+                                        None,
+                                    )
+                                    .await;
                             }
                         } else if !msg.tree_id.is_empty() {
                             // Collect all channels in the tree recursively
-                            let mut all_channel_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                            let mut to_visit: std::collections::VecDeque<u32> = msg.tree_id.iter().copied().collect();
+                            let mut all_channel_ids: std::collections::HashSet<u32> =
+                                std::collections::HashSet::new();
+                            let mut to_visit: std::collections::VecDeque<u32> =
+                                msg.tree_id.iter().copied().collect();
                             while let Some(ch_id) = to_visit.pop_front() {
                                 if all_channel_ids.insert(ch_id) {
                                     let children = state.channel_manager.get_children(ch_id).await;
@@ -399,12 +601,25 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                                 }
                             }
                             for ch_id in all_channel_ids {
-                                state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
+                                state
+                                    .client_manager
+                                    .broadcast_to_channel(
+                                        ch_id,
+                                        MessageType::TextMessage,
+                                        &msg,
+                                        None,
+                                    )
+                                    .await;
                             }
                         }
                         debug!("Forwarded text message from remote actor {}", actor);
                     }
-                    EdgeEvent::PluginDataBroadcast { sender_session, data_id, data, target_sessions } => {
+                    EdgeEvent::PluginDataBroadcast {
+                        sender_session,
+                        data_id,
+                        data,
+                        target_sessions,
+                    } => {
                         let msg = mumbleproto::PluginDataTransmission {
                             sender_session: Some(sender_session),
                             data_id: Some(data_id.clone()),
@@ -412,11 +627,15 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                             receiver_sessions: vec![],
                         };
                         for &target_session in &target_sessions {
-                            state.client_manager.send_to(
-                                target_session, MessageType::PluginDataTransmission, &msg
-                            ).await;
+                            state
+                                .client_manager
+                                .send_to(target_session, MessageType::PluginDataTransmission, &msg)
+                                .await;
                         }
-                        debug!("Forwarded plugin data from session {}: {}", sender_session, data_id);
+                        debug!(
+                            "Forwarded plugin data from session {}: {}",
+                            sender_session, data_id
+                        );
                     }
                     EdgeEvent::ShutdownRequested { reason } => {
                         // Hub requests graceful shutdown due to cluster partition.
@@ -426,13 +645,13 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                             r#type: Some(mumbleproto::reject::RejectType::None as i32),
                             reason: Some(format!("Server shutting down: {}", reason)),
                         };
-                        let authenticated_sessions = state.client_manager.get_authenticated_sessions().await;
+                        let authenticated_sessions =
+                            state.client_manager.get_authenticated_sessions().await;
                         for session in authenticated_sessions {
-                            state.client_manager.send_to(
-                                session,
-                                MessageType::Reject,
-                                &reject_msg,
-                            ).await;
+                            state
+                                .client_manager
+                                .send_to(session, MessageType::Reject, &reject_msg)
+                                .await;
                         }
                         // Give clients a moment to receive the reject, then exit gracefully
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -457,7 +676,9 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         // If Hub is still reachable and hub_tcp_fallback is enabled, voice CAN
                         // still flow via Hub relay → the cluster is degraded but not partitioned.
                         // In this case the DirectTcp pool will continue retrying silently.
-                        let hub_reachable = state.accepting_connections.load(std::sync::atomic::Ordering::Relaxed);
+                        let hub_reachable = state
+                            .accepting_connections
+                            .load(std::sync::atomic::Ordering::Relaxed);
                         if hub_reachable && state.enable_hub_tcp_fallback {
                             debug!(
                                 "Peer edge {} DirectTcp down but Hub TCP relay is available — \
@@ -540,7 +761,10 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         );
                         hub_client.do_report_peer_disconnect(peer_edge_id).await;
                     }
-                    EdgeEvent::AclUpdated { channel_id, is_enter_restricted } => {
+                    EdgeEvent::AclUpdated {
+                        channel_id,
+                        is_enter_restricted,
+                    } => {
                         // An ACL was updated on the Hub; re-evaluate can_enter + is_enter_restricted
                         // for every local client and push a ChannelState update so the client's lock
                         // icon reflects the new permissions immediately.
@@ -552,23 +776,41 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         //
                         // `is_enter_restricted` is pre-computed by the Hub at ACL-save time and
                         // embedded in the notification — no extra RPC needed here.
-                        debug!("ACL updated for channel {}, is_enter_restricted={}, refreshing enter state for all local sessions", channel_id, is_enter_restricted);
+                        debug!(
+                            "ACL updated for channel {}, is_enter_restricted={}, refreshing enter state for all local sessions",
+                            channel_id, is_enter_restricted
+                        );
                         // Update the channel-level cache entry with the authoritative Hub value.
-                        state.enter_restricted_cache.insert(channel_id, is_enter_restricted);
+                        state
+                            .enter_restricted_cache
+                            .insert(channel_id, is_enter_restricted);
                         // Invalidate per-(session,channel) permission cache so all permission
                         // queries below fetch fresh values from Hub rather than stale data.
-                        state.permission_cache.retain(|&(_, ch), _| ch != channel_id);
+                        state
+                            .permission_cache
+                            .retain(|&(_, ch), _| ch != channel_id);
                         let all_clients = state.client_manager.get_all_clients().await;
                         for client in &all_clients {
-                            let can_enter = get_perm_cached(&hub_client, &state, client.session, channel_id, true).await
-                                & perm::ENTER != 0;
+                            let can_enter = get_perm_cached(
+                                &hub_client,
+                                &state,
+                                client.session,
+                                channel_id,
+                                true,
+                            )
+                            .await
+                                & perm::ENTER
+                                != 0;
                             let ch_state = mumbleproto::ChannelState {
                                 channel_id: Some(channel_id),
                                 is_enter_restricted: Some(is_enter_restricted),
                                 can_enter: Some(can_enter),
                                 ..Default::default()
                             };
-                            state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_state).await;
+                            state
+                                .client_manager
+                                .send_to(client.session, MessageType::ChannelState, &ch_state)
+                                .await;
                         }
                     }
                 }
@@ -590,11 +832,13 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                 let mut pending_hub_registered: Option<Vec<u32>> = None;
                 loop {
                     match event_rx.try_recv() {
-                        Ok(EdgeEvent::HubRegistered { disappeared_session_ids }) => {
+                        Ok(EdgeEvent::HubRegistered {
+                            disappeared_session_ids,
+                        }) => {
                             // Keep only the latest; earlier ones are superseded by the same sync.
                             pending_hub_registered = Some(disappeared_session_ids);
                         }
-                        Ok(_) => {} // discard stale events (RelayedVoice, etc.)
+                        Ok(_) => {}      // discard stale events (RelayedVoice, etc.)
                         Err(_) => break, // channel drained (Empty or Lagged — both mean stop here)
                     }
                 }

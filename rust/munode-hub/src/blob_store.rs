@@ -40,8 +40,12 @@ impl BlobStore {
     /// The directory is created if it does not already exist.
     pub fn open(base_dir: impl AsRef<Path>) -> Result<Self> {
         let base_dir = base_dir.as_ref().to_path_buf();
-        fs::create_dir_all(&base_dir)
-            .with_context(|| format!("Failed to create blob store directory: {}", base_dir.display()))?;
+        fs::create_dir_all(&base_dir).with_context(|| {
+            format!(
+                "Failed to create blob store directory: {}",
+                base_dir.display()
+            )
+        })?;
         info!("Blob store opened at {}", base_dir.display());
         Ok(Self { base_dir })
     }
@@ -50,7 +54,11 @@ impl BlobStore {
     fn blob_path(&self, hash: &str) -> PathBuf {
         // Guard against path-traversal (hashes are hex so this should never trigger,
         // but be defensive).
-        let safe = hash.chars().filter(|c| c.is_ascii_hexdigit()).take(64).collect::<String>();
+        let safe = hash
+            .chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .take(64)
+            .collect::<String>();
         let prefix = &safe[..2.min(safe.len())];
         self.base_dir.join(prefix).join(&safe)
     }
@@ -68,8 +76,9 @@ impl BlobStore {
         }
 
         // Ensure shard directory exists
-        let shard_dir = path.parent()
-            .ok_or_else(|| anyhow::anyhow!("Blob path '{}' has no parent directory", path.display()))?;
+        let shard_dir = path.parent().ok_or_else(|| {
+            anyhow::anyhow!("Blob path '{}' has no parent directory", path.display())
+        })?;
         fs::create_dir_all(shard_dir)
             .with_context(|| format!("Failed to create shard dir {}", shard_dir.display()))?;
 
@@ -86,8 +95,13 @@ impl BlobStore {
                 .with_context(|| format!("Failed to write blob data to {}", tmp_path.display()))?;
             f.flush()?;
         }
-        fs::rename(&tmp_path, &path)
-            .with_context(|| format!("Failed to rename {} → {}", tmp_path.display(), path.display()))?;
+        fs::rename(&tmp_path, &path).with_context(|| {
+            format!(
+                "Failed to rename {} → {}",
+                tmp_path.display(),
+                path.display()
+            )
+        })?;
 
         debug!("Stored blob {} ({} bytes)", hash, data.len());
         Ok(hash)
@@ -101,8 +115,7 @@ impl BlobStore {
         if !path.exists() {
             return Ok(None);
         }
-        let data = fs::read(&path)
-            .with_context(|| format!("Failed to read blob {}", hash))?;
+        let data = fs::read(&path).with_context(|| format!("Failed to read blob {}", hash))?;
         Ok(Some(data))
     }
 
@@ -115,8 +128,7 @@ impl BlobStore {
     pub fn delete(&self, hash: &str) -> Result<()> {
         let path = self.blob_path(hash);
         if path.exists() {
-            fs::remove_file(&path)
-                .with_context(|| format!("Failed to delete blob {}", hash))?;
+            fs::remove_file(&path).with_context(|| format!("Failed to delete blob {}", hash))?;
         }
         Ok(())
     }
@@ -127,7 +139,10 @@ impl BlobStore {
         let mut total_size: u64 = 0;
 
         if !self.base_dir.exists() {
-            return Ok(BlobStoreStats { total_blobs, total_size });
+            return Ok(BlobStoreStats {
+                total_blobs,
+                total_size,
+            });
         }
 
         // Walk one level of shard directories then count files
@@ -146,7 +161,10 @@ impl BlobStore {
             }
         }
 
-        Ok(BlobStoreStats { total_blobs, total_size })
+        Ok(BlobStoreStats {
+            total_blobs,
+            total_size,
+        })
     }
 
     /// Non-blocking async wrapper around [`put`] for use in async contexts.
@@ -173,7 +191,11 @@ impl BlobStore {
 pub fn sha256_hex(data: &[u8]) -> String {
     use ring::digest;
     let digest = digest::digest(&digest::SHA256, data);
-    digest.as_ref().iter().map(|b| format!("{:02x}", b)).collect()
+    digest
+        .as_ref()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 #[cfg(test)]
@@ -223,7 +245,9 @@ mod tests {
     #[test]
     fn test_get_missing() {
         let (_dir, store) = temp_store();
-        let result = store.get("aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233").unwrap();
+        let result = store
+            .get("aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233")
+            .unwrap();
         assert!(result.is_none());
     }
 

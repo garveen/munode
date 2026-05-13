@@ -7,7 +7,7 @@
 use anyhow::Result;
 use munode_client::{ConnectOptions, MumbleClient};
 
-use crate::harness::{cleanup_clients, create_clients, sleep_ms, standard_env, ClientConfig};
+use crate::harness::{ClientConfig, cleanup_clients, create_clients, sleep_ms, standard_env};
 
 #[tokio::test]
 async fn test_cluster_survives_edge_restart() -> Result<()> {
@@ -36,7 +36,10 @@ async fn test_cluster_survives_edge_restart() -> Result<()> {
         })
         .await?;
     sleep_ms(800).await;
-    assert!(new_client.is_connected(), "client should reconnect to restarted Edge 1");
+    assert!(
+        new_client.is_connected(),
+        "client should reconnect to restarted Edge 1"
+    );
 
     // The Edge-2 client must still be connected (it never went down).
     assert!(

@@ -1,10 +1,7 @@
 use super::*;
 
 impl RpcHandler {
-    pub(super) async fn handle_get_voice_targets(
-        &self,
-        request_id: &str,
-    ) -> Result<EdgeHubPacket> {
+    pub(super) async fn handle_get_voice_targets(&self, request_id: &str) -> Result<EdgeHubPacket> {
         use munode_protocol::hubedge::{EdgeGetVoiceTargetsResult, VoiceTargetConfigEntry};
 
         let entries: Vec<VoiceTargetConfigEntry> = self
@@ -21,11 +18,15 @@ impl RpcHandler {
                 timestamp: entry.timestamp,
             })
             .collect();
-        let result = EdgeGetVoiceTargetsResult { voice_targets: entries };
+        let result = EdgeGetVoiceTargetsResult {
+            voice_targets: entries,
+        };
 
-        Ok(self.make_response_packet(request_id, "edge.getVoiceTargets", |response| {
-            response.edge_get_voice_targets = Some(result);
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.getVoiceTargets", |response| {
+                response.edge_get_voice_targets = Some(result);
+            }),
+        )
     }
 
     pub(super) async fn handle_sync_voice_target(
@@ -33,7 +34,9 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_sync_voice_target.as_ref()
+        let params = request
+            .edge_sync_voice_target
+            .as_ref()
             .context("Missing edge_sync_voice_target params")?;
 
         let timestamp = current_millis() as i64;
@@ -62,11 +65,13 @@ impl RpcHandler {
         })
         .await;
 
-        Ok(self.make_response_packet(request_id, "edge.syncVoiceTarget", |response| {
-            response.edge_sync_voice_target = Some(EdgeSyncVoiceTargetResult {
-                success: true,
-                error: None,
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.syncVoiceTarget", |response| {
+                response.edge_sync_voice_target = Some(EdgeSyncVoiceTargetResult {
+                    success: true,
+                    error: None,
+                });
+            }),
+        )
     }
 }

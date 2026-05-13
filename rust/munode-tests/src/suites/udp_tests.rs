@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use munode_client::{ClientEvent, ConnectOptions, MumbleClient};
 
-use crate::harness::{cleanup_clients, single_edge_env, ClientConfig, create_clients};
+use crate::harness::{ClientConfig, cleanup_clients, create_clients, single_edge_env};
 
 // ── UDP handshake ─────────────────────────────────────────────────────────
 
@@ -45,20 +45,26 @@ async fn test_udp_mode_connect_and_handshake() -> Result<()> {
     let env = single_edge_env().await?;
 
     let client = MumbleClient::new();
-    client.connect(ConnectOptions {
-        host: "127.0.0.1".into(),
-        port: env.edge1(),
-        username: "user1".into(),
-        password: Some("password1".into()),
-        reject_unauthorized: false,
-        force_tcp_voice: false, // enable UDP
-        connect_timeout: Duration::from_secs(10),
-        ..Default::default()
-    }).await?;
+    client
+        .connect(ConnectOptions {
+            host: "127.0.0.1".into(),
+            port: env.edge1(),
+            username: "user1".into(),
+            password: Some("password1".into()),
+            reject_unauthorized: false,
+            force_tcp_voice: false, // enable UDP
+            connect_timeout: Duration::from_secs(10),
+            ..Default::default()
+        })
+        .await?;
 
     // Wait for UDP handshake
     let result = client.wait_for_udp(Duration::from_secs(10)).await;
-    assert!(result.is_ok(), "UDP handshake should complete: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "UDP handshake should complete: {:?}",
+        result
+    );
 
     client.disconnect().await?;
     Ok(())
@@ -69,16 +75,18 @@ async fn test_udp_ping_response() -> Result<()> {
     let env = single_edge_env().await?;
 
     let client = MumbleClient::new();
-    client.connect(ConnectOptions {
-        host: "127.0.0.1".into(),
-        port: env.edge1(),
-        username: "user2".into(),
-        password: Some("password2".into()),
-        reject_unauthorized: false,
-        force_tcp_voice: false, // want UDP
-        connect_timeout: Duration::from_secs(10),
-        ..Default::default()
-    }).await?;
+    client
+        .connect(ConnectOptions {
+            host: "127.0.0.1".into(),
+            port: env.edge1(),
+            username: "user2".into(),
+            password: Some("password2".into()),
+            reject_unauthorized: false,
+            force_tcp_voice: false, // want UDP
+            connect_timeout: Duration::from_secs(10),
+            ..Default::default()
+        })
+        .await?;
 
     // If UDP handshake fails, that's acceptable in CI — skip assertion
     let _ = client.wait_for_udp(Duration::from_secs(8)).await;
@@ -124,16 +132,18 @@ async fn test_multiple_udp_clients_simultaneously() -> Result<()> {
         let username = username.to_string();
         handles.push(tokio::spawn(async move {
             let client = MumbleClient::new();
-            let result = client.connect(ConnectOptions {
-                host: "127.0.0.1".into(),
-                port,
-                username: username.clone(),
-                password: Some(format!("{}1", &username[..4])), // crude but works for user1/user2/user3
-                reject_unauthorized: false,
-                force_tcp_voice: false,
-                connect_timeout: Duration::from_secs(10),
-                ..Default::default()
-            }).await;
+            let result = client
+                .connect(ConnectOptions {
+                    host: "127.0.0.1".into(),
+                    port,
+                    username: username.clone(),
+                    password: Some(format!("{}1", &username[..4])), // crude but works for user1/user2/user3
+                    reject_unauthorized: false,
+                    force_tcp_voice: false,
+                    connect_timeout: Duration::from_secs(10),
+                    ..Default::default()
+                })
+                .await;
             let _ = client.disconnect().await;
             result.is_ok()
         }));

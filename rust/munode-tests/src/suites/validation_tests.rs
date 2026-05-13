@@ -9,9 +9,7 @@ use anyhow::Result;
 use munode_client::{ClientEvent, ConnectOptions, MumbleClient, RejectType};
 use serde_json::json;
 
-use crate::harness::{
-    cleanup_clients, create_clients, sleep_ms, ClientConfig, TestEnvBuilder,
-};
+use crate::harness::{ClientConfig, TestEnvBuilder, cleanup_clients, create_clients, sleep_ms};
 
 fn username_validation_patch() -> serde_json::Value {
     json!({
@@ -34,10 +32,7 @@ fn channel_validation_patch() -> serde_json::Value {
     })
 }
 
-async fn try_connect_capture_reject_kind(
-    port: u16,
-    username: &'static str,
-) -> Option<RejectType> {
+async fn try_connect_capture_reject_kind(port: u16, username: &'static str) -> Option<RejectType> {
     let client = MumbleClient::new();
     let mut rx = client.subscribe();
     let handle = tokio::spawn(async move {
@@ -94,7 +89,10 @@ async fn test_validation_rules_accept_valid_usernames() -> Result<()> {
             })
             .await?;
         sleep_ms(250).await;
-        assert!(client.is_connected(), "valid username {username} should connect");
+        assert!(
+            client.is_connected(),
+            "valid username {username} should connect"
+        );
         client.disconnect().await?;
     }
 
@@ -133,7 +131,10 @@ async fn test_validation_rules_accept_valid_channel_names() -> Result<()> {
 
     for name in ["ValidChannel", "My-Channel 123"] {
         let channel_id = admin.channel(0).create_subchannel(name).await?;
-        assert!(channel_id > 0, "valid channel name {name} should create a channel");
+        assert!(
+            channel_id > 0,
+            "valid channel name {name} should create a channel"
+        );
     }
 
     cleanup_clients(clients).await;
@@ -152,7 +153,10 @@ async fn test_validation_rules_reject_invalid_channel_names() -> Result<()> {
 
     for name in ["!!BadChannel!!", "___private"] {
         let result = admin.channel(0).create_subchannel(name).await;
-        assert!(result.is_err(), "invalid channel name {name} should be rejected");
+        assert!(
+            result.is_err(),
+            "invalid channel name {name} should be rejected"
+        );
         sleep_ms(150).await;
         assert!(
             !admin.channels().iter().any(|channel| channel.name == name),

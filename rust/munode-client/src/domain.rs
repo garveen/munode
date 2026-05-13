@@ -144,7 +144,10 @@ impl Ban {
             }
         } else if p.address.len() == 4 {
             IpAddr::V4(std::net::Ipv4Addr::new(
-                p.address[0], p.address[1], p.address[2], p.address[3],
+                p.address[0],
+                p.address[1],
+                p.address[2],
+                p.address[3],
             ))
         } else {
             IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)

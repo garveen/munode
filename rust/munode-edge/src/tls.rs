@@ -10,18 +10,16 @@ use munode_common::config::TlsConfig;
 
 /// Create a TLS acceptor from the edge configuration.
 pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
-    let certs = load_certs(&tls_config.cert)
-        .context("Failed to load TLS certificate")?;
-    let key = load_private_key(&tls_config.key)
-        .context("Failed to load TLS private key")?;
+    let certs = load_certs(&tls_config.cert).context("Failed to load TLS certificate")?;
+    let key = load_private_key(&tls_config.key).context("Failed to load TLS private key")?;
 
     // Use a verifier that requests but doesn't require client certificates,
     // and accepts self-signed certificates (Murmur/Mumble-compatible behavior).
     // Clients are identified by their certificate hash; the TLS handshake signature
     // is verified using the installed crypto provider to ensure the client owns
     // the corresponding private key.
-    use rustls::server::danger::{ClientCertVerifier, ClientCertVerified};
-    
+    use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+
     #[derive(Debug)]
     struct MumbleClientCertVerifier {
         /// Signature verification algorithms from the installed crypto provider,
@@ -36,30 +34,32 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
             // crypto provider.  main() installs aws_lc_rs before calling EdgeServer::run(),
             // so get_default() should always succeed here.
             let algs = rustls::crypto::CryptoProvider::get_default()
-                .ok_or_else(|| anyhow::anyhow!(
-                    "No default crypto provider installed. \
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No default crypto provider installed. \
                      Call rustls::crypto::aws_lc_rs::default_provider().install_default() \
                      before starting the Edge server."
-                ))?
+                    )
+                })?
                 .signature_verification_algorithms;
             Ok(Self { algs })
         }
     }
-    
+
     impl ClientCertVerifier for MumbleClientCertVerifier {
         fn offer_client_auth(&self) -> bool {
             true // Request client certificate
         }
-        
+
         fn client_auth_mandatory(&self) -> bool {
             false // But don't require it (Mumble allows connecting without a cert)
         }
-        
+
         fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
             // Return empty list — we accept any certificate, including self-signed ones.
             &[]
         }
-        
+
         fn verify_client_cert(
             &self,
             _end_entity: &rustls::pki_types::CertificateDer<'_>,
@@ -73,7 +73,7 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
             // (username/password, tokens, Lua scripts) is used for actual access control.
             Ok(ClientCertVerified::assertion())
         }
-        
+
         fn verify_tls12_signature(
             &self,
             message: &[u8],
@@ -85,7 +85,7 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
             // key of their presented certificate without requiring a CA chain.
             rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algs)
         }
-        
+
         fn verify_tls13_signature(
             &self,
             message: &[u8],
@@ -94,12 +94,12 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
             rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algs)
         }
-        
+
         fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
             self.algs.supported_schemes()
         }
     }
-    
+
     let config = rustls::ServerConfig::builder()
         .with_client_cert_verifier(Arc::new(MumbleClientCertVerifier::new()?))
         .with_single_cert(certs, key)
@@ -110,8 +110,8 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
 
 /// Load certificates from a PEM file.
 fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let file = fs::File::open(path)
-        .with_context(|| format!("Cannot open certificate file: {}", path))?;
+    let file =
+        fs::File::open(path).with_context(|| format!("Cannot open certificate file: {}", path))?;
     let mut reader = BufReader::new(file);
     let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
@@ -124,8 +124,7 @@ fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
 
 /// Load a private key from a PEM file.
 fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
-    let file = fs::File::open(path)
-        .with_context(|| format!("Cannot open key file: {}", path))?;
+    let file = fs::File::open(path).with_context(|| format!("Cannot open key file: {}", path))?;
     let mut reader = BufReader::new(file);
     let key = rustls_pemfile::private_key(&mut reader)
         .context("Failed to parse private key")?

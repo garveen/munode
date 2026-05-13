@@ -5,7 +5,9 @@ use std::time::Duration;
 use anyhow::Result;
 use munode_client::ClientEvent;
 
-use crate::harness::{cleanup_clients, create_clients, single_edge_env, sleep_ms, standard_env, ClientConfig};
+use crate::harness::{
+    ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms, standard_env,
+};
 
 async fn wait_for_user_stats(
     client: &munode_client::MumbleClient,

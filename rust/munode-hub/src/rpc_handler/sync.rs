@@ -19,7 +19,8 @@ impl RpcHandler {
                 channel_id: channel.id,
                 name: channel.name.clone(),
                 parent_id: channel.parent_id,
-                description: (!channel.description.is_empty()).then_some(channel.description.clone()),
+                description: (!channel.description.is_empty())
+                    .then_some(channel.description.clone()),
                 position: Some(channel.position),
                 max_users: (channel.max_users > 0).then_some(channel.max_users),
                 temporary: Some(channel.temporary),
@@ -116,9 +117,11 @@ impl RpcHandler {
             edges,
         };
 
-        Ok(self.make_response_packet(request_id, "edge.fullSync", |response| {
-            response.edge_full_sync = Some(result);
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.fullSync", |response| {
+                response.edge_full_sync = Some(result);
+            }),
+        )
     }
 
     pub(super) async fn handle_permission_query(
@@ -126,7 +129,9 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_handle_permission_query.as_ref()
+        let params = request
+            .edge_handle_permission_query
+            .as_ref()
             .context("Missing edge_handle_permission_query params")?;
 
         let mut effective_groups = self
@@ -138,7 +143,11 @@ impl RpcHandler {
             .unwrap_or_default();
         let user_id = params.actor_user_id;
 
-        let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
+        let channel_snapshot = self
+            .state
+            .channel_store
+            .get_parent_and_inherit_snapshot()
+            .await;
         let chain = build_ancestor_chain(&channel_snapshot, params.channel_id);
         for &ancestor_id in &chain {
             for group in &self.state.acl_manager.get_channel_groups(ancestor_id).await {
@@ -174,13 +183,15 @@ impl RpcHandler {
             )
             .await;
 
-        Ok(self.make_response_packet(request_id, "edge.handlePermissionQuery", |response| {
-            response.edge_handle_permission_query = Some(EdgeHandlePermissionQueryResult {
-                success: true,
-                permissions: Some(permissions),
-                error: None,
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.handlePermissionQuery", |response| {
+                response.edge_handle_permission_query = Some(EdgeHandlePermissionQueryResult {
+                    success: true,
+                    permissions: Some(permissions),
+                    error: None,
+                });
+            }),
+        )
     }
 
     pub(super) async fn handle_batch_permission_query(
@@ -188,11 +199,17 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_batch_permission_query.as_ref()
+        let params = request
+            .edge_batch_permission_query
+            .as_ref()
             .context("Missing edge_batch_permission_query params")?;
 
         let user_id = params.actor_user_id;
-        let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
+        let channel_snapshot = self
+            .state
+            .channel_store
+            .get_parent_and_inherit_snapshot()
+            .await;
         let base_groups: Vec<String> = self
             .state
             .session_manager
@@ -262,12 +279,14 @@ impl RpcHandler {
             });
         }
 
-        Ok(self.make_response_packet(request_id, "edge.batchPermissionQuery", |response| {
-            response.edge_batch_permission_query = Some(EdgeBatchPermissionQueryResult {
-                success: true,
-                entries,
-                error: None,
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.batchPermissionQuery", |response| {
+                response.edge_batch_permission_query = Some(EdgeBatchPermissionQueryResult {
+                    success: true,
+                    entries,
+                    error: None,
+                });
+            }),
+        )
     }
 }

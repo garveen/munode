@@ -138,7 +138,10 @@ impl ChannelManager {
         index.clear();
         for proto in sessions {
             let user = RemoteUser::from(proto);
-            index.entry(user.channel_id).or_default().insert(user.session_id);
+            index
+                .entry(user.channel_id)
+                .or_default()
+                .insert(user.session_id);
             for &ch in &user.listening_channels {
                 index.entry(ch).or_default().insert(user.session_id);
             }
@@ -172,7 +175,8 @@ impl ChannelManager {
 
         while let Some(parent_id) = queue.pop_front() {
             if let Some(child_ids) = children.get(&parent_id) {
-                let mut sorted: Vec<_> = child_ids.iter()
+                let mut sorted: Vec<_> = child_ids
+                    .iter()
                     .filter_map(|id| channels.get(id))
                     .cloned()
                     .collect();
@@ -189,7 +193,12 @@ impl ChannelManager {
 
     /// Get children of a channel.
     pub async fn get_children(&self, channel_id: u32) -> Vec<u32> {
-        self.channel_children.read().await.get(&channel_id).cloned().unwrap_or_default()
+        self.channel_children
+            .read()
+            .await
+            .get(&channel_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Add or update a channel.
@@ -293,7 +302,9 @@ impl ChannelManager {
 
     /// Get remote users in a specific channel (on other edges).
     pub async fn get_remote_users_in_channel(&self, channel_id: u32) -> Vec<RemoteUser> {
-        self.remote_users.read().await
+        self.remote_users
+            .read()
+            .await
             .values()
             .filter(|u| u.channel_id == channel_id)
             .cloned()
@@ -302,7 +313,10 @@ impl ChannelManager {
 
     /// Get all channels reachable from `start_channel_id` via channel links (BFS).
     /// Returns the set of all linked channel IDs including the start channel itself.
-    pub async fn get_all_linked_channels(&self, start_channel_id: u32) -> std::collections::HashSet<u32> {
+    pub async fn get_all_linked_channels(
+        &self,
+        start_channel_id: u32,
+    ) -> std::collections::HashSet<u32> {
         let channels = self.channels.read().await;
         let mut visited = std::collections::HashSet::new();
         let mut queue = std::collections::VecDeque::new();
@@ -328,7 +342,10 @@ impl ChannelManager {
     /// Lock ordering: snapshot session IDs under `channel_to_sessions` first, then release that
     /// lock before acquiring `remote_users`.  This prevents a deadlock with `upsert_remote_user`
     /// and `remove_remote_user`, which lock `remote_users` first then `channel_to_sessions`.
-    pub async fn get_remote_users_in_channels(&self, channel_ids: &std::collections::HashSet<u32>) -> Vec<RemoteUser> {
+    pub async fn get_remote_users_in_channels(
+        &self,
+        channel_ids: &std::collections::HashSet<u32>,
+    ) -> Vec<RemoteUser> {
         // Step 1: collect session IDs under the index lock, then release it.
         let mut session_ids = std::collections::HashSet::new();
         {
@@ -381,7 +398,12 @@ mod tests {
     use super::*;
     use munode_protocol::hubedge::{ChannelDataProto, ChannelLinkProto, GlobalSessionProto};
 
-    fn make_channel_proto(id: u32, parent_id: Option<u32>, name: &str, pos: i32) -> ChannelDataProto {
+    fn make_channel_proto(
+        id: u32,
+        parent_id: Option<u32>,
+        name: &str,
+        pos: i32,
+    ) -> ChannelDataProto {
         ChannelDataProto {
             channel_id: id,
             name: name.to_string(),
@@ -438,9 +460,10 @@ mod tests {
             make_channel_proto(1, Some(0), "A", 0),
             make_channel_proto(2, Some(0), "B", 1),
         ];
-        let links = vec![
-            ChannelLinkProto { channel_id: 1, target_id: 2 },
-        ];
+        let links = vec![ChannelLinkProto {
+            channel_id: 1,
+            target_id: 2,
+        }];
         mgr.load_channels(&channels, &links).await;
 
         let ch1 = mgr.get_channel(1).await.unwrap();
@@ -450,27 +473,25 @@ mod tests {
     #[tokio::test]
     async fn test_remote_users() {
         let mgr = ChannelManager::new();
-        let sessions = vec![
-            GlobalSessionProto {
-                session_id: 100,
-                edge_id: 1,
-                user_id: 10,
-                username: "alice".to_string(),
-                channel_id: 0,
-                cert_hash: None,
-                groups: vec![],
-                mute: None,
-                deaf: None,
-                suppress: None,
-                self_mute: None,
-                self_deaf: None,
-                priority_speaker: None,
-                recording: None,
-                ip_address: None,
-                connected_at: None,
-                listening_channels: vec![],
-            },
-        ];
+        let sessions = vec![GlobalSessionProto {
+            session_id: 100,
+            edge_id: 1,
+            user_id: 10,
+            username: "alice".to_string(),
+            channel_id: 0,
+            cert_hash: None,
+            groups: vec![],
+            mute: None,
+            deaf: None,
+            suppress: None,
+            self_mute: None,
+            self_deaf: None,
+            priority_speaker: None,
+            recording: None,
+            ip_address: None,
+            connected_at: None,
+            listening_channels: vec![],
+        }];
         mgr.load_remote_users(&sessions).await;
 
         let user = mgr.get_remote_user(100).await.unwrap();
@@ -493,7 +514,8 @@ mod tests {
             temporary: false,
             inherit_acl: true,
             links: vec![],
-        }).await;
+        })
+        .await;
 
         mgr.upsert_channel(ChannelData {
             id: 1,
@@ -505,7 +527,8 @@ mod tests {
             temporary: true,
             inherit_acl: true,
             links: vec![],
-        }).await;
+        })
+        .await;
 
         assert_eq!(mgr.get_children(0).await.len(), 1);
 
@@ -565,7 +588,8 @@ mod tests {
             temporary: false,
             inherit_acl: true,
             links: vec![],
-        }).await;
+        })
+        .await;
 
         let root_children = mgr.get_children(0).await;
         let parent_children = mgr.get_children(1).await;

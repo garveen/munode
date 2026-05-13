@@ -6,8 +6,8 @@ use bytes::BytesMut;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use munode_client::{ClientEvent, ConnectOptions, MumbleClient};
 use munode_client::connection::connect_tls;
+use munode_client::{ClientEvent, ConnectOptions, MumbleClient};
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
 use munode_protocol::transport::{decode_frame, encode_message};
@@ -16,7 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::harness::{
-    cleanup_clients, single_edge_env, sleep_ms, ClientConfig, TestEnvBuilder, create_clients,
+    ClientConfig, TestEnvBuilder, cleanup_clients, create_clients, single_edge_env, sleep_ms,
 };
 
 struct RawLoginCapture {
@@ -93,14 +93,17 @@ async fn capture_raw_login_messages(
         }
 
         if server_sync.is_some() && server_config.is_some() {
-            match tokio::time::timeout(Duration::from_millis(150), reader.read_buf(&mut read_buf)).await {
+            match tokio::time::timeout(Duration::from_millis(150), reader.read_buf(&mut read_buf))
+                .await
+            {
                 Ok(Ok(0)) | Err(_) => break,
                 Ok(Ok(_)) => continue,
                 Ok(Err(e)) => return Err(e).context("read additional login frames"),
             }
         }
 
-        let Some(remaining) = overall_deadline.checked_duration_since(tokio::time::Instant::now()) else {
+        let Some(remaining) = overall_deadline.checked_duration_since(tokio::time::Instant::now())
+        else {
             break;
         };
         match tokio::time::timeout(remaining, reader.read_buf(&mut read_buf)).await {
@@ -134,7 +137,10 @@ async fn spawn_raw_user_state_observer(
     };
     let mut out = BytesMut::new();
     encode_message(MessageType::Version, &version, &mut out);
-    writer.write_all(&out).await.context("send observer Version")?;
+    writer
+        .write_all(&out)
+        .await
+        .context("send observer Version")?;
 
     let auth = mumbleproto::Authenticate {
         username: Some(username.to_string()),
@@ -145,7 +151,10 @@ async fn spawn_raw_user_state_observer(
     };
     out.clear();
     encode_message(MessageType::Authenticate, &auth, &mut out);
-    writer.write_all(&out).await.context("send observer Authenticate")?;
+    writer
+        .write_all(&out)
+        .await
+        .context("send observer Authenticate")?;
 
     let (tx, rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -166,7 +175,9 @@ async fn spawn_raw_user_state_observer(
                         let sync = mumbleproto::ServerSync::decode(&*frame.payload)
                             .context("decode observer ServerSync")?;
                         if let Some(ready_tx) = ready_tx.take() {
-                            let session_id = sync.session.context("observer ServerSync missing session")?;
+                            let session_id = sync
+                                .session
+                                .context("observer ServerSync missing session")?;
                             let _ = ready_tx.send(session_id);
                         }
                     }
@@ -175,7 +186,9 @@ async fn spawn_raw_user_state_observer(
             }
 
             if ready_tx.is_some() {
-                let Some(remaining) = overall_deadline.checked_duration_since(tokio::time::Instant::now()) else {
+                let Some(remaining) =
+                    overall_deadline.checked_duration_since(tokio::time::Instant::now())
+                else {
                     break;
                 };
                 match tokio::time::timeout(remaining, reader.read_buf(&mut read_buf)).await {
@@ -201,7 +214,11 @@ async fn spawn_raw_user_state_observer(
         .context("timed out waiting for observer ServerSync")?
         .context("observer handshake task ended before ServerSync")?;
 
-    Ok(RawUserStateObserver { session_id, rx, task })
+    Ok(RawUserStateObserver {
+        session_id,
+        rx,
+        task,
+    })
 }
 
 // ── HTTP auth server API ──────────────────────────────────────────────────
@@ -287,9 +304,14 @@ async fn test_auth_server_returns_groups() -> Result<()> {
         .await?;
 
     let body: serde_json::Value = resp.json().await?;
-    let groups = body["groups"].as_array().expect("groups should be an array");
+    let groups = body["groups"]
+        .as_array()
+        .expect("groups should be an array");
     let group_strs: Vec<&str> = groups.iter().filter_map(|g| g.as_str()).collect();
-    assert!(group_strs.contains(&"admin"), "admin user should be in 'admin' group");
+    assert!(
+        group_strs.contains(&"admin"),
+        "admin user should be in 'admin' group"
+    );
     Ok(())
 }
 
@@ -300,10 +322,10 @@ async fn test_auth_server_multiple_users() -> Result<()> {
     let url = format!("http://127.0.0.1:{}/auth", env.auth_port);
 
     let test_cases = vec![
-        ("admin",  "admin123",  1u64),
-        ("user1",  "password1", 2),
-        ("user2",  "password2", 3),
-        ("guest",  "guest123",  4),
+        ("admin", "admin123", 1u64),
+        ("user1", "password1", 2),
+        ("user2", "password2", 3),
+        ("guest", "guest123", 4),
     ];
 
     for (username, password, expected_id) in test_cases {
@@ -317,9 +339,16 @@ async fn test_auth_server_multiple_users() -> Result<()> {
             .send()
             .await?;
 
-        assert_eq!(resp.status().as_u16(), 200, "User {username} should auth OK");
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "User {username} should auth OK"
+        );
         let body: serde_json::Value = resp.json().await?;
-        assert_eq!(body["success"], true, "User {username} success should be true");
+        assert_eq!(
+            body["success"], true,
+            "User {username} success should be true"
+        );
         assert_eq!(body["user_id"], expected_id, "User {username} ID mismatch");
     }
     Ok(())
@@ -370,7 +399,10 @@ async fn try_connect_expect_reject(port: u16, username: &str, password: &str) ->
 async fn test_wrong_password_causes_reject() -> Result<()> {
     let env = single_edge_env().await?;
     let got_reject = try_connect_expect_reject(env.edge1(), "admin", "wrongpassword").await;
-    assert!(got_reject, "Should receive Reject message for wrong password");
+    assert!(
+        got_reject,
+        "Should receive Reject message for wrong password"
+    );
     Ok(())
 }
 
@@ -378,7 +410,10 @@ async fn test_wrong_password_causes_reject() -> Result<()> {
 async fn test_nonexistent_user_causes_reject() -> Result<()> {
     let env = single_edge_env().await?;
     let got_reject = try_connect_expect_reject(env.edge1(), "nobody_xyz", "password").await;
-    assert!(got_reject, "Should receive Reject message for nonexistent user");
+    assert!(
+        got_reject,
+        "Should receive Reject message for nonexistent user"
+    );
     Ok(())
 }
 
@@ -408,7 +443,10 @@ async fn test_multiple_wrong_passwords_all_rejected() -> Result<()> {
 async fn test_correct_credentials_succeed() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
-    assert!(clients[0].is_connected(), "Correct credentials should succeed");
+    assert!(
+        clients[0].is_connected(),
+        "Correct credentials should succeed"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -595,7 +633,9 @@ async fn test_login_other_user_state_omits_spurious_false_booleans() -> Result<(
     let mut observer = spawn_raw_user_state_observer(env.edge1(), "user1", "password1").await?;
 
     let clients = create_clients(&env, &[ClientConfig::new("user2", 1)]).await?;
-    let joining_session = clients[0].session_id().context("user2 missing session id")?;
+    let joining_session = clients[0]
+        .session_id()
+        .context("user2 missing session id")?;
 
     let observed_state = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -611,16 +651,20 @@ async fn test_login_other_user_state_omits_spurious_false_booleans() -> Result<(
     .context("timed out waiting for observer to receive other-user UserState")?
     .context("observer stream ended before other-user UserState arrived")?;
 
-    assert_eq!(observed_state.mute, None, "other-user join UserState should omit mute=false");
-    assert_eq!(observed_state.deaf, None, "other-user join UserState should omit deaf=false");
     assert_eq!(
-        observed_state.priority_speaker,
-        None,
+        observed_state.mute, None,
+        "other-user join UserState should omit mute=false"
+    );
+    assert_eq!(
+        observed_state.deaf, None,
+        "other-user join UserState should omit deaf=false"
+    );
+    assert_eq!(
+        observed_state.priority_speaker, None,
         "other-user join UserState should omit priority_speaker=false"
     );
     assert_eq!(
-        observed_state.recording,
-        None,
+        observed_state.recording, None,
         "other-user join UserState should omit recording=false"
     );
 

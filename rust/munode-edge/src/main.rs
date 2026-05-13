@@ -18,7 +18,8 @@ async fn main() -> Result<()> {
 
     // Subcommand: `validate-config [path]`
     if args.get(1).map(|s| s.as_str()) == Some("validate-config") {
-        let config_path = args.get(2)
+        let config_path = args
+            .get(2)
             .map(|s| s.as_str())
             .unwrap_or("config/edge.toml");
         match load_edge_config(config_path) {
@@ -27,7 +28,10 @@ async fn main() -> Result<()> {
                 println!("   {:<14} {}", "server_id:", cfg.server_id);
                 println!("   {:<14} {}", "name:", cfg.name);
                 println!("   {:<14} {}", "port:", cfg.network.port);
-                println!("   {:<14} {}:{}", "hub:", cfg.hub_server.host, cfg.hub_server.control_port);
+                println!(
+                    "   {:<14} {}:{}",
+                    "hub:", cfg.hub_server.host, cfg.hub_server.control_port
+                );
                 println!("   {:<14} {}", "log_level:", cfg.log_level);
             }
             Err(e) => {
@@ -40,7 +44,8 @@ async fn main() -> Result<()> {
 
     // Subcommand: `diagnose [path]`
     if args.get(1).map(|s| s.as_str()) == Some("diagnose") {
-        let config_path = args.get(2)
+        let config_path = args
+            .get(2)
             .map(|s| s.as_str())
             .unwrap_or("config/edge.toml");
 
@@ -102,18 +107,40 @@ async fn main() -> Result<()> {
         println!("   {:<22} {}", "server_id:", cfg.server_id);
         println!("   {:<22} {}", "name:", cfg.name);
         println!("   {:<22} {}", "port:", cfg.network.port);
-        println!("   {:<22} {}", "edge_port:", cfg.network.edge_port.map(|p| p.to_string()).unwrap_or_else(|| "auto".to_string()));
+        println!(
+            "   {:<22} {}",
+            "edge_port:",
+            cfg.network
+                .edge_port
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "auto".to_string())
+        );
         println!("   {:<22} {}", "external_host:", cfg.network.external_host);
-        println!("   {:<22} {}:{}", "hub:", cfg.hub_server.host, cfg.hub_server.control_port);
+        println!(
+            "   {:<22} {}:{}",
+            "hub:", cfg.hub_server.host, cfg.hub_server.control_port
+        );
         println!("   {:<22} {}", "pool_size:", cfg.hub_server.pool_size);
         println!("   {:<22} {}", "capacity:", cfg.server.capacity);
-        println!("   {:<22} {}", "hub_tcp_fallback:", cfg.voice_routing.enable_hub_tcp_fallback);
-        println!("   {:<22} {}", "failure_threshold:", cfg.voice_routing.consecutive_failure_threshold);
+        println!(
+            "   {:<22} {}",
+            "hub_tcp_fallback:", cfg.voice_routing.enable_hub_tcp_fallback
+        );
+        println!(
+            "   {:<22} {}",
+            "failure_threshold:", cfg.voice_routing.consecutive_failure_threshold
+        );
         // The combined relay/voice WebSocket server always listens on edge_port.
         let edge_port = cfg.network.edge_port.unwrap_or(cfg.network.port + 1);
-        println!("   {:<22} {} (port {})", "control_relay:", "enabled", edge_port);
+        println!(
+            "   {:<22} {} (port {})",
+            "control_relay:", "enabled", edge_port
+        );
         if !cfg.hub_server.static_peers.is_empty() {
-            let peers: Vec<String> = cfg.hub_server.static_peers.iter()
+            let peers: Vec<String> = cfg
+                .hub_server
+                .static_peers
+                .iter()
                 .map(|p| format!("{}:{}", p.host, p.relay_port))
                 .collect();
             println!("   {:<22} {}", "static_peers:", peers.join(", "));
@@ -127,17 +154,20 @@ async fn main() -> Result<()> {
     // Subcommand: `generate-config [path]`
     //   Write a default Edge TOML configuration file.
     if args.get(1).map(|s| s.as_str()) == Some("generate-config") {
-        let output_path = args.get(2)
-            .map(|s| s.as_str())
-            .unwrap_or("edge.toml");
+        let output_path = args.get(2).map(|s| s.as_str()).unwrap_or("edge.toml");
 
         if std::path::Path::new(output_path).exists() {
-            eprintln!("❌ File already exists: {}. Use a different path or remove the existing file.", output_path);
+            eprintln!(
+                "❌ File already exists: {}. Use a different path or remove the existing file.",
+                output_path
+            );
             std::process::exit(1);
         }
 
-        std::fs::write(output_path, DEFAULT_EDGE_CONFIG)
-            .unwrap_or_else(|e| { eprintln!("❌ Cannot write config to '{}': {}", output_path, e); std::process::exit(1); });
+        std::fs::write(output_path, DEFAULT_EDGE_CONFIG).unwrap_or_else(|e| {
+            eprintln!("❌ Cannot write config to '{}': {}", output_path, e);
+            std::process::exit(1);
+        });
 
         println!("✅ Default Edge config written to '{}'", output_path);
         println!("   Edit the file and update:");
@@ -146,11 +176,15 @@ async fn main() -> Result<()> {
         println!("   - tls.cert / tls.key    (TLS certificate and private key paths)");
         println!("   - hub_server.host       (Hub server hostname)");
         println!("   - hub_server.hmac_secret (must match Hub registry.hmac_secret)");
-        println!("   Run 'munode-edge validate-config {}' to verify.", output_path);
+        println!(
+            "   Run 'munode-edge validate-config {}' to verify.",
+            output_path
+        );
         return Ok(());
     }
 
-    let config_path = args.get(1)
+    let config_path = args
+        .get(1)
         .map(|s| s.as_str())
         .unwrap_or("config/edge.toml")
         .to_string();

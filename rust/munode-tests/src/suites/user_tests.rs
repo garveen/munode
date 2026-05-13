@@ -8,8 +8,8 @@ use anyhow::Result;
 use munode_client::{ClientEvent, DenyReason};
 
 use crate::harness::{
-    cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig, TestEnvBuilder,
-    create_clients,
+    ClientConfig, TestEnvBuilder, cleanup_clients, create_clients, single_edge_env, sleep_ms,
+    standard_env,
 };
 
 // ── User state broadcasting ───────────────────────────────────────────────
@@ -33,10 +33,7 @@ async fn test_user_list_includes_self() -> Result<()> {
 #[tokio::test]
 async fn test_user_state_self_mute_broadcast() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
 
@@ -69,10 +66,7 @@ async fn test_user_state_self_mute_broadcast() -> Result<()> {
 #[tokio::test]
 async fn test_user_state_self_deaf_broadcast() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
 
@@ -105,10 +99,7 @@ async fn test_user_state_self_deaf_broadcast() -> Result<()> {
 #[tokio::test]
 async fn test_user_state_cross_edge_broadcast() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 2),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 2)];
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
     sleep_ms(500).await;
@@ -144,10 +135,7 @@ async fn test_user_state_cross_edge_broadcast() -> Result<()> {
 #[tokio::test]
 async fn test_text_message_to_channel() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
@@ -164,9 +152,9 @@ async fn test_text_message_to_channel() -> Result<()> {
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::TextMessage { sender, message, .. })
-                    if sender == sender_session && message == "Hello, world!" =>
-                {
+                Ok(ClientEvent::TextMessage {
+                    sender, message, ..
+                }) if sender == sender_session && message == "Hello, world!" => {
                     break true;
                 }
                 Ok(_) => continue,
@@ -185,10 +173,7 @@ async fn test_text_message_to_channel() -> Result<()> {
 #[tokio::test]
 async fn test_text_message_cross_edge() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 2),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 2)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
@@ -204,9 +189,9 @@ async fn test_text_message_cross_edge() -> Result<()> {
     let got = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::TextMessage { sender, message, .. })
-                    if sender == sender_session && message == "Cross-edge message" =>
-                {
+                Ok(ClientEvent::TextMessage {
+                    sender, message, ..
+                }) if sender == sender_session && message == "Cross-edge message" => {
                     break true;
                 }
                 Ok(_) => continue,
@@ -217,7 +202,10 @@ async fn test_text_message_cross_edge() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(got, "Text message should reach cross-edge user in same channel");
+    assert!(
+        got,
+        "Text message should reach cross-edge user in same channel"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -233,10 +221,7 @@ async fn test_text_message_within_configured_limit_succeeds() -> Result<()> {
         .await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("user1", 1),
-            ClientConfig::new("user2", 1),
-        ],
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)],
     )
     .await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
@@ -255,9 +240,11 @@ async fn test_text_message_within_configured_limit_succeeds() -> Result<()> {
     let delivered = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match text_rx.recv().await {
-                Ok(ClientEvent::TextMessage { sender, message: got, .. })
-                    if sender == sender_session && got == message =>
-                {
+                Ok(ClientEvent::TextMessage {
+                    sender,
+                    message: got,
+                    ..
+                }) if sender == sender_session && got == message => {
                     break true;
                 }
                 Ok(_) => continue,
@@ -332,10 +319,7 @@ async fn test_oversized_text_message_is_rejected_without_disconnect() -> Result<
 #[tokio::test]
 async fn test_private_message_to_session() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
@@ -343,14 +327,17 @@ async fn test_private_message_to_session() -> Result<()> {
     let sender_session = sender.session_id().unwrap();
     let mut rx = receiver.subscribe();
 
-    sender.user(receiver_session).send_text("Private hello").await?;
+    sender
+        .user(receiver_session)
+        .send_text("Private hello")
+        .await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::TextMessage { sender, message, .. })
-                    if sender == sender_session && message == "Private hello" =>
-                {
+                Ok(ClientEvent::TextMessage {
+                    sender, message, ..
+                }) if sender == sender_session && message == "Private hello" => {
                     break true;
                 }
                 Ok(_) => continue,
@@ -371,10 +358,7 @@ async fn test_private_message_to_session() -> Result<()> {
 #[tokio::test]
 async fn test_set_and_receive_comment() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
 

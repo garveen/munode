@@ -3,20 +3,18 @@
 //! This module extends `HubClient` with all outbound RPC calls and fire-and-forget
 //! notifications that the Edge sends to the Hub on behalf of connected clients.
 
-
 use anyhow::{Context, Result};
 use prost::Message;
 use tracing::{debug, info, warn};
 
 use munode_protocol::hubedge::{
-    self, EdgeAuthenticateUserParams, EdgeHandleAclParams, EdgePluginDataTransmissionParams,
-    EdgeHandleUserLeftParams, EdgeHandleUserRemoveParams,
-    EdgeHandleUserMovedParams, EdgeHandleUserStateChangedParams, EdgeHandleTextMessageParams,
-    EdgeHandleChannelStateParams, EdgeHandleChannelRemoveParams,
-    EdgeContextActionParams,
-    BlobPutParams, BlobGetParams, BlobGetUserTextureParams, BlobGetUserCommentParams,
-    BlobSetUserTextureParams, BlobSetUserCommentParams,
-    TypedRpcRequest, TypedRpcNotification, EdgeHubPacket, PacketType,
+    self, BlobGetParams, BlobGetUserCommentParams, BlobGetUserTextureParams, BlobPutParams,
+    BlobSetUserCommentParams, BlobSetUserTextureParams, EdgeAuthenticateUserParams,
+    EdgeContextActionParams, EdgeHandleAclParams, EdgeHandleChannelRemoveParams,
+    EdgeHandleChannelStateParams, EdgeHandleTextMessageParams, EdgeHandleUserLeftParams,
+    EdgeHandleUserMovedParams, EdgeHandleUserRemoveParams, EdgeHandleUserStateChangedParams,
+    EdgeHubPacket, EdgePluginDataTransmissionParams, PacketType, TypedRpcNotification,
+    TypedRpcRequest,
 };
 
 use crate::state::EdgeEvent;
@@ -29,7 +27,12 @@ impl HubClient {
             return (client.user_id, client.username);
         }
 
-        if let Some(remote_user) = self.edge_state.channel_manager.get_remote_user(session_id).await {
+        if let Some(remote_user) = self
+            .edge_state
+            .channel_manager
+            .get_remote_user(session_id)
+            .await
+        {
             return (remote_user.user_id, remote_user.username);
         }
 
@@ -47,8 +50,12 @@ impl HubClient {
                 // Re-enable accepting_connections eagerly before emitting the event,
                 // so the event-listener async delay doesn't leave a window where
                 // Hub is reachable but new connections are refused.
-                self.edge_state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
-                self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
+                self.edge_state
+                    .accepting_connections
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.edge_state.emit(EdgeEvent::HubRegistered {
+                    disappeared_session_ids: disappeared,
+                });
                 info!("Full-sync triggered after event-bus Lagged");
             }
             Err(e) => {
@@ -91,10 +98,13 @@ impl HubClient {
             ..Default::default()
         };
 
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.authenticateUser RPC failed")?;
 
-        response.edge_authenticate_user
+        response
+            .edge_authenticate_user
             .ok_or_else(|| anyhow::anyhow!("No edge_authenticate_user in response"))
     }
 
@@ -118,12 +128,16 @@ impl HubClient {
             ..Default::default()
         };
         if let Err(e) = self.rpc_call(request).await {
-            warn!("Failed to report user disconnect to Hub (session={}): {}", session_id, e);
+            warn!(
+                "Failed to report user disconnect to Hub (session={}): {}",
+                session_id, e
+            );
             // Enqueue so it is replayed after the next successful Hub reconnect.
             self.enqueue_pending_notification(PendingControlNotification::UserLeft {
                 session_id,
                 reason: reason.map(String::from),
-            }).await;
+            })
+            .await;
         }
     }
 
@@ -157,9 +171,12 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.userRemove RPC failed")?;
-        let result = response.edge_user_remove
+        let result = response
+            .edge_user_remove
             .ok_or_else(|| anyhow::anyhow!("No edge_user_remove in response"))?;
         Ok(result.success)
     }
@@ -168,7 +185,12 @@ impl HubClient {
     /// Hub updates session_manager, broadcasts hub.userMoved to OTHER edges, responds.
     /// The requesting edge applies the move locally after confirmation.
     /// Returns `Err` if the Hub rejected the move (e.g. channel full).
-    pub async fn rpc_user_moved(&self, session_id: u32, channel_id: u32, actor_session: u32) -> Result<()> {
+    pub async fn rpc_user_moved(
+        &self,
+        session_id: u32,
+        channel_id: u32,
+        actor_session: u32,
+    ) -> Result<()> {
         let edge_id = self.edge_id();
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
@@ -183,12 +205,18 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.userMoved RPC failed")?;
-        let result = response.edge_user_moved
+        let result = response
+            .edge_user_moved
             .ok_or_else(|| anyhow::anyhow!("No edge_user_moved in response"))?;
         if !result.success {
-            return Err(anyhow::anyhow!("edge.userMoved rejected: {}", result.error.as_deref().unwrap_or("unknown")));
+            return Err(anyhow::anyhow!(
+                "edge.userMoved rejected: {}",
+                result.error.as_deref().unwrap_or("unknown")
+            ));
         }
         Ok(())
     }
@@ -232,9 +260,12 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.userStateChanged RPC failed")?;
-        response.edge_user_state_changed
+        response
+            .edge_user_state_changed
             .ok_or_else(|| anyhow::anyhow!("No edge_user_state_changed in response"))?;
         Ok(())
     }
@@ -263,9 +294,12 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.handlePermissionQuery RPC failed")?;
-        response.edge_handle_permission_query
+        response
+            .edge_handle_permission_query
             .ok_or_else(|| anyhow::anyhow!("No edge_handle_permission_query in response"))
     }
 
@@ -295,12 +329,14 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.batchPermissionQuery RPC failed")?;
-        response.edge_batch_permission_query
+        response
+            .edge_batch_permission_query
             .ok_or_else(|| anyhow::anyhow!("No edge_batch_permission_query in response"))
     }
-
 
     pub async fn sync_voice_target(
         &self,
@@ -322,9 +358,12 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.syncVoiceTarget RPC failed")?;
-        response.edge_sync_voice_target
+        response
+            .edge_sync_voice_target
             .ok_or_else(|| anyhow::anyhow!("No edge_sync_voice_target in response"))
     }
 
@@ -360,10 +399,13 @@ impl HubClient {
             ..Default::default()
         };
 
-        let response = self.rpc_call(request).await
+        let response = self
+            .rpc_call(request)
+            .await
             .context("edge.saveChannel RPC failed")?;
 
-        response.edge_save_channel
+        response
+            .edge_save_channel
             .ok_or_else(|| anyhow::anyhow!("No edge_save_channel in response"))
     }
 
@@ -389,11 +431,17 @@ impl HubClient {
             Ok(resp) => {
                 if let Some(result) = resp.edge_save_channel_listeners {
                     if !result.success {
-                        warn!("Hub rejected channel listeners save for user {}: {:?}", user_id, result.error);
+                        warn!(
+                            "Hub rejected channel listeners save for user {}: {:?}",
+                            user_id, result.error
+                        );
                     }
                 }
             }
-            Err(e) => warn!("Failed to save channel listeners for user {}: {}", user_id, e),
+            Err(e) => warn!(
+                "Failed to save channel listeners for user {}: {}",
+                user_id, e
+            ),
         }
     }
 
@@ -409,19 +457,19 @@ impl HubClient {
             request_id: self.next_request_id(),
             method: "edge.loadChannelListeners".to_string(),
             timeout_ms: Some(5000),
-            edge_load_channel_listeners: Some(hubedge::EdgeLoadChannelListenersParams {
-                user_id,
-            }),
+            edge_load_channel_listeners: Some(hubedge::EdgeLoadChannelListenersParams { user_id }),
             ..Default::default()
         };
         match self.rpc_call(request).await {
-            Ok(resp) => {
-                resp.edge_load_channel_listeners
-                    .map(|r| if r.success { r.channel_ids } else { vec![] })
-                    .unwrap_or_default()
-            }
+            Ok(resp) => resp
+                .edge_load_channel_listeners
+                .map(|r| if r.success { r.channel_ids } else { vec![] })
+                .unwrap_or_default(),
             Err(e) => {
-                warn!("Failed to load channel listeners for user {}: {}", user_id, e);
+                warn!(
+                    "Failed to load channel listeners for user {}: {}",
+                    user_id, e
+                );
                 vec![]
             }
         }
@@ -457,12 +505,16 @@ impl HubClient {
             ..Default::default()
         };
         if let Err(e) = self.rpc_call(request).await {
-            warn!("Failed to notify Hub of channel state (session={}): {}", channel_id, e);
+            warn!(
+                "Failed to notify Hub of channel state (session={}): {}",
+                channel_id, e
+            );
             self.enqueue_pending_notification(PendingControlNotification::ChannelLinksChanged {
                 channel_id,
                 links_add: links_add_save,
                 links_remove: links_remove_save,
-            }).await;
+            })
+            .await;
         }
     }
 
@@ -483,15 +535,23 @@ impl HubClient {
             ..Default::default()
         };
         if let Err(e) = self.rpc_call(request).await {
-            warn!("Failed to notify Hub of channel remove (channel={}): {}", channel_id, e);
+            warn!(
+                "Failed to notify Hub of channel remove (channel={}): {}",
+                channel_id, e
+            );
             self.enqueue_pending_notification(PendingControlNotification::ChannelRemoved {
                 channel_id,
-            }).await;
+            })
+            .await;
         }
     }
 
     /// Forward a text message to Hub for cross-edge delivery.
-    pub async fn notify_text_message(&self, sender_session: u32, text_msg: &munode_protocol::mumbleproto::TextMessage) {
+    pub async fn notify_text_message(
+        &self,
+        sender_session: u32,
+        text_msg: &munode_protocol::mumbleproto::TextMessage,
+    ) {
         let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleTextMessage".to_string(),
@@ -734,8 +794,13 @@ impl HubClient {
             ..Default::default()
         };
         match self.rpc_call(request).await {
-            Ok(resp) => resp.blob_put.and_then(|r| if r.success { r.hash } else { None }),
-            Err(e) => { warn!("blob.put failed: {}", e); None }
+            Ok(resp) => resp
+                .blob_put
+                .and_then(|r| if r.success { r.hash } else { None }),
+            Err(e) => {
+                warn!("blob.put failed: {}", e);
+                None
+            }
         }
     }
 
@@ -744,12 +809,19 @@ impl HubClient {
         let request = TypedRpcRequest {
             request_id: self.next_request_id(),
             method: "blob.get".to_string(),
-            blob_get: Some(BlobGetParams { hash: hash.to_string() }),
+            blob_get: Some(BlobGetParams {
+                hash: hash.to_string(),
+            }),
             ..Default::default()
         };
         match self.rpc_call(request).await {
-            Ok(resp) => resp.blob_get.and_then(|r| if r.success { r.data } else { None }),
-            Err(e) => { warn!("blob.get failed: {}", e); None }
+            Ok(resp) => resp
+                .blob_get
+                .and_then(|r| if r.success { r.data } else { None }),
+            Err(e) => {
+                warn!("blob.get failed: {}", e);
+                None
+            }
         }
     }
 
@@ -763,9 +835,16 @@ impl HubClient {
         };
         match self.rpc_call(request).await {
             Ok(resp) => resp.blob_get_user_texture.and_then(|r| {
-                if r.success { Some((r.hash.unwrap_or_default(), r.data.unwrap_or_default())) } else { None }
+                if r.success {
+                    Some((r.hash.unwrap_or_default(), r.data.unwrap_or_default()))
+                } else {
+                    None
+                }
             }),
-            Err(e) => { warn!("blob.getUserTexture failed: {}", e); None }
+            Err(e) => {
+                warn!("blob.getUserTexture failed: {}", e);
+                None
+            }
         }
     }
 
@@ -779,9 +858,16 @@ impl HubClient {
         };
         match self.rpc_call(request).await {
             Ok(resp) => resp.blob_get_user_comment.and_then(|r| {
-                if r.success { Some((r.hash.unwrap_or_default(), r.data.unwrap_or_default())) } else { None }
+                if r.success {
+                    Some((r.hash.unwrap_or_default(), r.data.unwrap_or_default()))
+                } else {
+                    None
+                }
             }),
-            Err(e) => { warn!("blob.getUserComment failed: {}", e); None }
+            Err(e) => {
+                warn!("blob.getUserComment failed: {}", e);
+                None
+            }
         }
     }
 
@@ -794,8 +880,13 @@ impl HubClient {
             ..Default::default()
         };
         match self.rpc_call(request).await {
-            Ok(resp) => resp.blob_set_user_texture.and_then(|r| if r.success { r.hash } else { None }),
-            Err(e) => { warn!("blob.setUserTexture failed: {}", e); None }
+            Ok(resp) => resp
+                .blob_set_user_texture
+                .and_then(|r| if r.success { r.hash } else { None }),
+            Err(e) => {
+                warn!("blob.setUserTexture failed: {}", e);
+                None
+            }
         }
     }
 
@@ -808,8 +899,13 @@ impl HubClient {
             ..Default::default()
         };
         match self.rpc_call(request).await {
-            Ok(resp) => resp.blob_set_user_comment.and_then(|r| if r.success { r.hash } else { None }),
-            Err(e) => { warn!("blob.setUserComment failed: {}", e); None }
+            Ok(resp) => resp
+                .blob_set_user_comment
+                .and_then(|r| if r.success { r.hash } else { None }),
+            Err(e) => {
+                warn!("blob.setUserComment failed: {}", e);
+                None
+            }
         }
     }
 
@@ -843,12 +939,22 @@ impl HubClient {
         };
         let data = packet.encode_to_vec();
         if let Err(e) = self.send_raw(data).await {
-            debug!("relay_voice_via_hub to edge {} failed (send): {}", target_edge_id, e);
+            debug!(
+                "relay_voice_via_hub to edge {} failed (send): {}",
+                target_edge_id, e
+            );
         }
     }
 
     /// Report link quality to a peer Edge to Hub for route table computation.
-    pub async fn report_quality(&self, target_edge_id: u32, rtt_ms: f32, packet_loss: f32, jitter_ms: f32, samples: u32) {
+    pub async fn report_quality(
+        &self,
+        target_edge_id: u32,
+        rtt_ms: f32,
+        packet_loss: f32,
+        jitter_ms: f32,
+        samples: u32,
+    ) {
         let from_edge_id = self.edge_id();
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
@@ -893,7 +999,8 @@ impl HubClient {
         };
         match self.rpc_call(request).await {
             Ok(resp) => {
-                let action = resp.edge_report_peer_disconnect
+                let action = resp
+                    .edge_report_peer_disconnect
                     .as_ref()
                     .map(|r| r.action.as_str())
                     .unwrap_or("unknown");
@@ -903,7 +1010,10 @@ impl HubClient {
                 );
             }
             Err(e) => {
-                warn!("Failed to report peer {} disconnect to Hub: {}", remote_edge_id, e);
+                warn!(
+                    "Failed to report peer {} disconnect to Hub: {}",
+                    remote_edge_id, e
+                );
             }
         }
     }
@@ -932,7 +1042,3 @@ pub(super) fn current_millis() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-
-
-
-

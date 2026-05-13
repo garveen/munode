@@ -28,11 +28,12 @@ pub(crate) fn parse_socket_addr(host: &str, port: u16) -> anyhow::Result<SocketA
     } else {
         format!("{}:{}", host, port)
     };
-    addr_str.parse::<SocketAddr>().map_err(|e| anyhow::anyhow!("invalid address '{}': {}", addr_str, e))
+    addr_str
+        .parse::<SocketAddr>()
+        .map_err(|e| anyhow::anyhow!("invalid address '{}': {}", addr_str, e))
 }
 
 /// The main Edge server.
-
 pub(crate) mod connection;
 mod event_listener;
 mod proxy_protocol;
@@ -47,12 +48,24 @@ pub struct EdgeServer {
 
 impl EdgeServer {
     pub fn new(config: EdgeConfig) -> Self {
-        Self { config, config_path: None, log_reload: None }
+        Self {
+            config,
+            config_path: None,
+            log_reload: None,
+        }
     }
 
     /// Create a new EdgeServer with the config file path for hot-reload support.
-    pub fn new_with_path(config: EdgeConfig, config_path: String, log_reload: LogReloadHandle) -> Self {
-        Self { config, config_path: Some(config_path), log_reload: Some(log_reload) }
+    pub fn new_with_path(
+        config: EdgeConfig,
+        config_path: String,
+        log_reload: LogReloadHandle,
+    ) -> Self {
+        Self {
+            config,
+            config_path: Some(config_path),
+            log_reload: Some(log_reload),
+        }
     }
 
     /// Run the edge server.
@@ -90,12 +103,24 @@ impl EdgeServer {
         });
 
         // Start UDP server (needs hub_client for cross-edge relay)
-        let udp_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
-            .parse()?;
-        let edge_port = self.config.network.edge_port.unwrap_or(self.config.network.port + 1);
-        let edge_udp_addr: SocketAddr = format!("{}:{}", self.config.network.host, edge_port)
-            .parse()?;
-        let udp_server = Arc::new(UdpServer::new(udp_addr, edge_udp_addr, edge_state.clone(), hub_client.clone()).await?);
+        let udp_addr: SocketAddr =
+            format!("{}:{}", self.config.network.host, self.config.network.port).parse()?;
+        let edge_port = self
+            .config
+            .network
+            .edge_port
+            .unwrap_or(self.config.network.port + 1);
+        let edge_udp_addr: SocketAddr =
+            format!("{}:{}", self.config.network.host, edge_port).parse()?;
+        let udp_server = Arc::new(
+            UdpServer::new(
+                udp_addr,
+                edge_udp_addr,
+                edge_state.clone(),
+                hub_client.clone(),
+            )
+            .await?,
+        );
         let udp_handle = tokio::spawn({
             let udp = Arc::clone(&udp_server);
             async move {
@@ -114,7 +139,13 @@ impl EdgeServer {
             let mut event_rx = edge_state.subscribe_events();
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                event_listener::hub_event_listener(state, &mut event_rx, shutdown_tx, hub_client_for_events).await;
+                event_listener::hub_event_listener(
+                    state,
+                    &mut event_rx,
+                    shutdown_tx,
+                    hub_client_for_events,
+                )
+                .await;
             }
         });
 
@@ -125,7 +156,7 @@ impl EdgeServer {
             let reload_state = edge_state.clone();
             let log_reload = self.log_reload.clone();
             tokio::spawn(async move {
-                use tokio::signal::unix::{signal, SignalKind};
+                use tokio::signal::unix::{SignalKind, signal};
                 let mut sighup = match signal(SignalKind::hangup()) {
                     Ok(s) => s,
                     Err(e) => {
@@ -154,7 +185,10 @@ impl EdgeServer {
                                 );
                             }
                             Err(e) => {
-                                warn!("SIGHUP hot-reload failed — could not parse config '{}': {}", path, e);
+                                warn!(
+                                    "SIGHUP hot-reload failed — could not parse config '{}': {}",
+                                    path, e
+                                );
                             }
                         }
                     } else {
@@ -171,7 +205,10 @@ impl EdgeServer {
             let relay_hmac_secret = self.config.hub_server.hmac_secret.clone();
             let edge_state_clone = edge_state.clone();
             let hub_client_clone = hub_client.clone();
-            info!("Starting edge WS server (relay+voice) on port {}", edge_port);
+            info!(
+                "Starting edge WS server (relay+voice) on port {}",
+                edge_port
+            );
             tokio::spawn(async move {
                 crate::relay_server::run_edge_ws_server(
                     edge_port as u16,
@@ -193,8 +230,13 @@ impl EdgeServer {
             let web_api_state = edge_state.clone();
             tokio::spawn(async move {
                 if let Err(e) = crate::web_api::run_web_api(
-                    &web_api_host, web_api_port, web_api_state, web_api_token,
-                ).await {
+                    &web_api_host,
+                    web_api_port,
+                    web_api_state,
+                    web_api_token,
+                )
+                .await
+                {
                     error!("Edge Web API error: {}", e);
                 }
             });
@@ -209,7 +251,9 @@ impl EdgeServer {
             tokio::spawn(async move {
                 if let Err(e) = crate::transport::webtransport::run_webtransport_listener(
                     wt_config, wt_hub, wt_state,
-                ).await {
+                )
+                .await
+                {
                     error!("WebTransport listener error: {}", e);
                 }
             });
@@ -223,15 +267,18 @@ impl EdgeServer {
         // ASCII uppercase letter).
         #[cfg(feature = "ws-transport")]
         if self.config.webtransport.ws_fallback_enabled {
-            let ws_port = self.config.webtransport.effective_ws_port(self.config.network.port);
+            let ws_port = self
+                .config
+                .webtransport
+                .effective_ws_port(self.config.network.port);
             if ws_port != self.config.network.port {
                 let ws_config = std::sync::Arc::new(self.config.clone());
                 let ws_hub = hub_client.clone();
                 let ws_state = edge_state.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = crate::transport::ws::run_ws_listener(
-                        ws_config, ws_hub, ws_state,
-                    ).await {
+                    if let Err(e) =
+                        crate::transport::ws::run_ws_listener(ws_config, ws_hub, ws_state).await
+                    {
                         error!("WebSocket fallback listener error: {}", e);
                     }
                 });
@@ -239,8 +286,8 @@ impl EdgeServer {
         }
 
         // Start TLS server
-        let listen_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
-            .parse()?;
+        let listen_addr: SocketAddr =
+            format!("{}:{}", self.config.network.host, self.config.network.port).parse()?;
         let listener = TcpListener::bind(listen_addr).await?;
         info!("TLS server listening on {}", listen_addr);
 
@@ -257,31 +304,31 @@ impl EdgeServer {
         // peer" (legacy behaviour); `Some(empty)` would mean "trust no peer", which
         // we interpret the same as the legacy default to avoid breaking existing
         // configs that simply leave the field unset.
-        let trusted_proxies: Option<Arc<[proxy_protocol::TrustedPeer]>> =
-            if self.config.network.proxy_protocol
-                && !self.config.network.trusted_proxy_ips.is_empty()
-            {
-                match proxy_protocol::parse_trusted_proxy_list(
-                    &self.config.network.trusted_proxy_ips,
-                ) {
-                    Ok(list) => Some(Arc::from(list.into_boxed_slice())),
-                    Err(e) => {
-                        return Err(anyhow::anyhow!(
-                            "Invalid network.trusted_proxy_ips entry: {}",
-                            e
-                        ));
-                    }
+        let trusted_proxies: Option<Arc<[proxy_protocol::TrustedPeer]>> = if self
+            .config
+            .network
+            .proxy_protocol
+            && !self.config.network.trusted_proxy_ips.is_empty()
+        {
+            match proxy_protocol::parse_trusted_proxy_list(&self.config.network.trusted_proxy_ips) {
+                Ok(list) => Some(Arc::from(list.into_boxed_slice())),
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Invalid network.trusted_proxy_ips entry: {}",
+                        e
+                    ));
                 }
-            } else {
-                if self.config.network.proxy_protocol {
-                    warn!(
-                        "network.proxy_protocol is enabled without network.trusted_proxy_ips; \
+            }
+        } else {
+            if self.config.network.proxy_protocol {
+                warn!(
+                    "network.proxy_protocol is enabled without network.trusted_proxy_ips; \
                          every TCP peer can spoof its source IP via a forged PROXY header. \
                          Configure trusted_proxy_ips to restrict this to your reverse proxy."
-                    );
-                }
-                None
-            };
+                );
+            }
+            None
+        };
 
         // Accept loop
         loop {
@@ -431,7 +478,10 @@ impl EdgeServer {
         // clients have not yet been notified.  Broadcast a Reject to all
         // connected clients so they know to reconnect, then give tasks time
         // to drain their write buffers before we abort them.
-        edge_state.client_manager.close_all_connections("Server shutting down").await;
+        edge_state
+            .client_manager
+            .close_all_connections("Server shutting down")
+            .await;
 
         // Allow background tasks adequate time to notice the shutdown signal
         // and flush any in-flight messages before we force-abort them.

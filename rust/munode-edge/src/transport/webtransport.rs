@@ -53,7 +53,7 @@ pub async fn run_webtransport_listener(
 
     // Determine certificate paths: prefer dedicated WT cert, fall back to main TLS cert.
     let cert_path = wt_cfg.cert.as_deref().unwrap_or(&config.tls.cert);
-    let key_path  = wt_cfg.key.as_deref().unwrap_or(&config.tls.key);
+    let key_path = wt_cfg.key.as_deref().unwrap_or(&config.tls.key);
 
     if wt_cfg.cert_reload_interval_secs > 0 {
         info!(
@@ -64,7 +64,12 @@ pub async fn run_webtransport_listener(
     }
 
     let bind_addr: SocketAddr = crate::server::parse_socket_addr(&wt_cfg.host, wt_cfg.port)
-        .with_context(|| format!("Invalid WebTransport bind address '{}:{}'", wt_cfg.host, wt_cfg.port))?;
+        .with_context(|| {
+            format!(
+                "Invalid WebTransport bind address '{}:{}'",
+                wt_cfg.host, wt_cfg.port
+            )
+        })?;
 
     info!(
         "WebTransport listener starting on {} (cert={} key={})",
@@ -74,7 +79,12 @@ pub async fn run_webtransport_listener(
     // Load TLS identity once.
     let identity = Identity::load_pemfiles(cert_path, key_path)
         .await
-        .with_context(|| format!("Failed to load WebTransport certificate cert={} key={}", cert_path, key_path))?;
+        .with_context(|| {
+            format!(
+                "Failed to load WebTransport certificate cert={} key={}",
+                cert_path, key_path
+            )
+        })?;
 
     // Warn if the certificate may not work with Chrome's serverCertificateHashes.
     // Chrome requires the cert to have a validity period of ≤ 14 days when using
@@ -99,8 +109,8 @@ pub async fn run_webtransport_listener(
         .map_err(|e| anyhow::anyhow!("Invalid WebTransport idle timeout: {}", e))?
         .build();
 
-    let endpoint = Endpoint::server(server_config)
-        .context("Failed to create WebTransport endpoint")?;
+    let endpoint =
+        Endpoint::server(server_config).context("Failed to create WebTransport endpoint")?;
 
     info!("WebTransport QUIC endpoint ready on {}", bind_addr);
 
@@ -113,22 +123,31 @@ pub async fn run_webtransport_listener(
         info!("WebTransport: QUIC connection attempt from {}", peer_addr);
 
         let config_clone = Arc::clone(&config);
-        let hub_clone    = Arc::clone(&hub_client);
-        let state_clone  = Arc::clone(&edge_state);
+        let hub_clone = Arc::clone(&hub_client);
+        let state_clone = Arc::clone(&edge_state);
 
         tokio::spawn(async move {
             // Complete the WebTransport handshake (QUIC + HTTP/3 CONNECT).
             let request = match incoming.await {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("WebTransport session handshake failed from {}: {:?}", peer_addr, e);
+                    warn!(
+                        "WebTransport session handshake failed from {}: {:?}",
+                        peer_addr, e
+                    );
                     return;
                 }
             };
 
             // Refuse connections while Hub is unreachable.
-            if !state_clone.accepting_connections.load(std::sync::atomic::Ordering::Relaxed) {
-                warn!("WebTransport connection from {} refused: Hub unreachable", peer_addr);
+            if !state_clone
+                .accepting_connections
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                warn!(
+                    "WebTransport connection from {} refused: Hub unreachable",
+                    peer_addr
+                );
                 // Send a proper HTTP/3 403 Forbidden instead of silently dropping.
                 request.forbidden().await;
                 return;
@@ -138,14 +157,19 @@ pub async fn run_webtransport_listener(
             let session = match request.accept().await {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!("WebTransport session accept failed from {}: {:?}", peer_addr, e);
+                    warn!(
+                        "WebTransport session accept failed from {}: {:?}",
+                        peer_addr, e
+                    );
                     return;
                 }
             };
 
             info!("WebTransport session from {}", peer_addr);
 
-            if let Err(e) = handle_wt_session(session, peer_addr, &config_clone, hub_clone, state_clone).await {
+            if let Err(e) =
+                handle_wt_session(session, peer_addr, &config_clone, hub_clone, state_clone).await
+            {
                 debug!("WebTransport session error from {}: {}", peer_addr, e);
             }
         });
@@ -171,25 +195,29 @@ async fn handle_wt_session(
 ) -> Result<()> {
     // The first bidirectional stream is the Mumble control stream.
     // Browsers open it immediately after the session is established.
-    info!("WebTransport: waiting for control bi-stream from {}", peer_addr);
-    let (send_stream, recv_stream) = match tokio::time::timeout(
-        Duration::from_secs(15),
-        session.accept_bi(),
-    )
-    .await
-    {
-        Ok(Ok(streams)) => streams,
-        Ok(Err(e)) => {
-            warn!("WebTransport control stream error from {}: {:?}", peer_addr, e);
-            session.close(VarInt::from_u32(1), b"stream error");
-            return Err(anyhow::anyhow!("WebTransport control stream error: {}", e));
-        }
-        Err(_) => {
-            warn!("WebTransport control stream timeout from {}", peer_addr);
-            session.close(VarInt::from_u32(1), b"timeout");
-            return Err(anyhow::anyhow!("Timeout waiting for WebTransport control stream"));
-        }
-    };
+    info!(
+        "WebTransport: waiting for control bi-stream from {}",
+        peer_addr
+    );
+    let (send_stream, recv_stream) =
+        match tokio::time::timeout(Duration::from_secs(15), session.accept_bi()).await {
+            Ok(Ok(streams)) => streams,
+            Ok(Err(e)) => {
+                warn!(
+                    "WebTransport control stream error from {}: {:?}",
+                    peer_addr, e
+                );
+                session.close(VarInt::from_u32(1), b"stream error");
+                return Err(anyhow::anyhow!("WebTransport control stream error: {}", e));
+            }
+            Err(_) => {
+                warn!("WebTransport control stream timeout from {}", peer_addr);
+                session.close(VarInt::from_u32(1), b"timeout");
+                return Err(anyhow::anyhow!(
+                    "Timeout waiting for WebTransport control stream"
+                ));
+            }
+        };
 
     // Wrap the recv stream as Box<dyn AsyncRead>.
     let reader: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(recv_stream);
@@ -213,7 +241,9 @@ async fn handle_wt_session(
             let mut pending = vec![first];
             while let Ok(more) = send_rx.try_recv() {
                 pending.push(more);
-                if pending.len() >= 32 { break; }
+                if pending.len() >= 32 {
+                    break;
+                }
             }
 
             for chunk in &pending {
@@ -223,10 +253,7 @@ async fn handle_wt_session(
                 // forever, fill the send channel (capacity 4096), and then block any caller
                 // of client_sender.send_raw().await — including the login task — causing an
                 // apparent 30-second "freeze" while the TypeScript authenticate() times out.
-                match tokio::time::timeout(
-                    QUIC_WRITE_TIMEOUT,
-                    send_stream.write_all(chunk),
-                ).await {
+                match tokio::time::timeout(QUIC_WRITE_TIMEOUT, send_stream.write_all(chunk)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
                         debug!("WebTransport write error from {}: {}", peer_addr, e);
@@ -234,7 +261,10 @@ async fn handle_wt_session(
                         return;
                     }
                     Err(_) => {
-                        warn!("WebTransport write timeout from {} — closing connection", peer_addr);
+                        warn!(
+                            "WebTransport write timeout from {} — closing connection",
+                            peer_addr
+                        );
                         write_failed_notify.notify_one();
                         return;
                     }
@@ -259,4 +289,3 @@ async fn handle_wt_session(
     )
     .await
 }
-

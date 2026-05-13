@@ -13,16 +13,16 @@ use munode_common::logging::LogReloadHandle;
 use munode_protocol::hubedge::*;
 
 use crate::acl_manager::AclManager;
+use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
 use crate::ban_store::BanStore;
 use crate::blob_store::BlobStore;
 use crate::channel_store::ChannelStore;
 use crate::database::Database;
 use crate::edge_connection::EdgeConnection;
+use crate::lua_auth::LuaAuthEngine;
 use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
 use crate::session_manager::SessionManager;
 use crate::topology_manager::TopologyManager;
-use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
-use crate::lua_auth::LuaAuthEngine;
 use crate::user_store::UserStore;
 
 /// An inbound notification envelope from an Edge, with its Edge-assigned sequence number.
@@ -181,7 +181,8 @@ pub struct HubState {
     /// `EdgeInboundSequencer` to re-order out-of-order arrivals and calls
     /// `RpcHandler::handle_notification` in strict emission order.
     /// Created on first registration; replaced when the existing channel is closed.
-    pub(crate) edge_notif_senders: RwLock<HashMap<u32, tokio::sync::mpsc::UnboundedSender<EdgeNotifEnvelope>>>,
+    pub(crate) edge_notif_senders:
+        RwLock<HashMap<u32, tokio::sync::mpsc::UnboundedSender<EdgeNotifEnvelope>>>,
     /// In-flight `edge.authenticateUser` cancel flags.
     ///
     /// Key = session_id.  Value = (cancel flag, edge_id that owns the session).
@@ -204,15 +205,27 @@ pub struct HubServer {
 
 impl HubServer {
     pub fn new(config: HubConfig) -> Self {
-        Self { config, config_path: None, log_reload: None }
+        Self {
+            config,
+            config_path: None,
+            log_reload: None,
+        }
     }
 
     /// Create a Hub server with a known config file path and log-reload handle.
     ///
     /// Use this constructor from `main` so the SIGHUP hot-reload task can re-read
     /// the config file and push updated limits to all connected Edges at runtime.
-    pub fn new_with_path(config: HubConfig, config_path: String, log_reload: LogReloadHandle) -> Self {
-        Self { config, config_path: Some(config_path), log_reload: Some(log_reload) }
+    pub fn new_with_path(
+        config: HubConfig,
+        config_path: String,
+        log_reload: LogReloadHandle,
+    ) -> Self {
+        Self {
+            config,
+            config_path: Some(config_path),
+            log_reload: Some(log_reload),
+        }
     }
 
     /// Start the Hub server and listen for edge connections.
@@ -232,16 +245,17 @@ impl HubServer {
                 }
                 Ok::<_, anyhow::Error>(db)
             })
-                .await
-                .context("spawn_blocking join error")?
-                .context("Failed to open database")?,
+            .await
+            .context("spawn_blocking join error")?
+            .context("Failed to open database")?,
         );
 
         let channel_store = Arc::new(ChannelStore::new(database.clone()));
 
         // Open filesystem blob store
-        let blob_store = Arc::new(BlobStore::open(&self.config.blob_store.path)
-            .context("Failed to open blob store")?);
+        let blob_store = Arc::new(
+            BlobStore::open(&self.config.blob_store.path).context("Failed to open blob store")?,
+        );
 
         // Create shared state
         let auth_service = AuthServiceHandle::new();
@@ -262,9 +276,14 @@ impl HubServer {
         };
 
         // Initialise GeoIP service (optional)
-        let geoip = Arc::new(crate::geoip::GeoIpService::new(&self.config.geoip.database_path));
+        let geoip = Arc::new(crate::geoip::GeoIpService::new(
+            &self.config.geoip.database_path,
+        ));
         if geoip.is_available() {
-            info!("GeoIP service initialised from '{}'", &self.config.geoip.database_path);
+            info!(
+                "GeoIP service initialised from '{}'",
+                &self.config.geoip.database_path
+            );
         }
 
         let state = Arc::new(HubState {
@@ -298,11 +317,17 @@ impl HubServer {
         // Populate the in-memory ACL + channel-group store from the database.
         // After this point all ACL reads are served from memory; DB is only
         // written to on mutations (write-through).
-        state.acl_manager.load_all().await
+        state
+            .acl_manager
+            .load_all()
+            .await
             .context("Failed to load ACL entries and channel groups into memory")?;
 
         // Load bans into memory.
-        state.ban_store.load_from_db().await
+        state
+            .ban_store
+            .load_from_db()
+            .await
             .context("Failed to load bans into memory")?;
 
         // Create RPC handler
@@ -316,7 +341,7 @@ impl HubServer {
             let reload_state = state.clone();
             let log_reload_handle = self.log_reload.clone();
             tokio::spawn(async move {
-                use tokio::signal::unix::{signal, SignalKind};
+                use tokio::signal::unix::{SignalKind, signal};
                 let mut sighup = match signal(SignalKind::hangup()) {
                     Ok(s) => s,
                     Err(e) => {
@@ -326,39 +351,57 @@ impl HubServer {
                 };
                 loop {
                     sighup.recv().await;
-                    info!("SIGHUP received — reloading config and pushing limits to connected Edges");
+                    info!(
+                        "SIGHUP received — reloading config and pushing limits to connected Edges"
+                    );
                     let Some(ref path) = reload_path else {
                         warn!("SIGHUP received but no config path known; skipping hot-reload");
                         continue;
                     };
                     let path_clone = path.clone();
-                    let load_result = tokio::task::spawn_blocking(move || load_hub_config(&path_clone)).await;
+                    let load_result =
+                        tokio::task::spawn_blocking(move || load_hub_config(&path_clone)).await;
                     match load_result {
                         Ok(Ok(new_cfg)) => {
                             if let Some(ref lr) = log_reload_handle {
                                 lr.reload_level(&new_cfg.log_level);
                             }
                             // Compute new limits from the reloaded config.
-                            let mut new_limits = crate::rpc_handler::server_limits_from_config(&new_cfg);
+                            let mut new_limits =
+                                crate::rpc_handler::server_limits_from_config(&new_cfg);
                             // Optionally override welcome_text with file contents.
                             if let Some(ref file_path) = new_cfg.auth.welcome_text_file {
                                 match tokio::fs::read_to_string(file_path).await {
-                                    Ok(text) => { new_limits.welcome_text = Some(text.trim_end().to_string()); }
-                                    Err(e) => { warn!("SIGHUP: failed to read welcome_text_file '{}': {}", file_path, e); }
+                                    Ok(text) => {
+                                        new_limits.welcome_text = Some(text.trim_end().to_string());
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "SIGHUP: failed to read welcome_text_file '{}': {}",
+                                            file_path, e
+                                        );
+                                    }
                                 }
                             }
                             // Reload Lua auth engine if the script changed.
                             match &new_cfg.auth.lua_script {
                                 Some(script) => {
                                     let script_owned = script.clone();
-                                    let engine_result = tokio::task::spawn_blocking(move || LuaAuthEngine::new(&script_owned)).await;
+                                    let engine_result = tokio::task::spawn_blocking(move || {
+                                        LuaAuthEngine::new(&script_owned)
+                                    })
+                                    .await;
                                     match engine_result {
                                         Ok(Ok(new_engine)) => {
-                                            *reload_state.lua_engine.write().await = Some(Arc::new(new_engine));
+                                            *reload_state.lua_engine.write().await =
+                                                Some(Arc::new(new_engine));
                                             info!("SIGHUP: Lua auth engine reloaded");
                                         }
                                         Ok(Err(e)) => {
-                                            warn!("SIGHUP: failed to reload Lua auth engine: {}", e);
+                                            warn!(
+                                                "SIGHUP: failed to reload Lua auth engine: {}",
+                                                e
+                                            );
                                         }
                                         Err(e) => {
                                             warn!("SIGHUP: Lua engine reload task panicked: {}", e);
@@ -390,7 +433,10 @@ impl HubServer {
                             );
                         }
                         Ok(Err(e)) => {
-                            warn!("SIGHUP hot-reload failed — could not parse config '{}': {}", path, e);
+                            warn!(
+                                "SIGHUP hot-reload failed — could not parse config '{}': {}",
+                                path, e
+                            );
                         }
                         Err(e) => {
                             warn!("SIGHUP: spawn_blocking task panicked: {}", e);
@@ -521,7 +567,10 @@ pub async fn broadcast(state: &HubState, data: Vec<u8>) {
     let edges = state.edge_connections.read().await;
     for (edge_id, pool) in edges.iter() {
         if !pool.try_send(data.clone()) {
-            tracing::warn!("Failed to broadcast to edge {}: all senders closed or full", edge_id);
+            tracing::warn!(
+                "Failed to broadcast to edge {}: all senders closed or full",
+                edge_id
+            );
         }
     }
 }
@@ -535,7 +584,7 @@ pub async fn broadcast(state: &HubState, data: Vec<u8>) {
 /// Within each edge's pool, senders are tried in order until one succeeds.
 pub async fn broadcast_critical(state: &HubState, data: Vec<u8>) {
     use futures_util::future::join_all;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     // Snapshot pools under the read-lock (clone is cheap — Arc bumps only).
     let pools: Vec<(u32, EdgeSenderPool)> = {
@@ -571,7 +620,10 @@ pub async fn notify(state: &HubState, edge_id: u32, data: Vec<u8>) {
     };
     if let Some(pool) = pool {
         if !pool.try_send(data) {
-            tracing::warn!("Failed to notify edge {}: all senders closed or full", edge_id);
+            tracing::warn!(
+                "Failed to notify edge {}: all senders closed or full",
+                edge_id
+            );
         }
     }
 }
@@ -583,7 +635,7 @@ pub async fn notify(state: &HubState, edge_id: u32, data: Vec<u8>) {
 /// one edge to all other edges (e.g. `hub.userStateBroadcast`).
 pub async fn broadcast_critical_excluding(state: &HubState, data: Vec<u8>, exclude_edge_id: u32) {
     use futures_util::future::join_all;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     // Snapshot pools under the read-lock, excluding the source edge.
     let pools: Vec<(u32, EdgeSenderPool)> = {
@@ -652,7 +704,7 @@ fn append_notification_seq(data: &mut Vec<u8>, seq: u64) {
 /// number to each outgoing copy.
 pub async fn broadcast_critical_sequenced(state: &HubState, data: Vec<u8>) {
     use futures_util::future::join_all;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     let pools: Vec<(u32, EdgeSenderPool)> = {
         let edges = state.edge_connections.read().await;
@@ -667,7 +719,10 @@ pub async fn broadcast_critical_sequenced(state: &HubState, data: Vec<u8>) {
             match timeout(Duration::from_secs(2), pool.send_async(data)).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    tracing::warn!("broadcast_critical_sequenced: edge {} all senders closed", edge_id);
+                    tracing::warn!(
+                        "broadcast_critical_sequenced: edge {} all senders closed",
+                        edge_id
+                    );
                 }
                 Err(_) => {
                     tracing::warn!(
@@ -682,9 +737,13 @@ pub async fn broadcast_critical_sequenced(state: &HubState, data: Vec<u8>) {
 }
 
 /// Like [`broadcast_critical_excluding`] but assigns per-edge sequence numbers.
-pub async fn broadcast_critical_excluding_sequenced(state: &HubState, data: Vec<u8>, exclude_edge_id: u32) {
+pub async fn broadcast_critical_excluding_sequenced(
+    state: &HubState,
+    data: Vec<u8>,
+    exclude_edge_id: u32,
+) {
     use futures_util::future::join_all;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     let pools: Vec<(u32, EdgeSenderPool)> = {
         let edges = state.edge_connections.read().await;
@@ -735,7 +794,10 @@ pub async fn notify_sequenced(state: &HubState, edge_id: u32, data: Vec<u8>) {
         let seq = next_notification_seq(state, edge_id);
         append_notification_seq(&mut data, seq);
         if !pool.try_send(data) {
-            tracing::warn!("Failed to notify_sequenced edge {}: all senders closed or full", edge_id);
+            tracing::warn!(
+                "Failed to notify_sequenced edge {}: all senders closed or full",
+                edge_id
+            );
         }
     }
 }

@@ -11,13 +11,13 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use axum::{
+    Router,
     body::Body,
     extract::State,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
     middleware::{self, Next},
     response::{Json, Response},
     routing::get,
-    Router,
 };
 use serde::Serialize;
 use tracing::{info, warn};
@@ -289,11 +289,11 @@ pub fn build_router(state: Arc<EdgeState>, api_token: Option<String>) -> Router 
             .route("/api/remote_clients", get(handle_remote_clients))
             .route("/api/all_clients", get(handle_all_clients))
             .route_layer(middleware::from_fn_with_state(
-                auth_state.clone(), require_bearer_token,
+                auth_state.clone(),
+                require_bearer_token,
             ))
             .with_state(state.clone());
-        let public = Router::new()
-            .route("/api/health", get(handle_health));
+        let public = Router::new().route("/api/health", get(handle_health));
         return public.merge(protected);
     }
 
@@ -323,7 +323,9 @@ async fn require_bearer_token(
 
 /// Constant-time byte comparison used for the Web API bearer token check.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     let mut diff = 0u8;
     for (x, y) in a.iter().zip(b.iter()) {
         diff |= x ^ y;

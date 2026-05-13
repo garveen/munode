@@ -45,7 +45,7 @@ use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::hub_client::HubClient;
@@ -84,7 +84,10 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     use futures_util::{SinkExt, StreamExt};
-    use ring::{hmac, rand::{self, SecureRandom}};
+    use ring::{
+        hmac,
+        rand::{self, SecureRandom},
+    };
 
     // Generate a cryptographically random nonce.
     let rng = rand::SystemRandom::new();
@@ -202,7 +205,15 @@ pub async fn run_edge_ws_server(
             return;
         }
     };
-    run_edge_ws_server_with_listener(listener, hub_host, hub_port, hmac_secret, edge_state, hub_client).await;
+    run_edge_ws_server_with_listener(
+        listener,
+        hub_host,
+        hub_port,
+        hmac_secret,
+        edge_state,
+        hub_client,
+    )
+    .await;
 }
 
 /// Accept-loop variant that takes a pre-bound listener — used in tests to avoid
@@ -281,10 +292,7 @@ pub async fn run_edge_ws_server_with_listener(
                             )
                             .await
                             {
-                                debug!(
-                                    "Control relay connection from {} ended: {}",
-                                    peer_addr, e
-                                );
+                                debug!("Control relay connection from {} ended: {}", peer_addr, e);
                             }
                         }
                     }
@@ -395,8 +403,7 @@ async fn handle_voice_connection(
         match data[0] {
             0x01 if data.len() >= 6 => {
                 // Direct delivery: [0x01][session_BE(4)][plaintext...]
-                let sender_session =
-                    u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+                let sender_session = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
                 let plaintext = &data[5..];
                 let voice_packet = crate::voice::inject_session_into_voice(
                     plaintext,
@@ -404,7 +411,8 @@ async fn handle_voice_connection(
                     plaintext.first().copied().unwrap_or(0) & 0x1f,
                 );
                 if !voice_packet.is_empty() {
-                    crate::voice::deliver_relayed_voice(voice_packet, &edge_state, &hub_client).await;
+                    crate::voice::deliver_relayed_voice(voice_packet, &edge_state, &hub_client)
+                        .await;
                 }
             }
             0x02 => {
@@ -481,7 +489,11 @@ pub async fn connect_peer_voice_tcp(
 
     // Mark this peer as one we want to stay connected to.  All slot reconnect
     // loops check this set; removing the ID triggers a graceful stop.
-    edge_state.voice_tcp_peers.write().await.insert(peer_edge_id);
+    edge_state
+        .voice_tcp_peers
+        .write()
+        .await
+        .insert(peer_edge_id);
 
     // Create the pool up-front and publish it so callers (udp.rs) can send
     // immediately once any slot connects.
@@ -530,13 +542,20 @@ pub async fn connect_peer_voice_tcp(
     // See audit C4 in `docs/edge-hub-consistency-audit.md`.
     {
         let current = edge_state.voice_tcp_conns.load_full();
-        if current.get(&peer_edge_id).map_or(false, |p| Arc::ptr_eq(p, &pool)) {
+        if current
+            .get(&peer_edge_id)
+            .map_or(false, |p| Arc::ptr_eq(p, &pool))
+        {
             let mut new_conns = (*current).clone();
             new_conns.remove(&peer_edge_id);
             edge_state.voice_tcp_conns.store(Arc::new(new_conns));
             // Only touch voice_tcp_peers when we were the owner — a successor
             // manager has already re-inserted itself and we must not evict it.
-            edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
+            edge_state
+                .voice_tcp_peers
+                .write()
+                .await
+                .remove(&peer_edge_id);
         } else {
             debug!(
                 "Voice TCP pool for peer edge {} finishing, but a successor is already active — leaving shared state alone",
@@ -570,7 +589,12 @@ async fn run_voice_tcp_slot(
     let mut was_connected = false;
 
     loop {
-        if !edge_state.voice_tcp_peers.read().await.contains(&peer_edge_id) {
+        if !edge_state
+            .voice_tcp_peers
+            .read()
+            .await
+            .contains(&peer_edge_id)
+        {
             debug!(
                 "Voice TCP slot [{}/{}]: peer left cluster, stopping",
                 peer_edge_id, slot_idx
@@ -580,23 +604,24 @@ async fn run_voice_tcp_slot(
 
         let url = build_voice_url(&peer_host, peer_edge_port);
 
-        let result =
-            run_voice_tcp_once_pooled(
-                peer_edge_id,
-                slot_idx,
-                &url,
-                self_edge_id,
-                pool.clone(),
-                hmac_secret.as_deref(),
-            )
-            .await;
+        let result = run_voice_tcp_once_pooled(
+            peer_edge_id,
+            slot_idx,
+            &url,
+            self_edge_id,
+            pool.clone(),
+            hmac_secret.as_deref(),
+        )
+        .await;
 
         // Always clear this slot's sender while reconnecting so the pool's
         // round-robin skips it rather than blocking on a dead channel.
         let did_connect = {
             let mut slot = pool.senders[slot_idx].lock().ok();
             let connected = slot.as_ref().map_or(false, |g| g.is_some());
-            if let Some(ref mut g) = slot { **g = None; }
+            if let Some(ref mut g) = slot {
+                **g = None;
+            }
             connected
         };
 
@@ -623,7 +648,12 @@ async fn run_voice_tcp_slot(
             }
         }
 
-        if !edge_state.voice_tcp_peers.read().await.contains(&peer_edge_id) {
+        if !edge_state
+            .voice_tcp_peers
+            .read()
+            .await
+            .contains(&peer_edge_id)
+        {
             break;
         }
 
@@ -655,7 +685,9 @@ async fn run_voice_tcp_slot(
         // enough to trigger a peer-disconnect report to the Hub.  We use a CAS
         // on `disconnect_reported` so that exactly one slot (across all pool
         // slots) sends the event per disconnection episode.
-        let since_ms = pool.all_disconnected_since_ms.load(std::sync::atomic::Ordering::Acquire);
+        let since_ms = pool
+            .all_disconnected_since_ms
+            .load(std::sync::atomic::Ordering::Acquire);
         if since_ms != 0 {
             let now_ms2 = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -663,7 +695,8 @@ async fn run_voice_tcp_slot(
                 .as_millis() as u64;
             if now_ms2.saturating_sub(since_ms) >= PEER_DISCONNECT_REPORT_AFTER_MS {
                 // Claim the report slot (exactly-once per episode).
-                if pool.disconnect_reported
+                if pool
+                    .disconnect_reported
                     .compare_exchange(
                         false,
                         true,
@@ -679,7 +712,9 @@ async fn run_voice_tcp_slot(
                         PEER_DISCONNECT_REPORT_AFTER_MS / 1000,
                         peer_edge_id,
                     );
-                    let _ = edge_state.event_tx.send(EdgeEvent::PeerVoiceTcpFailed { peer_edge_id });
+                    let _ = edge_state
+                        .event_tx
+                        .send(EdgeEvent::PeerVoiceTcpFailed { peer_edge_id });
                 }
             }
         }
@@ -709,16 +744,18 @@ async fn run_voice_tcp_once_pooled(
 ) -> anyhow::Result<()> {
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-    let mut ws =
-        match timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url)).await {
-            Ok(Ok((ws, _))) => ws,
-            Ok(Err(e)) => {
-                return Err(anyhow::anyhow!("connect error: {}", e));
-            }
-            Err(_) => {
-                return Err(anyhow::anyhow!("connect timed out after {:?}", CONNECT_TIMEOUT));
-            }
-        };
+    let mut ws = match timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url)).await {
+        Ok(Ok((ws, _))) => ws,
+        Ok(Err(e)) => {
+            return Err(anyhow::anyhow!("connect error: {}", e));
+        }
+        Err(_) => {
+            return Err(anyhow::anyhow!(
+                "connect timed out after {:?}",
+                CONNECT_TIMEOUT
+            ));
+        }
+    };
 
     // Challenge-response auth before sending any data.
     if let Some(secret) = hmac_secret {
@@ -764,10 +801,7 @@ async fn run_voice_tcp_once_pooled(
             let result = loop {
                 match timeout(reader_idle_timeout, fused_read.next()).await {
                     Ok(Some(Ok(WsMessage::Pong(_)))) => {
-                        trace!(
-                            "Voice TCP slot [{}/{}]: pong",
-                            peer_edge_id, slot_idx
-                        );
+                        trace!("Voice TCP slot [{}/{}]: pong", peer_edge_id, slot_idx);
                     }
                     Ok(Some(Ok(WsMessage::Close(_)))) | Ok(None) => {
                         break Ok(());
@@ -860,10 +894,16 @@ async fn run_relay_for_ws(
     // Connect to Hub as a WebSocket client
     const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
     let hub_url = format!("ws://{}:{}", hub_host, hub_port);
-    let (hub_ws, _) = timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::connect_async(&hub_url))
-        .await
-        .map_err(|_| anyhow::anyhow!("WebSocket connect to Hub timed out ({})", hub_url))??;
-    debug!("Control relay: connected to Hub at {} for peer {}", hub_url, peer_addr);
+    let (hub_ws, _) = timeout(
+        HANDSHAKE_TIMEOUT,
+        tokio_tungstenite::connect_async(&hub_url),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("WebSocket connect to Hub timed out ({})", hub_url))??;
+    debug!(
+        "Control relay: connected to Hub at {} for peer {}",
+        hub_url, peer_addr
+    );
 
     let (mut client_write, client_read) = client_ws.split();
     let (mut hub_write, hub_read) = hub_ws.split();
@@ -895,11 +935,7 @@ async fn run_relay_for_ws(
 /// `label` should describe the relay direction **and** the peer address for
 /// traceability when multiple relay connections run concurrently, e.g.
 /// `"client→hub (1.2.3.4:50000)"`.
-async fn relay_frames<R, W>(
-    mut src: R,
-    dst: &mut W,
-    label: &str,
-) -> Result<()>
+async fn relay_frames<R, W>(mut src: R, dst: &mut W, label: &str) -> Result<()>
 where
     R: StreamExt<Item = Result<WsMessage, WsError>> + Unpin,
     W: SinkExt<WsMessage, Error = WsError> + Unpin,
@@ -910,7 +946,10 @@ where
             Ok(Some(frame)) => frame,
             Ok(None) => break, // stream ended cleanly
             Err(_) => {
-                debug!("Relay {}: per-frame idle timeout ({:?}), closing", label, RELAY_IDLE_TIMEOUT);
+                debug!(
+                    "Relay {}: per-frame idle timeout ({:?}), closing",
+                    label, RELAY_IDLE_TIMEOUT
+                );
                 return Err(anyhow::anyhow!("relay {}: idle timeout", label));
             }
         };
@@ -923,7 +962,10 @@ where
                 dst.send(WsMessage::Text(text)).await?;
             }
             Ok(WsMessage::Close(frame)) => {
-                debug!("Relay {}: received Close frame, forwarding and stopping", label);
+                debug!(
+                    "Relay {}: received Close frame, forwarding and stopping",
+                    label
+                );
                 let _ = dst.send(WsMessage::Close(frame)).await;
                 break;
             }
@@ -1012,4 +1054,3 @@ mod tests {
         assert!(server_res.is_err(), "server should reject wrong HMAC");
     }
 }
-

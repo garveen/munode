@@ -7,19 +7,14 @@ use std::time::Duration;
 use anyhow::Result;
 use munode_client::ClientEvent;
 
-use crate::harness::{
-    cleanup_clients, single_edge_env, sleep_ms, ClientConfig, create_clients,
-};
+use crate::harness::{ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms};
 
 // ── Kick ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_kick_user_disconnects_target() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("guest", 1),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("guest", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
@@ -65,7 +60,10 @@ async fn test_kick_notify_observer() -> Result<()> {
     let target_session = target.session_id().unwrap();
     let mut obs_rx = observer.subscribe();
 
-    admin.user(target_session).kick(Some("Kick for test")).await?;
+    admin
+        .user(target_session)
+        .kick(Some("Kick for test"))
+        .await?;
     sleep_ms(800).await;
 
     // Observer should see UserLeft or Kicked event for the target
@@ -81,7 +79,10 @@ async fn test_kick_notify_observer() -> Result<()> {
         }
     }
 
-    assert!(got_leave, "Observer should receive leave/kick event for kicked user");
+    assert!(
+        got_leave,
+        "Observer should receive leave/kick event for kicked user"
+    );
 
     // cleanup (target already kicked)
     admin.disconnect().await?;
@@ -92,10 +93,7 @@ async fn test_kick_notify_observer() -> Result<()> {
 #[tokio::test]
 async fn test_non_admin_cannot_kick() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("user1", 1),
-        ClientConfig::new("user2", 1),
-    ];
+    let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
 
@@ -106,7 +104,10 @@ async fn test_non_admin_cannot_kick() -> Result<()> {
     sleep_ms(500).await;
 
     // user2 should still be connected
-    assert!(user2.is_connected(), "Non-admin kick should not disconnect the target");
+    assert!(
+        user2.is_connected(),
+        "Non-admin kick should not disconnect the target"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -116,10 +117,7 @@ async fn test_non_admin_cannot_kick() -> Result<()> {
 #[tokio::test]
 async fn test_admin_move_user_to_different_channel() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user1", 1),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
@@ -128,11 +126,13 @@ async fn test_admin_move_user_to_different_channel() -> Result<()> {
 
     // Admin moves target to Lobby (channel 1)
     use munode_protocol::mumbleproto;
-    admin.send_user_state(mumbleproto::UserState {
-        session: Some(target_session),
-        channel_id: Some(1),
-        ..Default::default()
-    }).await?;
+    admin
+        .send_user_state(mumbleproto::UserState {
+            session: Some(target_session),
+            channel_id: Some(1),
+            ..Default::default()
+        })
+        .await?;
 
     let moved = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -150,7 +150,10 @@ async fn test_admin_move_user_to_different_channel() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(moved, "Admin should be able to move user to different channel");
+    assert!(
+        moved,
+        "Admin should be able to move user to different channel"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -160,10 +163,7 @@ async fn test_admin_move_user_to_different_channel() -> Result<()> {
 #[tokio::test]
 async fn test_admin_mute_user() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user1", 1),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
@@ -171,18 +171,18 @@ async fn test_admin_mute_user() -> Result<()> {
     let mut rx = target.subscribe();
 
     use munode_protocol::mumbleproto;
-    admin.send_user_state(mumbleproto::UserState {
-        session: Some(target_session),
-        mute: Some(true),
-        ..Default::default()
-    }).await?;
+    admin
+        .send_user_state(mumbleproto::UserState {
+            session: Some(target_session),
+            mute: Some(true),
+            ..Default::default()
+        })
+        .await?;
 
     let muted = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::UserStateChanged(u))
-                    if u.session == target_session && u.mute =>
-                {
+                Ok(ClientEvent::UserStateChanged(u)) if u.session == target_session && u.mute => {
                     break true;
                 }
                 Ok(_) => continue,

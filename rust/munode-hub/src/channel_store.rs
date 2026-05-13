@@ -52,7 +52,6 @@ impl ChannelStore {
         .await
         .context("spawn_blocking join error")??;
 
-
         let mut channels = self.channels.write().await;
         channels.clear();
 
@@ -61,17 +60,20 @@ impl ChannelStore {
             if ch.id > max_id {
                 max_id = ch.id;
             }
-            channels.insert(ch.id, ChannelRecord {
-                id: ch.id,
-                name: ch.name.clone(),
-                parent_id: ch.parent_id,
-                description: ch.description.clone(),
-                position: ch.position,
-                max_users: ch.max_users,
-                temporary: ch.temporary,
-                inherit_acl: ch.inherit_acl,
-                links: HashSet::new(),
-            });
+            channels.insert(
+                ch.id,
+                ChannelRecord {
+                    id: ch.id,
+                    name: ch.name.clone(),
+                    parent_id: ch.parent_id,
+                    description: ch.description.clone(),
+                    position: ch.position,
+                    max_users: ch.max_users,
+                    temporary: ch.temporary,
+                    inherit_acl: ch.inherit_acl,
+                    links: HashSet::new(),
+                },
+            );
         }
 
         // Apply links
@@ -277,8 +279,12 @@ impl ChannelStore {
             .await
             .context("spawn_blocking join error")??;
         let mut channels = self.channels.write().await;
-        if let Some(ch) = channels.get_mut(&ch1) { ch.links.insert(ch2); }
-        if let Some(ch) = channels.get_mut(&ch2) { ch.links.insert(ch1); }
+        if let Some(ch) = channels.get_mut(&ch1) {
+            ch.links.insert(ch2);
+        }
+        if let Some(ch) = channels.get_mut(&ch2) {
+            ch.links.insert(ch1);
+        }
         Ok(())
     }
 
@@ -290,8 +296,12 @@ impl ChannelStore {
             .await
             .context("spawn_blocking join error")??;
         let mut channels = self.channels.write().await;
-        if let Some(ch) = channels.get_mut(&ch1) { ch.links.remove(&ch2); }
-        if let Some(ch) = channels.get_mut(&ch2) { ch.links.remove(&ch1); }
+        if let Some(ch) = channels.get_mut(&ch1) {
+            ch.links.remove(&ch2);
+        }
+        if let Some(ch) = channels.get_mut(&ch2) {
+            ch.links.remove(&ch1);
+        }
         Ok(())
     }
 
@@ -304,9 +314,9 @@ impl ChannelStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::Database;
     use std::collections::HashSet;
     use std::sync::Arc;
-    use crate::database::Database;
 
     fn test_db() -> Arc<Database> {
         Arc::new(Database::open(":memory:").unwrap())
@@ -340,7 +350,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_channel() {
         let store = ChannelStore::new(test_db());
-        store.create_channel(make_channel(1, Some(0), "Test", 0)).await;
+        store
+            .create_channel(make_channel(1, Some(0), "Test", 0))
+            .await;
 
         let mut ch = store.get_channel(1).await.unwrap();
         ch.name = "Updated".to_string();
@@ -373,7 +385,9 @@ mod tests {
         store.create_channel(make_channel(0, None, "Root", 0)).await;
         store.create_channel(make_channel(1, Some(0), "A", 0)).await;
         store.create_channel(make_channel(2, Some(0), "B", 1)).await;
-        store.create_channel(make_channel(3, Some(1), "A-sub", 0)).await;
+        store
+            .create_channel(make_channel(3, Some(1), "A-sub", 0))
+            .await;
 
         let bfs = store.get_channels_bfs().await;
         assert_eq!(bfs.len(), 4);

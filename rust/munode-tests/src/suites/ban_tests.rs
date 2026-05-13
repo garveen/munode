@@ -6,7 +6,10 @@ use anyhow::Result;
 use munode_client::ClientEvent;
 use munode_protocol::mumbleproto;
 
-use crate::harness::{cleanup_clients, single_edge_env, standard_env, sleep_ms, ClientConfig, create_clients, TestEnvBuilder};
+use crate::harness::{
+    ClientConfig, TestEnvBuilder, cleanup_clients, create_clients, single_edge_env, sleep_ms,
+    standard_env,
+};
 use munode_client::{ConnectOptions, MumbleClient};
 
 // ── Ban list query ────────────────────────────────────────────────────────
@@ -111,17 +114,17 @@ async fn test_non_admin_ban_list_request_denied() -> Result<()> {
 #[tokio::test]
 async fn test_ban_user_disconnects_target() -> Result<()> {
     let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user1", 1),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 1)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
     let target_session = target.session_id().unwrap();
 
     let mut target_rx = target.subscribe();
-    admin.user(target_session).ban(Some("integration test ban")).await?;
+    admin
+        .user(target_session)
+        .ban(Some("integration test ban"))
+        .await?;
 
     // Target should eventually see a Kicked or Disconnected event
     let was_removed = tokio::time::timeout(Duration::from_secs(8), async {
@@ -163,7 +166,7 @@ async fn test_ban_notifies_observers() -> Result<()> {
         loop {
             match obs_rx.recv().await {
                 Ok(ClientEvent::UserLeft { session, .. }) if session == target_session => {
-                    break true
+                    break true;
                 }
                 Ok(_) => continue,
                 Err(_) => break false,
@@ -223,9 +226,9 @@ async fn test_send_and_retrieve_ban_entry() -> Result<()> {
 
     // Verify the ban entry is present (server echoes it back)
     let all_bans: Vec<_> = retrieved.iter().flat_map(|b| b.bans.iter()).collect();
-    let found = all_bans.iter().any(|b| {
-        b.reason.as_deref() == Some("integration test")
-    });
+    let found = all_bans
+        .iter()
+        .any(|b| b.reason.as_deref() == Some("integration test"));
     // Note: this assertion is lenient because server implementations may not
     // store bans this way. The important thing is no crash and a response.
     let _ = found;
@@ -241,17 +244,17 @@ async fn test_send_and_retrieve_ban_entry() -> Result<()> {
 #[tokio::test]
 async fn test_ban_cross_edge_removes_target() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("user1", 2),
-    ];
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 2)];
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
     let target_session = target.session_id().unwrap();
     let mut target_rx = target.subscribe();
 
-    admin.user(target_session).ban(Some("cross-edge ban test")).await?;
+    admin
+        .user(target_session)
+        .ban(Some("cross-edge ban test"))
+        .await?;
 
     let removed = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -314,8 +317,14 @@ async fn test_certificate_hash_ban_round_trip() -> Result<()> {
     .await
     .unwrap_or_default();
     let all_bans: Vec<_> = retrieved.iter().flat_map(|b| b.bans.iter()).collect();
-    let found = all_bans.iter().any(|b| b.hash.as_deref() == Some(hash.as_str()));
-    assert!(found, "Server should echo certificate-hash ban back, got {} entries", all_bans.len());
+    let found = all_bans
+        .iter()
+        .any(|b| b.hash.as_deref() == Some(hash.as_str()));
+    assert!(
+        found,
+        "Server should echo certificate-hash ban back, got {} entries",
+        all_bans.len()
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -401,7 +410,10 @@ async fn test_no_auto_ban_in_default_config() -> Result<()> {
         ..Default::default()
     })
     .await?;
-    assert!(good.is_connected(), "Default config should allow login after failures");
+    assert!(
+        good.is_connected(),
+        "Default config should allow login after failures"
+    );
     let _ = good.disconnect().await;
     Ok(())
 }

@@ -71,7 +71,10 @@ fn test_hub_diagnose_reports_missing_lua_script_nonfatally() -> Result<()> {
 
     let cfg = cfg_path.to_string_lossy().to_string();
     let (stdout, _stderr, code) = run_bin("munode-hub", &["diagnose", &cfg])?;
-    assert_eq!(code, 0, "missing optional Lua script should not fail; stdout=\n{stdout}");
+    assert_eq!(
+        code, 0,
+        "missing optional Lua script should not fail; stdout=\n{stdout}"
+    );
     assert!(stdout.contains("Lua auth script"), "{stdout}");
     assert!(stdout.contains("NOT FOUND"), "{stdout}");
     Ok(())
@@ -87,7 +90,8 @@ fn test_hub_diagnose_invalid_and_missing_configs_fail() -> Result<()> {
     let (_stdout, _stderr, invalid_code) = run_bin("munode-hub", &["diagnose", &invalid])?;
     assert_ne!(invalid_code, 0, "invalid hub config should fail");
 
-    let (_stdout, _stderr, missing_code) = run_bin("munode-hub", &["diagnose", "/nonexistent/hub.json"])?;
+    let (_stdout, _stderr, missing_code) =
+        run_bin("munode-hub", &["diagnose", "/nonexistent/hub.json"])?;
     assert_ne!(missing_code, 0, "missing hub config should fail");
     Ok(())
 }
@@ -124,7 +128,10 @@ fn edge_cfg_json(base_port: u16) -> serde_json::Value {
 fn test_edge_diagnose_valid_config_reports_tls_and_summary() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let cfg_path = tmp.path().join("edge-diagnose-valid.json");
-    fs::write(&cfg_path, serde_json::to_string_pretty(&edge_cfg_json(19620))?)?;
+    fs::write(
+        &cfg_path,
+        serde_json::to_string_pretty(&edge_cfg_json(19620))?,
+    )?;
 
     let cfg = cfg_path.to_string_lossy().to_string();
     let (stdout, _stderr, code) = run_bin("munode-edge", &["diagnose", &cfg])?;
@@ -149,7 +156,10 @@ fn test_edge_diagnose_reports_missing_cert_nonfatally() -> Result<()> {
 
     let cfg = cfg_path.to_string_lossy().to_string();
     let (stdout, _stderr, code) = run_bin("munode-edge", &["diagnose", &cfg])?;
-    assert_eq!(code, 0, "missing TLS file should not fail diagnose; stdout=\n{stdout}");
+    assert_eq!(
+        code, 0,
+        "missing TLS file should not fail diagnose; stdout=\n{stdout}"
+    );
     assert!(stdout.contains("TLS cert: NOT FOUND"), "{stdout}");
     Ok(())
 }
@@ -164,7 +174,8 @@ fn test_edge_diagnose_invalid_and_missing_configs_fail() -> Result<()> {
     let (_stdout, _stderr, invalid_code) = run_bin("munode-edge", &["diagnose", &invalid])?;
     assert_ne!(invalid_code, 0, "invalid edge config should fail");
 
-    let (_stdout, _stderr, missing_code) = run_bin("munode-edge", &["diagnose", "/nonexistent/edge.json"])?;
+    let (_stdout, _stderr, missing_code) =
+        run_bin("munode-edge", &["diagnose", "/nonexistent/edge.json"])?;
     assert_ne!(missing_code, 0, "missing edge config should fail");
     Ok(())
 }

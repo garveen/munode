@@ -48,7 +48,7 @@
 //! - On failure: `{ success=false, reason="...", reject_type=N }`
 //!   (`reject_type` follows Mumble's Reject enum; 3 = WrongUserPW, 8 = AuthenticatorFail)
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use mlua::{Lua, LuaSerdeExt, Table, Value};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -125,9 +125,11 @@ impl LuaAuthEngine {
                         // boundary so no mlua references are held across `.await`.
                         let body_result = lua_ctx
                             .from_value::<serde_json::Value>(Value::Table(body))
-                            .map_err(|e| mlua::Error::RuntimeError(
-                                format!("http_post: body serialization failed: {e}")
-                            ));
+                            .map_err(|e| {
+                                mlua::Error::RuntimeError(format!(
+                                    "http_post: body serialization failed: {e}"
+                                ))
+                            });
                         let headers_result = match headers {
                             Some(h) => h
                                 .pairs::<String, String>()
@@ -138,7 +140,9 @@ impl LuaAuthEngine {
                         let client = client.clone();
                         async move {
                             let body_bytes = serde_json::to_vec(&body_result?).map_err(|e| {
-                                mlua::Error::RuntimeError(format!("http_post: JSON encode failed: {e}"))
+                                mlua::Error::RuntimeError(format!(
+                                    "http_post: JSON encode failed: {e}"
+                                ))
                             })?;
                             let mut builder = client
                                 .post(&url)
@@ -147,7 +151,8 @@ impl LuaAuthEngine {
                             for (k, v) in headers_result?.unwrap_or_default() {
                                 builder = builder.header(k, v);
                             }
-                            build_lua_response(&lua_ctx, builder.send().await, "http_post", &url).await
+                            build_lua_response(&lua_ctx, builder.send().await, "http_post", &url)
+                                .await
                         }
                     },
                 )
@@ -163,25 +168,23 @@ impl LuaAuthEngine {
         {
             let client = client.clone();
             let http_get = lua
-                .create_async_function(
-                    move |lua_ctx, (url, headers): (String, Option<Table>)| {
-                        let headers_result = match headers {
-                            Some(h) => h
-                                .pairs::<String, String>()
-                                .collect::<mlua::Result<Vec<_>>>()
-                                .map(Some),
-                            None => Ok(None),
-                        };
-                        let client = client.clone();
-                        async move {
-                            let mut builder = client.get(&url);
-                            for (k, v) in headers_result?.unwrap_or_default() {
-                                builder = builder.header(k, v);
-                            }
-                            build_lua_response(&lua_ctx, builder.send().await, "http_get", &url).await
+                .create_async_function(move |lua_ctx, (url, headers): (String, Option<Table>)| {
+                    let headers_result = match headers {
+                        Some(h) => h
+                            .pairs::<String, String>()
+                            .collect::<mlua::Result<Vec<_>>>()
+                            .map(Some),
+                        None => Ok(None),
+                    };
+                    let client = client.clone();
+                    async move {
+                        let mut builder = client.get(&url);
+                        for (k, v) in headers_result?.unwrap_or_default() {
+                            builder = builder.header(k, v);
                         }
-                    },
-                )
+                        build_lua_response(&lua_ctx, builder.send().await, "http_get", &url).await
+                    }
+                })
                 .context("Failed to create Lua http_get function")?;
             lua.globals()
                 .set("http_get", http_get)
@@ -210,14 +213,15 @@ impl LuaAuthEngine {
     /// VM: the Lua lock is released whenever the coroutine is waiting for HTTP,
     /// so hundreds of requests can be in-flight simultaneously.
     pub async fn authenticate(&self, req: LuaAuthRequest) -> Result<LuaAuthResponse> {
-        let lua_req = self.lua
+        let lua_req = self
+            .lua
             .to_value(&req)
             .map_err(|e| anyhow!(e).context("Failed to convert LuaAuthRequest to Lua value"))?;
 
-        let func: mlua::Function = self.lua
-            .globals()
-            .get("authenticate")
-            .map_err(|e| anyhow!(e).context("authenticate function not found in Lua globals"))?;
+        let func: mlua::Function =
+            self.lua.globals().get("authenticate").map_err(|e| {
+                anyhow!(e).context("authenticate function not found in Lua globals")
+            })?;
 
         let result_val: Value = func
             .call_async(lua_req)
@@ -238,9 +242,8 @@ async fn build_lua_response(
     method: &str,
     url: &str,
 ) -> mlua::Result<mlua::Table> {
-    let resp = send_result.map_err(|e| {
-        mlua::Error::RuntimeError(format!("{method}: transport error: {e}"))
-    })?;
+    let resp = send_result
+        .map_err(|e| mlua::Error::RuntimeError(format!("{method}: transport error: {e}")))?;
     let status_code = resp.status().as_u16();
     let is_ok = resp.status().is_success();
     let body_text = resp.text().await.map_err(|e| {

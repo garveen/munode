@@ -9,7 +9,11 @@ use tempfile::TempDir;
 
 use crate::harness::find_binary;
 
-fn run(bin: &std::path::Path, args: &[&str], cwd: Option<&std::path::Path>) -> (i32, String, String) {
+fn run(
+    bin: &std::path::Path,
+    args: &[&str],
+    cwd: Option<&std::path::Path>,
+) -> (i32, String, String) {
     let mut cmd = Command::new(bin);
     cmd.args(args);
     if let Some(c) = cwd {

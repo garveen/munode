@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use munode_protocol::hubedge::*;
 
 use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
-use crate::server::{EdgeHealth, HubState, EdgeNotifEnvelope};
+use crate::server::{EdgeHealth, EdgeNotifEnvelope, HubState};
 
 /// Represents a single connected edge server.
 pub struct EdgeConnection {
@@ -180,13 +180,27 @@ impl EdgeConnection {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<EdgeNotifEnvelope>();
             // Replacing the old sender drops it, which closes the old channel and causes
             // the previous processor task to exit (rx.recv() returns None).
-            self.state.edge_notif_senders.write().await.insert(edge_id, tx);
+            self.state
+                .edge_notif_senders
+                .write()
+                .await
+                .insert(edge_id, tx);
             let rpc_handler = Arc::clone(&self.rpc_handler);
-            tokio::spawn(crate::rpc_handler::run_edge_notif_processor(edge_id, rx, rpc_handler));
+            tokio::spawn(crate::rpc_handler::run_edge_notif_processor(
+                edge_id,
+                rx,
+                rpc_handler,
+            ));
             if reset {
-                debug!("Spawned fresh notification processor for edge {} (sequence reset on reconnect)", edge_id);
+                debug!(
+                    "Spawned fresh notification processor for edge {} (sequence reset on reconnect)",
+                    edge_id
+                );
             } else {
-                debug!("Spawned notification processor for edge {} (none existed)", edge_id);
+                debug!(
+                    "Spawned notification processor for edge {} (none existed)",
+                    edge_id
+                );
             }
         }
     }
@@ -197,8 +211,7 @@ impl EdgeConnection {
         data: &[u8],
         send_tx: &mpsc::Sender<Vec<u8>>,
     ) -> Result<()> {
-        let packet = EdgeHubPacket::decode(data)
-            .context("Failed to decode EdgeHubPacket")?;
+        let packet = EdgeHubPacket::decode(data).context("Failed to decode EdgeHubPacket")?;
 
         match PacketType::try_from(packet.r#type) {
             Ok(PacketType::RpcRequest) => {
@@ -242,7 +255,8 @@ impl EdgeConnection {
                                     }
                                     None => {
                                         // First registration for this edge — create the pool.
-                                        connections.insert(sid, EdgeSenderPool::new(send_tx.clone()));
+                                        connections
+                                            .insert(sid, EdgeSenderPool::new(send_tx.clone()));
                                         true
                                     }
                                 }
@@ -261,7 +275,8 @@ impl EdgeConnection {
                             // notifications as duplicates.  Additional pool slots
                             // for an already-registered edge reuse the running
                             // sequencer so in-flight notifications are not lost.
-                            self.ensure_edge_notif_processor(sid, is_first_registration).await;
+                            self.ensure_edge_notif_processor(sid, is_first_registration)
+                                .await;
                         }
                     }
 
@@ -283,7 +298,10 @@ impl EdgeConnection {
                         match rpc_handler.handle_request(request, edge_id).await {
                             Ok(response_data) => {
                                 if send_tx_clone.send(response_data).await.is_err() {
-                                    debug!("Edge {} connection closed before RPC response could be sent", edge_id);
+                                    debug!(
+                                        "Edge {} connection closed before RPC response could be sent",
+                                        edge_id
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -292,13 +310,17 @@ impl EdgeConnection {
                         }
                         if is_register && ninja_enabled {
                             rpc_handler
-                                .send_notification_to_edge_unsequenced(edge_id, "hub.ninjaConfig", |n| {
-                                    let json = serde_json::json!({
-                                        "enabled": true,
-                                        "ninja_channels": ninja_channels
-                                    });
-                                    n.unknown_params_json = Some(json.to_string());
-                                })
+                                .send_notification_to_edge_unsequenced(
+                                    edge_id,
+                                    "hub.ninjaConfig",
+                                    |n| {
+                                        let json = serde_json::json!({
+                                            "enabled": true,
+                                            "ninja_channels": ninja_channels
+                                        });
+                                        n.unknown_params_json = Some(json.to_string());
+                                    },
+                                )
                                 .await;
                         }
                     });
@@ -340,9 +362,7 @@ impl EdgeConnection {
                     // Update health record
                     let edge_id = heartbeat.edge_id;
                     let mut health_map = self.state.edge_health.write().await;
-                    let health = health_map
-                        .entry(edge_id)
-                        .or_insert_with(EdgeHealth::new);
+                    let health = health_map.entry(edge_id).or_insert_with(EdgeHealth::new);
                     health.last_heartbeat = std::time::Instant::now();
                     if let Some(stats) = &heartbeat.stats {
                         health.user_count = stats.user_count;

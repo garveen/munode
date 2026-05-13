@@ -20,7 +20,7 @@ pub mod authservice {
     pub use auth_service_packet::Type as AuthServicePacketType;
 }
 
+pub mod crypto;
 pub mod message_type;
 pub mod transport;
-pub mod crypto;
 pub mod varint;

@@ -16,7 +16,8 @@ impl RpcHandler {
 
         // Build a per-edge user count map in O(M) first, then count per partition in O(N) total
         let all_sessions = self.state.session_manager.get_all_sessions().await;
-        let mut users_per_edge: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut users_per_edge: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
         for session in &all_sessions {
             *users_per_edge.entry(session.edge_id).or_insert(0) += 1;
         }
@@ -30,7 +31,8 @@ impl RpcHandler {
         if let Some((smallest_partition, count)) = partition_user_counts.first() {
             warn!(
                 "Cluster partition detected: sending hub.shutdownRequest to smallest partition ({} edges, {} users)",
-                smallest_partition.len(), count
+                smallest_partition.len(),
+                count
             );
             let shutdown_notif = TypedRpcNotification {
                 method: "hub.shutdownRequest".to_string(),
@@ -54,7 +56,8 @@ impl RpcHandler {
             // would block edge registration and cleanup for the full send duration.
             let pools: Vec<(u32, EdgeSenderPool)> = {
                 let edges = self.state.edge_connections.read().await;
-                smallest_partition.iter()
+                smallest_partition
+                    .iter()
                     .filter_map(|id| edges.get(id).map(|p| (*id, p.clone())))
                     .collect()
             };
@@ -72,8 +75,15 @@ impl RpcHandler {
         request_id: &str,
         edge_server_id: u32,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_join.as_ref().context("Missing edge_join params")?;
-        let join_edge_id = if params.server_id != 0 { params.server_id } else { edge_server_id };
+        let params = request
+            .edge_join
+            .as_ref()
+            .context("Missing edge_join params")?;
+        let join_edge_id = if params.server_id != 0 {
+            params.server_id
+        } else {
+            edge_server_id
+        };
 
         let topo_edge = TopologyEdge {
             edge_id: join_edge_id,
@@ -126,7 +136,8 @@ impl RpcHandler {
         // stalled Edge cannot block the notification to others.
         let peer_pools: Vec<(u32, EdgeSenderPool)> = {
             let edge_connections = self.state.edge_connections.read().await;
-            edge_connections.iter()
+            edge_connections
+                .iter()
                 .filter(|&(&eid, _)| eid != join_edge_id)
                 .map(|(&eid, pool)| (eid, pool.clone()))
                 .collect()
@@ -134,7 +145,7 @@ impl RpcHandler {
 
         {
             use futures_util::future::join_all;
-            use tokio::time::{timeout, Duration};
+            use tokio::time::{Duration, timeout};
             let futs = peer_pools.into_iter().map(|(eid, pool)| {
                 let data = notify_data.clone();
                 async move {
@@ -148,7 +159,12 @@ impl RpcHandler {
             join_all(futs).await;
         }
 
-        info!("Edge {} ({}) joined cluster — {} peers", join_edge_id, params.name, peers_snapshot.len());
+        info!(
+            "Edge {} ({}) joined cluster — {} peers",
+            join_edge_id,
+            params.name,
+            peers_snapshot.len()
+        );
 
         Ok(self.make_response_packet(request_id, "edge.join", |r| {
             r.edge_join = Some(EdgeJoinResult {
@@ -167,16 +183,27 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_join_complete.as_ref().context("Missing edge_join_complete params")?;
+        let params = request
+            .edge_join_complete
+            .as_ref()
+            .context("Missing edge_join_complete params")?;
         {
             let mut topo = self.state.topology.write().await;
             topo.mark_join_complete(params.server_id, params.connected_peers.clone());
         }
-        info!("Edge {} join complete, connected peers: {:?}", params.server_id, params.connected_peers);
+        info!(
+            "Edge {} join complete, connected peers: {:?}",
+            params.server_id, params.connected_peers
+        );
 
-        Ok(self.make_response_packet(request_id, "edge.joinComplete", |r| {
-            r.edge_join_complete = Some(EdgeJoinCompleteResult { success: true, error: None });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.joinComplete", |r| {
+                r.edge_join_complete = Some(EdgeJoinCompleteResult {
+                    success: true,
+                    error: None,
+                });
+            }),
+        )
     }
 
     /// edge.reportPeerDisconnect — Edge reports loss of connection to a peer.
@@ -185,7 +212,9 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_report_peer_disconnect.as_ref()
+        let params = request
+            .edge_report_peer_disconnect
+            .as_ref()
             .context("Missing edge_report_peer_disconnect params")?;
 
         let action = {
@@ -232,7 +261,10 @@ impl RpcHandler {
                 } else {
                     // Edge truly gone from Hub — broadcast hub.peerLeft so remaining edges
                     // can clean up relay infrastructure for this peer.
-                    warn!("Cluster: edge {} confirmed disconnected by arbitration", edge_id);
+                    warn!(
+                        "Cluster: edge {} confirmed disconnected by arbitration",
+                        edge_id
+                    );
                     let notif = TypedRpcNotification {
                         method: "hub.peerLeft".to_string(),
                         timestamp: Some(current_millis() as i64),
@@ -255,9 +287,12 @@ impl RpcHandler {
             ArbitrationResult::HubDecides => "hub_decides".to_string(),
         };
 
-        Ok(self.make_response_packet(request_id, "edge.reportPeerDisconnect", |r| {
-            r.edge_report_peer_disconnect = Some(EdgeReportPeerDisconnectResult { action: action_str });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.reportPeerDisconnect", |r| {
+                r.edge_report_peer_disconnect =
+                    Some(EdgeReportPeerDisconnectResult { action: action_str });
+            }),
+        )
     }
 
     /// edge.reportQuality — Edge reports link quality to a peer.
@@ -285,9 +320,11 @@ impl RpcHandler {
 
         self.push_route_tables_to_all().await;
 
-        Ok(self.make_response_packet(request_id, "edge.reportQuality", |response| {
-            response.edge_report_quality = Some(EdgeReportQualityResult { success: true });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.reportQuality", |response| {
+                response.edge_report_quality = Some(EdgeReportQualityResult { success: true });
+            }),
+        )
     }
 
     /// cluster.getStatus — Returns current cluster topology status.
@@ -307,7 +344,11 @@ impl RpcHandler {
                 let last_seen_secs = health
                     .map(|entry| now.duration_since(entry.last_heartbeat).as_secs())
                     .unwrap_or(u64::MAX);
-                let status = if last_seen_secs < 60 { "healthy" } else { "stale" };
+                let status = if last_seen_secs < 60 {
+                    "healthy"
+                } else {
+                    "stale"
+                };
                 let client_count = health.map(|entry| entry.user_count).unwrap_or(0);
 
                 ClusterEdgeStatusProto {
@@ -326,8 +367,10 @@ impl RpcHandler {
             .collect();
 
         info!("cluster.getStatus: {} edges in topology", edges.len());
-        Ok(self.make_response_packet(request_id, "cluster.getStatus", |response| {
-            response.cluster_get_status = Some(ClusterGetStatusResult { edges });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "cluster.getStatus", |response| {
+                response.cluster_get_status = Some(ClusterGetStatusResult { edges });
+            }),
+        )
     }
 }

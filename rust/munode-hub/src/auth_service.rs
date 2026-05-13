@@ -33,15 +33,15 @@
 //!   connection's own teardown fires.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{error, info, warn};
 
@@ -305,7 +305,6 @@ impl AuthServiceHandle {
         // to each waiter in `authenticate()`.
     }
 
-
     /// Handle an active WebSocket connection from an auth service.
     async fn handle_connection(
         &self,
@@ -343,16 +342,14 @@ impl AuthServiceHandle {
         // Process inbound messages.
         while let Some(msg) = ws_rx.next().await {
             match msg {
-                Ok(WsMessage::Binary(data)) => {
-                    match AuthServicePacket::decode(data.as_ref()) {
-                        Ok(packet) => {
-                            self.handle_packet(packet, &tx).await;
-                        }
-                        Err(e) => {
-                            warn!("Failed to decode auth service packet from {}: {}", addr, e);
-                        }
+                Ok(WsMessage::Binary(data)) => match AuthServicePacket::decode(data.as_ref()) {
+                    Ok(packet) => {
+                        self.handle_packet(packet, &tx).await;
                     }
-                }
+                    Err(e) => {
+                        warn!("Failed to decode auth service packet from {}: {}", addr, e);
+                    }
+                },
                 Ok(WsMessage::Close(_)) => {
                     info!("Auth service disconnected: {} (gen={})", addr, my_gen);
                     break;
@@ -372,7 +369,10 @@ impl AuthServiceHandle {
                     let _ = payload; // suppress unused warning
                 }
                 Err(e) => {
-                    error!("Auth service WS error from {} (gen={}): {}", addr, my_gen, e);
+                    error!(
+                        "Auth service WS error from {} (gen={}): {}",
+                        addr, my_gen, e
+                    );
                     break;
                 }
                 _ => {}

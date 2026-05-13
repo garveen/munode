@@ -13,9 +13,7 @@ async fn main() -> Result<()> {
 
     // Subcommand: `validate-config [path]`
     if subcmd == Some("validate-config") {
-        let config_path = args.get(2)
-            .map(|s| s.as_str())
-            .unwrap_or("config/hub.toml");
+        let config_path = args.get(2).map(|s| s.as_str()).unwrap_or("config/hub.toml");
         match load_hub_config(config_path) {
             Ok(cfg) => {
                 println!("✅ Hub config '{}' is valid.", config_path);
@@ -33,9 +31,7 @@ async fn main() -> Result<()> {
 
     // Subcommand: `diagnose [path]`
     if subcmd == Some("diagnose") {
-        let config_path = args.get(2)
-            .map(|s| s.as_str())
-            .unwrap_or("config/hub.toml");
+        let config_path = args.get(2).map(|s| s.as_str()).unwrap_or("config/hub.toml");
 
         println!("🔍 MuNode Hub Diagnostics");
         println!("   Config: {}", config_path);
@@ -61,11 +57,19 @@ async fn main() -> Result<()> {
             if db_path.exists() {
                 println!("✅ Database file: exists ({})", cfg.database.path);
             } else {
-                println!("⚠️  Database file: not found (will be created on start) ({})", cfg.database.path);
+                println!(
+                    "⚠️  Database file: not found (will be created on start) ({})",
+                    cfg.database.path
+                );
             }
         } else {
-            println!("❌ Database directory: does not exist ({})",
-                db_path.parent().unwrap_or(std::path::Path::new("/")).display());
+            println!(
+                "❌ Database directory: does not exist ({})",
+                db_path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/"))
+                    .display()
+            );
         }
 
         // Check blob store path
@@ -73,7 +77,10 @@ async fn main() -> Result<()> {
         if blob_path.exists() {
             println!("✅ Blob store directory: exists ({})", cfg.blob_store.path);
         } else {
-            println!("⚠️  Blob store directory: not found (will be created on start) ({})", cfg.blob_store.path);
+            println!(
+                "⚠️  Blob store directory: not found (will be created on start) ({})",
+                cfg.blob_store.path
+            );
         }
 
         // Check Lua auth script if configured
@@ -103,7 +110,10 @@ async fn main() -> Result<()> {
         println!("   {:<22} {}", "max_users:", cfg.limits.max_users);
         println!("   {:<22} {}", "auto_ban_enabled:", cfg.auto_ban.enabled);
         if cfg.web_api.enabled {
-            println!("   {:<22} {}:{}", "web_api:", cfg.web_api.host, cfg.web_api.port);
+            println!(
+                "   {:<22} {}:{}",
+                "web_api:", cfg.web_api.host, cfg.web_api.port
+            );
         } else {
             println!("   {:<22} disabled", "web_api:");
         }
@@ -116,18 +126,20 @@ async fn main() -> Result<()> {
     // Subcommand: `migrate [config]`
     //   Show and apply pending database schema migrations.
     if subcmd == Some("migrate") {
-        let config_path = args.get(2)
-            .map(|s| s.as_str())
-            .unwrap_or("config/hub.toml");
-        let cfg = load_hub_config(config_path)
-            .unwrap_or_else(|e| { eprintln!("❌ Config error: {}", e); std::process::exit(1); });
+        let config_path = args.get(2).map(|s| s.as_str()).unwrap_or("config/hub.toml");
+        let cfg = load_hub_config(config_path).unwrap_or_else(|e| {
+            eprintln!("❌ Config error: {}", e);
+            std::process::exit(1);
+        });
 
         println!("🗄  MuNode Hub Database Migration");
         println!("   Config:   {}", config_path);
         println!("   Database: {}", cfg.database.path);
 
-        let db = Database::open(&cfg.database.path)
-            .unwrap_or_else(|e| { eprintln!("❌ Cannot open database: {}", e); std::process::exit(1); });
+        let db = Database::open(&cfg.database.path).unwrap_or_else(|e| {
+            eprintln!("❌ Cannot open database: {}", e);
+            std::process::exit(1);
+        });
 
         let current = db.schema_version().unwrap_or(0);
         println!("   Current schema version: {}", current);
@@ -154,9 +166,11 @@ async fn main() -> Result<()> {
                 for (v, desc) in &applied {
                     println!("  ✅ v{}: {}", v, desc);
                 }
-                println!("\n✅ Applied {} migration(s). Database is now at version {}.",
+                println!(
+                    "\n✅ Applied {} migration(s). Database is now at version {}.",
                     applied.len(),
-                    db.schema_version().unwrap_or(current));
+                    db.schema_version().unwrap_or(current)
+                );
             }
             Err(e) => {
                 eprintln!("❌ Migration failed: {}", e);
@@ -169,15 +183,13 @@ async fn main() -> Result<()> {
     // Subcommand: `backup <config> <destination>`
     //   Back up the database (and optionally blobs) to a destination directory.
     if subcmd == Some("backup") {
-        let config_path = args.get(2)
-            .map(|s| s.as_str())
-            .unwrap_or("config/hub.toml");
-        let dest = args.get(3)
-            .map(|s| s.as_str())
-            .unwrap_or("backup");
+        let config_path = args.get(2).map(|s| s.as_str()).unwrap_or("config/hub.toml");
+        let dest = args.get(3).map(|s| s.as_str()).unwrap_or("backup");
 
-        let cfg = load_hub_config(config_path)
-            .unwrap_or_else(|e| { eprintln!("❌ Config error: {}", e); std::process::exit(1); });
+        let cfg = load_hub_config(config_path).unwrap_or_else(|e| {
+            eprintln!("❌ Config error: {}", e);
+            std::process::exit(1);
+        });
 
         println!("📦 MuNode Hub Backup");
         println!("   Source config: {}", config_path);
@@ -186,30 +198,44 @@ async fn main() -> Result<()> {
         println!("   Destination:   {}", dest);
 
         // Create destination directory
-        std::fs::create_dir_all(dest)
-            .unwrap_or_else(|e| { eprintln!("❌ Cannot create destination '{}': {}", dest, e); std::process::exit(1); });
+        std::fs::create_dir_all(dest).unwrap_or_else(|e| {
+            eprintln!("❌ Cannot create destination '{}': {}", dest, e);
+            std::process::exit(1);
+        });
 
         // Backup database
         if std::path::Path::new(&cfg.database.path).exists() {
-            let db = Database::open(&cfg.database.path)
-                .unwrap_or_else(|e| { eprintln!("❌ Cannot open database: {}", e); std::process::exit(1); });
+            let db = Database::open(&cfg.database.path).unwrap_or_else(|e| {
+                eprintln!("❌ Cannot open database: {}", e);
+                std::process::exit(1);
+            });
             let db_dest = format!("{}/munode.db", dest);
-            db.backup_to(&db_dest)
-                .unwrap_or_else(|e| { eprintln!("❌ Database backup failed: {}", e); std::process::exit(1); });
+            db.backup_to(&db_dest).unwrap_or_else(|e| {
+                eprintln!("❌ Database backup failed: {}", e);
+                std::process::exit(1);
+            });
             println!("✅ Database backed up → {}", db_dest);
         } else {
-            println!("⚠️  Database file not found, skipping: {}", cfg.database.path);
+            println!(
+                "⚠️  Database file not found, skipping: {}",
+                cfg.database.path
+            );
         }
 
         // Backup blobs directory (recursive copy)
         let blob_src = std::path::Path::new(&cfg.blob_store.path);
         if blob_src.exists() {
             let blob_dest = format!("{}/blobs", dest);
-            copy_dir_recursive(blob_src, std::path::Path::new(&blob_dest))
-                .unwrap_or_else(|e| { eprintln!("❌ Blob backup failed: {}", e); std::process::exit(1); });
+            copy_dir_recursive(blob_src, std::path::Path::new(&blob_dest)).unwrap_or_else(|e| {
+                eprintln!("❌ Blob backup failed: {}", e);
+                std::process::exit(1);
+            });
             println!("✅ Blobs backed up → {}", blob_dest);
         } else {
-            println!("⚠️  Blob store directory not found, skipping: {}", cfg.blob_store.path);
+            println!(
+                "⚠️  Blob store directory not found, skipping: {}",
+                cfg.blob_store.path
+            );
         }
 
         // Write manifest
@@ -221,8 +247,9 @@ async fn main() -> Result<()> {
             "{{\n  \"created_at\": {},\n  \"db_path\": \"{}\",\n  \"blob_path\": \"{}\",\n  \"version\": \"1\"\n}}\n",
             now_secs, cfg.database.path, cfg.blob_store.path
         );
-        std::fs::write(format!("{}/manifest.json", dest), &manifest)
-            .unwrap_or_else(|e| { eprintln!("⚠️  Could not write manifest: {}", e); });
+        std::fs::write(format!("{}/manifest.json", dest), &manifest).unwrap_or_else(|e| {
+            eprintln!("⚠️  Could not write manifest: {}", e);
+        });
         println!("✅ Manifest written → {}/manifest.json", dest);
         println!("\n✅ Backup complete.");
         return Ok(());
@@ -231,44 +258,54 @@ async fn main() -> Result<()> {
     // Subcommand: `generate-config [path]`
     //   Write a default Hub TOML configuration file.
     if subcmd == Some("generate-config") {
-        let output_path = args.get(2)
-            .map(|s| s.as_str())
-            .unwrap_or("hub.toml");
+        let output_path = args.get(2).map(|s| s.as_str()).unwrap_or("hub.toml");
 
         if std::path::Path::new(output_path).exists() {
-            eprintln!("❌ File already exists: {}. Use a different path or remove the existing file.", output_path);
+            eprintln!(
+                "❌ File already exists: {}. Use a different path or remove the existing file.",
+                output_path
+            );
             std::process::exit(1);
         }
 
-        std::fs::write(output_path, DEFAULT_HUB_CONFIG)
-            .unwrap_or_else(|e| { eprintln!("❌ Cannot write config to '{}': {}", output_path, e); std::process::exit(1); });
+        std::fs::write(output_path, DEFAULT_HUB_CONFIG).unwrap_or_else(|e| {
+            eprintln!("❌ Cannot write config to '{}': {}", output_path, e);
+            std::process::exit(1);
+        });
 
         println!("✅ Default Hub config written to '{}'", output_path);
         println!("   Edit the file and update:");
         println!("   - registry.hmac_secret  (must match Edge hmac_secret)");
         println!("   - auth section          (configure your authentication method)");
         println!("   - database.path         (path to SQLite database file)");
-        println!("   Run 'munode-hub validate-config {}' to verify.", output_path);
+        println!(
+            "   Run 'munode-hub validate-config {}' to verify.",
+            output_path
+        );
         return Ok(());
     }
 
     // Subcommand: `admin <config> <command> [args...]`
     //   CLI administration tools.
     if subcmd == Some("admin") {
-        let config_path = args.get(2)
-            .map(|s| s.as_str())
-            .unwrap_or("config/hub.toml");
+        let config_path = args.get(2).map(|s| s.as_str()).unwrap_or("config/hub.toml");
         let admin_cmd = args.get(3).map(|s| s.as_str()).unwrap_or("help");
 
-        let cfg = load_hub_config(config_path)
-            .unwrap_or_else(|e| { eprintln!("❌ Config error: {}", e); std::process::exit(1); });
-        let db = Database::open(&cfg.database.path)
-            .unwrap_or_else(|e| { eprintln!("❌ Cannot open database: {}", e); std::process::exit(1); });
+        let cfg = load_hub_config(config_path).unwrap_or_else(|e| {
+            eprintln!("❌ Config error: {}", e);
+            std::process::exit(1);
+        });
+        let db = Database::open(&cfg.database.path).unwrap_or_else(|e| {
+            eprintln!("❌ Cannot open database: {}", e);
+            std::process::exit(1);
+        });
 
         match admin_cmd {
             "list-users" => {
-                let users = db.list_users()
-                    .unwrap_or_else(|e| { eprintln!("❌ Error listing users: {}", e); std::process::exit(1); });
+                let users = db.list_users().unwrap_or_else(|e| {
+                    eprintln!("❌ Error listing users: {}", e);
+                    std::process::exit(1);
+                });
                 println!("{:<6} {:<30} {}", "ID", "Username", "Last Channel");
                 println!("{}", "-".repeat(50));
                 for u in &users {
@@ -277,19 +314,26 @@ async fn main() -> Result<()> {
                 println!("\nTotal: {} user(s)", users.len());
             }
             "list-channels" => {
-                let channels = db.load_channels()
-                    .unwrap_or_else(|e| { eprintln!("❌ Error listing channels: {}", e); std::process::exit(1); });
+                let channels = db.load_channels().unwrap_or_else(|e| {
+                    eprintln!("❌ Error listing channels: {}", e);
+                    std::process::exit(1);
+                });
                 println!("{:<6} {:<6} {:<30} {}", "ID", "Parent", "Name", "MaxUsers");
                 println!("{}", "-".repeat(60));
                 for c in &channels {
-                    let parent = c.parent_id.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
+                    let parent = c
+                        .parent_id
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "-".to_string());
                     println!("{:<6} {:<6} {:<30} {}", c.id, parent, c.name, c.max_users);
                 }
                 println!("\nTotal: {} channel(s)", channels.len());
             }
             "list-bans" => {
-                let bans = db.load_bans()
-                    .unwrap_or_else(|e| { eprintln!("❌ Error listing bans: {}", e); std::process::exit(1); });
+                let bans = db.load_bans().unwrap_or_else(|e| {
+                    eprintln!("❌ Error listing bans: {}", e);
+                    std::process::exit(1);
+                });
                 println!("{:<6} {:<20} {:<30} {}", "ID", "IP", "Name", "Reason");
                 println!("{}", "-".repeat(80));
                 for b in &bans {
@@ -299,8 +343,10 @@ async fn main() -> Result<()> {
                 println!("\nTotal: {} ban(s)", bans.len());
             }
             "cleanup-bans" => {
-                let removed = db.cleanup_expired_bans()
-                    .unwrap_or_else(|e| { eprintln!("❌ Error: {}", e); std::process::exit(1); });
+                let removed = db.cleanup_expired_bans().unwrap_or_else(|e| {
+                    eprintln!("❌ Error: {}", e);
+                    std::process::exit(1);
+                });
                 println!("✅ Removed {} expired ban(s).", removed);
             }
             "schema-version" => {
@@ -323,7 +369,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let config_path = args.get(1)
+    let config_path = args
+        .get(1)
         .map(|s| s.as_str())
         .unwrap_or("config/hub.toml")
         .to_string();
@@ -455,4 +502,3 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> anyhow::R
     }
     Ok(())
 }
-

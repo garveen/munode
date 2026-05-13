@@ -53,8 +53,8 @@ impl BanStore {
             .as_secs() as i64;
         let bans = self.bans.read().unwrap();
         for ban in bans.iter() {
-            let is_active = ban.duration == 0
-                || ban.start_time.saturating_add(ban.duration as i64) > now;
+            let is_active =
+                ban.duration == 0 || ban.start_time.saturating_add(ban.duration as i64) > now;
             if is_active && ip_matches_ban(ip_bytes, &ban.address, ban.mask) {
                 return Some(ban.clone());
             }
@@ -114,7 +114,9 @@ impl BanStore {
         let removed = {
             let mut bans = self.bans.write().unwrap();
             let before = bans.len();
-            bans.retain(|b| b.duration == 0 || b.start_time.saturating_add(b.duration as i64) > now);
+            bans.retain(|b| {
+                b.duration == 0 || b.start_time.saturating_add(b.duration as i64) > now
+            });
             (before - bans.len()) as u32
         };
         if removed > 0 {
@@ -124,7 +126,9 @@ impl BanStore {
                 if let Err(e) = db.cleanup_expired_bans() {
                     tracing::warn!("Failed to clean up expired bans in database: {}", e);
                 }
-            }).await.ok();
+            })
+            .await
+            .ok();
         }
         removed
     }

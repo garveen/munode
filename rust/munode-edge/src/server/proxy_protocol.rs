@@ -1,8 +1,7 @@
 //! PROXY Protocol v1/v2 header parsing.
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use anyhow::{Context, Result, anyhow};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::io::AsyncReadExt;
-
 
 /// Magic bytes that mark the start of a PROXY Protocol v2 header.
 const PROXY_V2_MAGIC: &[u8; 12] = b"\r\n\r\n\0\r\nQUIT\n";
@@ -20,22 +19,34 @@ pub(super) fn parse_trusted_proxy_list(entries: &[String]) -> Result<Vec<Trusted
     let mut out = Vec::with_capacity(entries.len());
     for raw in entries {
         let entry = raw.trim();
-        if entry.is_empty() { continue; }
+        if entry.is_empty() {
+            continue;
+        }
         if let Some((addr, prefix)) = entry.split_once('/') {
-            let network: IpAddr = addr.trim().parse()
+            let network: IpAddr = addr
+                .trim()
+                .parse()
                 .with_context(|| format!("invalid IP in trusted_proxy_ips entry {:?}", raw))?;
-            let prefix: u8 = prefix.trim().parse()
+            let prefix: u8 = prefix
+                .trim()
+                .parse()
                 .with_context(|| format!("invalid prefix in trusted_proxy_ips entry {:?}", raw))?;
             let max = if network.is_ipv4() { 32 } else { 128 };
             if prefix > max {
                 return Err(anyhow!(
                     "prefix /{} too large for {} in trusted_proxy_ips entry {:?}",
-                    prefix, network, raw
+                    prefix,
+                    network,
+                    raw
                 ));
             }
-            out.push(TrustedPeer::Cidr { network: mask_addr(network, prefix), prefix });
+            out.push(TrustedPeer::Cidr {
+                network: mask_addr(network, prefix),
+                prefix,
+            });
         } else {
-            let ip: IpAddr = entry.parse()
+            let ip: IpAddr = entry
+                .parse()
                 .with_context(|| format!("invalid IP in trusted_proxy_ips entry {:?}", raw))?;
             out.push(TrustedPeer::Ip(ip));
         }
@@ -49,12 +60,20 @@ fn mask_addr(addr: IpAddr, prefix: u8) -> IpAddr {
     match addr {
         IpAddr::V4(v4) => {
             let bits = u32::from(v4);
-            let mask = if prefix == 0 { 0u32 } else { u32::MAX << (32 - prefix) };
+            let mask = if prefix == 0 {
+                0u32
+            } else {
+                u32::MAX << (32 - prefix)
+            };
             IpAddr::V4(Ipv4Addr::from(bits & mask))
         }
         IpAddr::V6(v6) => {
             let bits = u128::from(v6);
-            let mask = if prefix == 0 { 0u128 } else { u128::MAX << (128 - prefix) };
+            let mask = if prefix == 0 {
+                0u128
+            } else {
+                u128::MAX << (128 - prefix)
+            };
             IpAddr::V6(Ipv6Addr::from(bits & mask))
         }
     }
@@ -73,27 +92,39 @@ pub(super) fn peer_is_trusted_proxy(peer: IpAddr, allow_list: Option<&[TrustedPe
     for entry in list {
         match entry {
             TrustedPeer::Ip(ip) => {
-                if *ip == peer { return true; }
+                if *ip == peer {
+                    return true;
+                }
                 // Also match IPv4 addresses tunnelled through IPv6 (`::ffff:1.2.3.4`).
                 if let (IpAddr::V6(v6), IpAddr::V4(v4)) = (peer, *ip) {
-                    if v6.to_ipv4_mapped() == Some(v4) { return true; }
+                    if v6.to_ipv4_mapped() == Some(v4) {
+                        return true;
+                    }
                 }
                 if let (IpAddr::V6(v6), IpAddr::V4(v4)) = (*ip, peer) {
-                    if v6.to_ipv4_mapped() == Some(v4) { return true; }
+                    if v6.to_ipv4_mapped() == Some(v4) {
+                        return true;
+                    }
                 }
             }
             TrustedPeer::Cidr { network, prefix } => {
                 let masked = mask_addr(peer, *prefix);
-                if masked == *network { return true; }
+                if masked == *network {
+                    return true;
+                }
                 if let (IpAddr::V4(v4), IpAddr::V6(_v6)) = (peer, *network) {
                     // CIDR is IPv6 but peer is plain IPv4 — also test the
                     // IPv4-mapped form.
                     let mapped: IpAddr = IpAddr::V6(v4.to_ipv6_mapped());
-                    if mask_addr(mapped, *prefix) == *network { return true; }
+                    if mask_addr(mapped, *prefix) == *network {
+                        return true;
+                    }
                 }
                 if let (IpAddr::V6(v6), IpAddr::V4(_v4)) = (peer, *network) {
                     if let Some(v4) = v6.to_ipv4_mapped() {
-                        if mask_addr(IpAddr::V4(v4), *prefix) == *network { return true; }
+                        if mask_addr(IpAddr::V4(v4), *prefix) == *network {
+                            return true;
+                        }
                     }
                 }
             }
@@ -112,11 +143,15 @@ pub(super) fn peer_is_trusted_proxy(peer: IpAddr, allow_list: Option<&[TrustedPe
 /// This function reads **exactly** the header bytes from the stream so that
 /// the subsequent TLS handshake sees the original TLS ClientHello immediately
 /// after.
-pub(super) async fn read_proxy_protocol_addr(stream: &mut tokio::net::TcpStream) -> Result<Option<SocketAddr>> {
+pub(super) async fn read_proxy_protocol_addr(
+    stream: &mut tokio::net::TcpStream,
+) -> Result<Option<SocketAddr>> {
     // Peek at up to 12 bytes (v2 magic length) without consuming the stream,
     // so that plain TLS connections are completely unaffected.
     let mut peek_buf = [0u8; 12];
-    let n = stream.peek(&mut peek_buf).await
+    let n = stream
+        .peek(&mut peek_buf)
+        .await
         .context("Failed to peek for PROXY Protocol header")?;
 
     if n >= 6 && &peek_buf[..6] == b"PROXY " {
@@ -129,7 +164,9 @@ pub(super) async fn read_proxy_protocol_addr(stream: &mut tokio::net::TcpStream)
         let mut line: Vec<u8> = b"PROXY ".to_vec();
         let mut byte = [0u8; 1];
         loop {
-            stream.read_exact(&mut byte).await
+            stream
+                .read_exact(&mut byte)
+                .await
                 .context("Failed to read PROXY Protocol v1 header")?;
             line.push(byte[0]);
             if line.ends_with(b"\r\n") {
@@ -147,12 +184,14 @@ pub(super) async fn read_proxy_protocol_addr(stream: &mut tokio::net::TcpStream)
         stream.read_exact(&mut magic).await?;
         // Read the 4-byte fixed header: ver/cmd + fam/proto + addr_len (u16 BE).
         let mut fixed = [0u8; 4];
-        stream.read_exact(&mut fixed).await
+        stream
+            .read_exact(&mut fixed)
+            .await
             .context("Failed to read PROXY Protocol v2 fixed header")?;
 
-        let ver_cmd   = fixed[0];
+        let ver_cmd = fixed[0];
         let fam_proto = fixed[1];
-        let addr_len  = u16::from_be_bytes([fixed[2], fixed[3]]) as usize;
+        let addr_len = u16::from_be_bytes([fixed[2], fixed[3]]) as usize;
 
         // PROXY Protocol v2: address payload is at most ~216 bytes for
         // AF_INET6 (36 bytes) plus the maximum defined TLV extensions.
@@ -167,7 +206,9 @@ pub(super) async fn read_proxy_protocol_addr(stream: &mut tokio::net::TcpStream)
 
         let mut addr_buf = vec![0u8; addr_len];
         if addr_len > 0 {
-            stream.read_exact(&mut addr_buf).await
+            stream
+                .read_exact(&mut addr_buf)
+                .await
                 .context("Failed to read PROXY Protocol v2 address payload")?;
         }
 
@@ -182,8 +223,7 @@ pub(super) async fn read_proxy_protocol_addr(stream: &mut tokio::net::TcpStream)
 
 /// Parse a PROXY Protocol v1 header line (including trailing `\r\n`).
 pub(super) fn parse_proxy_v1(line: &[u8]) -> Result<Option<SocketAddr>> {
-    let s = std::str::from_utf8(line)
-        .context("PROXY Protocol v1 header is not valid UTF-8")?;
+    let s = std::str::from_utf8(line).context("PROXY Protocol v1 header is not valid UTF-8")?;
     let s = s.trim_end_matches("\r\n");
     let parts: Vec<&str> = s.split_ascii_whitespace().collect();
 
@@ -200,20 +240,27 @@ pub(super) fn parse_proxy_v1(line: &[u8]) -> Result<Option<SocketAddr>> {
     // "PROXY TCP6 <src-ip> <dst-ip> <src-port> <dst-port>"
     if parts.len() != 6 {
         return Err(anyhow!(
-            "PROXY Protocol v1 header has wrong number of fields: {:?}", s
+            "PROXY Protocol v1 header has wrong number of fields: {:?}",
+            s
         ));
     }
 
-    let src_ip: IpAddr = parts[2].parse()
+    let src_ip: IpAddr = parts[2]
+        .parse()
         .context("Invalid source IP in PROXY Protocol v1 header")?;
-    let src_port: u16 = parts[4].parse()
+    let src_port: u16 = parts[4]
+        .parse()
         .context("Invalid source port in PROXY Protocol v1 header")?;
 
     Ok(Some(SocketAddr::new(src_ip, src_port)))
 }
 
 /// Parse a PROXY Protocol v2 header (after the magic and fixed header bytes).
-pub(super) fn parse_proxy_v2(ver_cmd: u8, fam_proto: u8, addrs: &[u8]) -> Result<Option<SocketAddr>> {
+pub(super) fn parse_proxy_v2(
+    ver_cmd: u8,
+    fam_proto: u8,
+    addrs: &[u8],
+) -> Result<Option<SocketAddr>> {
     let version = ver_cmd >> 4;
     let command = ver_cmd & 0x0F;
 
@@ -227,7 +274,10 @@ pub(super) fn parse_proxy_v2(ver_cmd: u8, fam_proto: u8, addrs: &[u8]) -> Result
     }
 
     if command != 1 {
-        return Err(anyhow!("Unsupported PROXY Protocol v2 command: {}", command));
+        return Err(anyhow!(
+            "Unsupported PROXY Protocol v2 command: {}",
+            command
+        ));
     }
 
     let family = fam_proto >> 4; // 1 = IPv4, 2 = IPv6, 3 = Unix
@@ -237,7 +287,8 @@ pub(super) fn parse_proxy_v2(ver_cmd: u8, fam_proto: u8, addrs: &[u8]) -> Result
             // AF_INET: src_addr(4) + dst_addr(4) + src_port(2) + dst_port(2)
             if addrs.len() < 12 {
                 return Err(anyhow!(
-                    "PROXY Protocol v2 IPv4 address payload too short: {} bytes", addrs.len()
+                    "PROXY Protocol v2 IPv4 address payload too short: {} bytes",
+                    addrs.len()
                 ));
             }
             let src_ip = Ipv4Addr::new(addrs[0], addrs[1], addrs[2], addrs[3]);
@@ -248,10 +299,12 @@ pub(super) fn parse_proxy_v2(ver_cmd: u8, fam_proto: u8, addrs: &[u8]) -> Result
             // AF_INET6: src_addr(16) + dst_addr(16) + src_port(2) + dst_port(2)
             if addrs.len() < 36 {
                 return Err(anyhow!(
-                    "PROXY Protocol v2 IPv6 address payload too short: {} bytes", addrs.len()
+                    "PROXY Protocol v2 IPv6 address payload too short: {} bytes",
+                    addrs.len()
                 ));
             }
-            let src: [u8; 16] = addrs[..16].try_into()
+            let src: [u8; 16] = addrs[..16]
+                .try_into()
                 .context("Failed to copy IPv6 source address")?;
             let src_ip = Ipv6Addr::from(src);
             let src_port = u16::from_be_bytes([addrs[32], addrs[33]]);
@@ -263,4 +316,3 @@ pub(super) fn parse_proxy_v2(ver_cmd: u8, fam_proto: u8, addrs: &[u8]) -> Result
         }
     }
 }
-

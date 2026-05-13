@@ -8,7 +8,7 @@ use anyhow::Result;
 use munode_client::ClientEvent;
 
 use crate::harness::{
-    cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig, create_clients,
+    ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms, standard_env,
 };
 
 // ── Add listening channel ─────────────────────────────────────────────────
@@ -31,9 +31,7 @@ async fn test_add_listening_channel_broadcasts_to_same_edge() -> Result<()> {
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::UserStateChanged(u))
-                    if u.session == user1_session =>
-                {
+                Ok(ClientEvent::UserStateChanged(u)) if u.session == user1_session => {
                     break true;
                 }
                 Ok(_) => continue,
@@ -44,7 +42,10 @@ async fn test_add_listening_channel_broadcasts_to_same_edge() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(got, "Adding listening channel should broadcast UserState to observers");
+    assert!(
+        got,
+        "Adding listening channel should broadcast UserState to observers"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -68,9 +69,7 @@ async fn test_add_listening_channel_broadcasts_cross_edge() -> Result<()> {
     let got = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::UserStateChanged(u))
-                    if u.session == user1_session =>
-                {
+                Ok(ClientEvent::UserStateChanged(u)) if u.session == user1_session => {
                     break true;
                 }
                 Ok(_) => continue,
@@ -118,8 +117,8 @@ async fn test_listener_receives_voice_from_listened_channel() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (speaker, listener) = (&clients[0], &clients[1]);
 
-    speaker.channel(1).join().await?;   // Lobby
-    listener.channel(2).join().await?;  // General
+    speaker.channel(1).join().await?; // Lobby
+    listener.channel(2).join().await?; // General
     sleep_ms(200).await;
 
     listener.me().add_listener(1).await?; // Listen to Lobby
@@ -143,7 +142,10 @@ async fn test_listener_receives_voice_from_listened_channel() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(received, "Listener should receive voice from a listened channel");
+    assert!(
+        received,
+        "Listener should receive voice from a listened channel"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -165,7 +167,10 @@ async fn test_add_multiple_listening_channels() -> Result<()> {
     client.me().add_listener(3).await?; // Private
     sleep_ms(200).await;
 
-    assert!(client.is_connected(), "Should still be connected after adding multiple listeners");
+    assert!(
+        client.is_connected(),
+        "Should still be connected after adding multiple listeners"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -193,15 +198,23 @@ async fn test_listener_receives_voice_from_linked_channel() -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let ch_a = admin.channel(0).create_subchannel(&format!("LinkSpeak_{ts}")).await?;
-    let ch_b = admin.channel(0).create_subchannel(&format!("LinkListen_{ts}")).await?;
+    let ch_a = admin
+        .channel(0)
+        .create_subchannel(&format!("LinkSpeak_{ts}"))
+        .await?;
+    let ch_b = admin
+        .channel(0)
+        .create_subchannel(&format!("LinkListen_{ts}"))
+        .await?;
     sleep_ms(400).await;
 
-    admin.send_channel_state(mumbleproto::ChannelState {
-        channel_id: Some(ch_a),
-        links_add: vec![ch_b],
-        ..Default::default()
-    }).await?;
+    admin
+        .send_channel_state(mumbleproto::ChannelState {
+            channel_id: Some(ch_a),
+            links_add: vec![ch_b],
+            ..Default::default()
+        })
+        .await?;
     sleep_ms(400).await;
 
     // Speaker joins ch_a; listener stays in root (ch 0) and listens to ch_b.
@@ -227,8 +240,10 @@ async fn test_listener_receives_voice_from_linked_channel() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(received,
-        "Listener of ch_b should hear voice from ch_a because ch_a↔ch_b are linked");
+    assert!(
+        received,
+        "Listener of ch_b should hear voice from ch_a because ch_a↔ch_b are linked"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }

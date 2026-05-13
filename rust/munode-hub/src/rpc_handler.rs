@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use prost::Message;
@@ -15,11 +15,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
 
-use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
-use munode_protocol::hubedge::*;
-use munode_protocol::mumbleproto;
 use munode_common::config::HubConfig;
 use munode_common::permission;
+use munode_protocol::authservice::AuthRequest as ExtAuthRequest;
+use munode_protocol::hubedge::*;
+use munode_protocol::mumbleproto;
 
 use crate::acl_manager::AclManager;
 use crate::channel_store::ChannelRecord;
@@ -28,9 +28,9 @@ use crate::server::HubState;
 use crate::session_manager::SessionInfo;
 use crate::topology_manager::{ArbitrationResult, LinkQuality, TopologyEdge};
 
+mod admin;
 mod auth;
 mod blob;
-mod admin;
 mod channel;
 mod cluster;
 mod mutation;
@@ -163,18 +163,19 @@ pub struct RpcHandler {
 
 impl RpcHandler {
     pub fn new(state: Arc<HubState>) -> Self {
-        let username_regex = state
-            .config
-            .validation
-            .username_regex
-            .as_deref()
-            .and_then(|pattern| match Regex::new(pattern) {
-                Ok(regex) => Some(regex),
-                Err(error) => {
-                    warn!("Invalid username_regex '{}': {}", pattern, error);
-                    None
-                }
-            });
+        let username_regex =
+            state
+                .config
+                .validation
+                .username_regex
+                .as_deref()
+                .and_then(|pattern| match Regex::new(pattern) {
+                    Ok(regex) => Some(regex),
+                    Err(error) => {
+                        warn!("Invalid username_regex '{}': {}", pattern, error);
+                        None
+                    }
+                });
         let channel_name_regex = state
             .config
             .validation
@@ -216,15 +217,27 @@ impl RpcHandler {
             match method.as_str() {
                 "edge.register" => self.handle_register(&request, &request_id).await,
                 "edge.authenticateUser" => {
-                    self.handle_authenticate_user(&request, &request_id, edge_server_id).await
+                    self.handle_authenticate_user(&request, &request_id, edge_server_id)
+                        .await
                 }
                 "edge.reportSession" => {
-                    self.handle_report_session(&request, &request_id, edge_server_id).await
+                    self.handle_report_session(&request, &request_id, edge_server_id)
+                        .await
                 }
-                "edge.fullSync" => self.handle_full_sync(&request, &request_id, edge_server_id).await,
-                "edge.handlePermissionQuery" => self.handle_permission_query(&request, &request_id).await,
-                "edge.batchPermissionQuery" => self.handle_batch_permission_query(&request, &request_id).await,
-                "edge.syncVoiceTarget" => self.handle_sync_voice_target(&request, &request_id).await,
+                "edge.fullSync" => {
+                    self.handle_full_sync(&request, &request_id, edge_server_id)
+                        .await
+                }
+                "edge.handlePermissionQuery" => {
+                    self.handle_permission_query(&request, &request_id).await
+                }
+                "edge.batchPermissionQuery" => {
+                    self.handle_batch_permission_query(&request, &request_id)
+                        .await
+                }
+                "edge.syncVoiceTarget" => {
+                    self.handle_sync_voice_target(&request, &request_id).await
+                }
                 "edge.getVoiceTargets" => self.handle_get_voice_targets(&request_id).await,
                 "edge.saveChannel" => self.handle_save_channel(&request, &request_id).await,
                 "edge.handleACL" => self.handle_acl(&request, &request_id).await,
@@ -233,33 +246,67 @@ impl RpcHandler {
                 "edge.getUserList" => self.handle_get_user_list(&request_id).await,
                 "edge.updateUserList" => self.handle_update_user_list(&request, &request_id).await,
                 "edge.saveChannelListeners" => {
-                    self.handle_save_channel_listeners(&request, &request_id).await
+                    self.handle_save_channel_listeners(&request, &request_id)
+                        .await
                 }
                 "edge.loadChannelListeners" => {
-                    self.handle_load_channel_listeners(&request, &request_id).await
+                    self.handle_load_channel_listeners(&request, &request_id)
+                        .await
                 }
                 "blob.put" => self.handle_blob_put(&request, &request_id).await,
                 "blob.get" => self.handle_blob_get(&request, &request_id).await,
-                "blob.getUserTexture" => self.handle_blob_get_user_texture(&request, &request_id).await,
-                "blob.getUserComment" => self.handle_blob_get_user_comment(&request, &request_id).await,
-                "blob.setUserTexture" => self.handle_blob_set_user_texture(&request, &request_id).await,
-                "blob.setUserComment" => self.handle_blob_set_user_comment(&request, &request_id).await,
-                "edge.join" => self.handle_cluster_join(&request, &request_id, edge_server_id).await,
-                "edge.joinComplete" => self.handle_cluster_join_complete(&request, &request_id).await,
-                "edge.reportPeerDisconnect" => self.handle_report_peer_disconnect(&request, &request_id).await,
+                "blob.getUserTexture" => {
+                    self.handle_blob_get_user_texture(&request, &request_id)
+                        .await
+                }
+                "blob.getUserComment" => {
+                    self.handle_blob_get_user_comment(&request, &request_id)
+                        .await
+                }
+                "blob.setUserTexture" => {
+                    self.handle_blob_set_user_texture(&request, &request_id)
+                        .await
+                }
+                "blob.setUserComment" => {
+                    self.handle_blob_set_user_comment(&request, &request_id)
+                        .await
+                }
+                "edge.join" => {
+                    self.handle_cluster_join(&request, &request_id, edge_server_id)
+                        .await
+                }
+                "edge.joinComplete" => {
+                    self.handle_cluster_join_complete(&request, &request_id)
+                        .await
+                }
+                "edge.reportPeerDisconnect" => {
+                    self.handle_report_peer_disconnect(&request, &request_id)
+                        .await
+                }
                 "edge.reportQuality" => self.handle_report_quality(&request, &request_id).await,
                 "cluster.getStatus" => self.handle_cluster_get_status(&request_id).await,
-                "edge.userLeft" => self.handle_user_left_rpc(&request, &request_id, edge_server_id).await,
-                "edge.userMoved" => self.handle_user_moved_rpc(&request, &request_id, edge_server_id).await,
+                "edge.userLeft" => {
+                    self.handle_user_left_rpc(&request, &request_id, edge_server_id)
+                        .await
+                }
+                "edge.userMoved" => {
+                    self.handle_user_moved_rpc(&request, &request_id, edge_server_id)
+                        .await
+                }
                 "edge.userStateChanged" => {
-                    self.handle_user_state_changed_rpc(&request, &request_id, edge_server_id).await
+                    self.handle_user_state_changed_rpc(&request, &request_id, edge_server_id)
+                        .await
                 }
                 "edge.channelState" => self.handle_channel_state_rpc(&request, &request_id).await,
                 "edge.channelRemove" => self.handle_channel_remove_rpc(&request, &request_id).await,
                 "edge.userRemove" => self.handle_user_remove_rpc(&request, &request_id).await,
                 _ => {
                     warn!("Unknown RPC method: {}", method);
-                    Ok(self.make_error_packet(&request_id, -1, &format!("Unknown method: {}", method)))
+                    Ok(self.make_error_packet(
+                        &request_id,
+                        -1,
+                        &format!("Unknown method: {}", method),
+                    ))
                 }
             }
         };
@@ -341,10 +388,16 @@ impl RpcHandler {
     async fn save_user_last_channel(&self, session_id: u32) {
         if let Some(session) = self.state.session_manager.get_session(session_id).await {
             if session.user_id > 0 {
-                if let Err(e) = self.state.user_store.save_last_channel(
-                    session.user_id, session.channel_id
-                ).await {
-                    warn!("Failed to save last channel for user {}: {}", session.user_id, e);
+                if let Err(e) = self
+                    .state
+                    .user_store
+                    .save_last_channel(session.user_id, session.channel_id)
+                    .await
+                {
+                    warn!(
+                        "Failed to save last channel for user {}: {}",
+                        session.user_id, e
+                    );
                 }
             }
         }
@@ -360,11 +413,18 @@ impl RpcHandler {
             return false;
         }
 
-        let count = self.state.failed_auth_tracker.write().await
+        let count = self
+            .state
+            .failed_auth_tracker
+            .write()
+            .await
             .record_failure(client_ip, config.auto_ban.time_window);
 
         if count >= config.auto_ban.attempts {
-            warn!("Auto-banning IP {} after {} failed attempts", client_ip, count);
+            warn!(
+                "Auto-banning IP {} after {} failed attempts",
+                client_ip, count
+            );
             if let Some(ip_bytes) = parse_ip_to_bytes(client_ip) {
                 let ban = crate::database::BanRecord {
                     id: 0,
@@ -383,9 +443,16 @@ impl RpcHandler {
                     warn!("Failed to add auto-ban: {}", e);
                 }
             } else {
-                warn!("Auto-ban: unable to parse IP '{}', skipping DB entry", client_ip);
+                warn!(
+                    "Auto-ban: unable to parse IP '{}', skipping DB entry",
+                    client_ip
+                );
             }
-            self.state.failed_auth_tracker.write().await.clear(client_ip);
+            self.state
+                .failed_auth_tracker
+                .write()
+                .await
+                .clear(client_ip);
             return true;
         }
         false
@@ -422,8 +489,12 @@ impl RpcHandler {
     /// so that edge does not receive it back — for example, stale-session cleanup when an
     /// edge re-registers should only be sent to *other* edges, not to the re-registering
     /// edge itself, which would otherwise kick its own still-connected local users.
-    async fn broadcast_notification_excluding<F>(&self, method: &str, exclude_edge_id: u32, build: F)
-    where
+    async fn broadcast_notification_excluding<F>(
+        &self,
+        method: &str,
+        exclude_edge_id: u32,
+        build: F,
+    ) where
         F: FnOnce(&mut TypedRpcNotification),
     {
         let mut notification = TypedRpcNotification {
@@ -440,7 +511,8 @@ impl RpcHandler {
         };
 
         let data = packet.encode_to_vec();
-        crate::server::broadcast_critical_excluding_sequenced(&self.state, data, exclude_edge_id).await;
+        crate::server::broadcast_critical_excluding_sequenced(&self.state, data, exclude_edge_id)
+            .await;
     }
 
     /// Return the current live server limits (updated on hot-reload).
@@ -467,12 +539,7 @@ impl RpcHandler {
         }
     }
 
-    fn make_response_packet<F>(
-        &self,
-        request_id: &str,
-        method: &str,
-        build: F,
-    ) -> EdgeHubPacket
+    fn make_response_packet<F>(&self, request_id: &str, method: &str, build: F) -> EdgeHubPacket
     where
         F: FnOnce(&mut TypedRpcResponse),
     {
@@ -518,8 +585,12 @@ impl RpcHandler {
     ///
     /// Use this for notifications that do not affect client-visible state (e.g.
     /// route table updates, ninja config, peer topology changes).
-    pub(crate) async fn send_notification_to_edge_unsequenced<F>(&self, edge_id: u32, method: &str, build: F)
-    where
+    pub(crate) async fn send_notification_to_edge_unsequenced<F>(
+        &self,
+        edge_id: u32,
+        method: &str,
+        build: F,
+    ) where
         F: FnOnce(&mut TypedRpcNotification),
     {
         let mut notification = TypedRpcNotification {
@@ -562,28 +633,27 @@ impl RpcHandler {
             let max_ttl_val = self.state.config.voice_routing.max_ttl;
             self.send_notification_to_edge_unsequenced(edge_id, "hub.routeTableUpdate", |n| {
                 n.route_table_update = Some(HubRouteTableUpdateParams {
-                    routes: routes.into_iter().map(|(target, rtype, relay_chain, cost)| {
-                        let relay_transports = vec![0u32; relay_chain.len()]; // all UDP for now
-                        HubRouteEntryProto {
-                            target_edge_id: target,
-                            route_type: rtype,
-                            relay_chain,
-                            relay_transports,
-                            cost,
-                        }
-                    }).collect(),
+                    routes: routes
+                        .into_iter()
+                        .map(|(target, rtype, relay_chain, cost)| {
+                            let relay_transports = vec![0u32; relay_chain.len()]; // all UDP for now
+                            HubRouteEntryProto {
+                                target_edge_id: target,
+                                route_type: rtype,
+                                relay_chain,
+                                relay_transports,
+                                cost,
+                            }
+                        })
+                        .collect(),
                     max_ttl: Some(max_ttl_val),
                 });
-            }).await;
+            })
+            .await;
         }
     }
 
-    fn make_error_packet(
-        &self,
-        request_id: &str,
-        code: i32,
-        message: &str,
-    ) -> EdgeHubPacket {
+    fn make_error_packet(&self, request_id: &str, code: i32, message: &str) -> EdgeHubPacket {
         EdgeHubPacket {
             r#type: PacketType::RpcError as i32,
             rpc_error: Some(RpcError {
@@ -622,9 +692,16 @@ impl RpcHandler {
             }
         }
 
-        let sessions = self.state.session_manager.get_sessions_by_edge(server_id).await;
+        let sessions = self
+            .state
+            .session_manager
+            .get_sessions_by_edge(server_id)
+            .await;
         for session in &sessions {
-            self.state.session_manager.remove_session(session.session_id).await;
+            self.state
+                .session_manager
+                .remove_session(session.session_id)
+                .await;
 
             let remove_params = HubUserRemoveBroadcastParams {
                 session: session.session_id,
@@ -675,7 +752,11 @@ impl RpcHandler {
 
         // Drop the per-edge inbound notification processor and sequence counter
         // so a later re-registration starts with a fresh state machine.
-        self.state.edge_notif_senders.write().await.remove(&server_id);
+        self.state
+            .edge_notif_senders
+            .write()
+            .await
+            .remove(&server_id);
         if let Ok(mut seqs) = self.state.notification_seqs.lock() {
             seqs.remove(&server_id);
         }
@@ -695,7 +776,6 @@ impl RpcHandler {
             );
         }
     }
-
 }
 
 /// Generate a random challenge string for HMAC authentication.
@@ -703,7 +783,8 @@ fn generate_challenge() -> Result<String> {
     use ring::rand::{SecureRandom, SystemRandom};
     let rng = SystemRandom::new();
     let mut buf = [0u8; 32];
-    rng.fill(&mut buf).map_err(|_| anyhow::anyhow!("RNG failed: system entropy unavailable"))?;
+    rng.fill(&mut buf)
+        .map_err(|_| anyhow::anyhow!("RNG failed: system entropy unavailable"))?;
     Ok(hex_encode(&buf))
 }
 
@@ -756,7 +837,8 @@ pub fn hash_password(password: &str) -> Result<String> {
     use ring::rand::{SecureRandom, SystemRandom};
     let rng = SystemRandom::new();
     let mut salt_bytes = [0u8; 16];
-    rng.fill(&mut salt_bytes).map_err(|_| anyhow::anyhow!("RNG failed"))?;
+    rng.fill(&mut salt_bytes)
+        .map_err(|_| anyhow::anyhow!("RNG failed"))?;
     let salt = SaltString::encode_b64(&salt_bytes)
         .map_err(|e| anyhow::anyhow!("Salt encoding failed: {}", e))?;
     let argon2 = Argon2::default();
@@ -776,7 +858,6 @@ fn verify_password(hash: &str, password: &str) -> bool {
         Err(_) => false,
     }
 }
-
 
 /// Parse an IP address string (IPv4 or IPv6) into a 16-byte array (IPv4-mapped IPv6 format).
 /// Returns `None` if the address cannot be parsed so the caller can skip the ban.
@@ -824,7 +905,8 @@ pub(crate) fn maybe_compress(data: Vec<u8>) -> Vec<u8> {
 pub(crate) fn server_limits_from_config(config: &HubConfig) -> ServerLimitsConfig {
     let limits = &config.limits;
     let suggest = &config.suggest;
-    let (suggest_version, suggest_version_v2) = suggest.parse_version()
+    let (suggest_version, suggest_version_v2) = suggest
+        .parse_version()
         .map(|(v1, v2)| (Some(v1), Some(v2)))
         .unwrap_or((None, None));
     let welcome = config.auth.welcome_text.clone();
@@ -875,7 +957,11 @@ struct EdgeInboundSequencer {
 
 impl EdgeInboundSequencer {
     fn new() -> Self {
-        Self { expected_seq: 0, buffer: BTreeMap::new(), gap_since: None }
+        Self {
+            expected_seq: 0,
+            buffer: BTreeMap::new(),
+            gap_since: None,
+        }
     }
 
     /// Feed one envelope; return any notifications now ready for processing.
@@ -922,7 +1008,8 @@ impl EdgeInboundSequencer {
 
     /// Remaining time before the active gap times out, if any gap is active.
     fn gap_remaining(&self) -> Option<Duration> {
-        self.gap_since.map(|t| EDGE_NOTIF_GAP_TIMEOUT.saturating_sub(t.elapsed()))
+        self.gap_since
+            .map(|t| EDGE_NOTIF_GAP_TIMEOUT.saturating_sub(t.elapsed()))
     }
 
     /// Skip to the earliest buffered seq after a gap timeout and flush from there.
@@ -968,7 +1055,7 @@ pub(crate) async fn run_edge_notif_processor(
         let envelope = if let Some(remaining) = seq.gap_remaining() {
             match tokio::time::timeout(remaining, rx.recv()).await {
                 Ok(Some(env)) => env,
-                Ok(None) => break,      // channel closed — edge disconnected
+                Ok(None) => break, // channel closed — edge disconnected
                 Err(_) => {
                     // Gap timeout: skip missing seq and process whatever is buffered.
                     for n in seq.skip_gap() {
@@ -980,7 +1067,7 @@ pub(crate) async fn run_edge_notif_processor(
         } else {
             match rx.recv().await {
                 Some(env) => env,
-                None => break,          // channel closed — edge disconnected
+                None => break, // channel closed — edge disconnected
             }
         };
 

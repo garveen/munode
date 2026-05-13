@@ -18,7 +18,10 @@ pub enum ClientEvent {
     /// A new user appeared on the server (initial sync or join).
     UserJoined(User),
     /// A user left the server.
-    UserLeft { session: u32, reason: Option<String> },
+    UserLeft {
+        session: u32,
+        reason: Option<String>,
+    },
     /// A user's state changed (channel, mute, etc.).
     UserStateChanged(User),
     /// A channel was created (initial sync or new channel).
@@ -74,7 +77,10 @@ pub enum ClientEvent {
     /// Server requested CryptSetup resync (empty CryptSetup notification).
     CryptResyncRequested,
     /// The current user was kicked from the server.
-    Kicked { session: u32, reason: Option<String> },
+    Kicked {
+        session: u32,
+        reason: Option<String>,
+    },
     /// A ping response was received.
     Ping { timestamp: u64 },
     PluginData {

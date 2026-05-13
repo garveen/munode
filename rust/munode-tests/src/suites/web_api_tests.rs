@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::harness::{cleanup_clients, create_clients, single_edge_env, ClientConfig};
+use crate::harness::{ClientConfig, cleanup_clients, create_clients, single_edge_env};
 
 async fn get_json(port: u16, path: &str) -> Result<(u16, Value)> {
     let url = format!("http://127.0.0.1:{}{}", port, path);

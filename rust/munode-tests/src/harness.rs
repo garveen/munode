@@ -6,13 +6,13 @@ use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use munode_client::{ConnectOptions, MumbleClient};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::auth::{AuthServerHandle, start_auth_server};
 use crate::users::find_user;
@@ -142,7 +142,10 @@ impl PortBlockLease {
             }
         }
 
-        bail!("No free port found in reserved block starting from {}", self.base)
+        bail!(
+            "No free port found in reserved block starting from {}",
+            self.base
+        )
     }
 }
 
@@ -349,7 +352,10 @@ pub struct ServerProcess {
 
 impl ServerProcess {
     fn new(child: Child, label: String) -> Self {
-        Self { child: Some(child), label }
+        Self {
+            child: Some(child),
+            label,
+        }
     }
 
     /// Stop the process gracefully (SIGTERM, then kill if needed).
@@ -520,10 +526,18 @@ impl TestEnvironment {
         self.edges[index - 1].client_port
     }
 
-    pub fn edge1(&self) -> u16 { self.edge_port(1) }
-    pub fn edge2(&self) -> u16 { self.edge_port(2) }
-    pub fn edge3(&self) -> u16 { self.edge_port(3) }
-    pub fn edge4(&self) -> u16 { self.edge_port(4) }
+    pub fn edge1(&self) -> u16 {
+        self.edge_port(1)
+    }
+    pub fn edge2(&self) -> u16 {
+        self.edge_port(2)
+    }
+    pub fn edge3(&self) -> u16 {
+        self.edge_port(3)
+    }
+    pub fn edge4(&self) -> u16 {
+        self.edge_port(4)
+    }
 
     pub async fn restart_hub(&mut self) -> Result<()> {
         self._hub.stop();
@@ -537,8 +551,16 @@ impl TestEnvironment {
         }
         let proc = Command::new(&self.hub_bin)
             .arg(&self.hub_cfg_path)
-            .stdout(if self.verbose { Stdio::inherit() } else { Stdio::null() })
-            .stderr(if self.verbose { Stdio::inherit() } else { Stdio::null() })
+            .stdout(if self.verbose {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
+            .stderr(if self.verbose {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
             .spawn()
             .with_context(|| format!("respawn {}", self.hub_bin.display()))?;
         self._hub = ServerProcess::new(proc, format!("Hub({})", self.control_port));
@@ -563,8 +585,16 @@ impl TestEnvironment {
         }
         let proc = Command::new(&self.edge_bin)
             .arg(&self.edge_cfg_paths[i])
-            .stdout(if self.verbose { Stdio::inherit() } else { Stdio::null() })
-            .stderr(if self.verbose { Stdio::inherit() } else { Stdio::null() })
+            .stdout(if self.verbose {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
+            .stderr(if self.verbose {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
             .spawn()
             .with_context(|| format!("respawn edge {}", index))?;
         self._edges[i] = ServerProcess::new(proc, format!("Edge{}({})", index, port));
@@ -650,9 +680,7 @@ impl TestEnvBuilder {
         // binaries, then allocate ports strictly within that block.
         let mut port_block = ReservedPortBlock::acquire(self.port_base)?;
         macro_rules! next_port {
-            () => {{
-                port_block.next_port()?
-            }};
+            () => {{ port_block.next_port()? }};
         }
 
         // ── Auth server ────────────────────────────────────────────────
@@ -698,8 +726,16 @@ impl TestEnvBuilder {
         let hub_bin = find_binary("munode-hub")?;
         let hub_proc = Command::new(&hub_bin)
             .arg(&hub_cfg_path)
-            .stdout(if verbose { Stdio::inherit() } else { Stdio::null() })
-            .stderr(if verbose { Stdio::inherit() } else { Stdio::null() })
+            .stdout(if verbose {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
+            .stderr(if verbose {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
             .spawn()
             .with_context(|| format!("spawn {}", hub_bin.display()))?;
         let hub = ServerProcess::new(hub_proc, format!("Hub({})", hub_control_port));
@@ -752,8 +788,16 @@ impl TestEnvBuilder {
 
             let edge_proc = Command::new(&edge_bin)
                 .arg(&edge_cfg_path)
-                .stdout(if verbose { Stdio::inherit() } else { Stdio::null() })
-                .stderr(if verbose { Stdio::inherit() } else { Stdio::null() })
+                .stdout(if verbose {
+                    Stdio::inherit()
+                } else {
+                    Stdio::null()
+                })
+                .stderr(if verbose {
+                    Stdio::inherit()
+                } else {
+                    Stdio::null()
+                })
                 .spawn()
                 .with_context(|| format!("spawn {}", edge_bin.display()))?;
             edge_processes.push(ServerProcess::new(
@@ -813,7 +857,13 @@ pub struct ClientConfig<'a> {
 
 impl<'a> ClientConfig<'a> {
     pub fn new(username: &'a str, edge: usize) -> Self {
-        Self { username, edge, channel_id: None, use_udp_voice: false, pre_connect_state: None }
+        Self {
+            username,
+            edge,
+            channel_id: None,
+            use_udp_voice: false,
+            pre_connect_state: None,
+        }
     }
 
     pub fn with_channel(mut self, channel_id: u32) -> Self {

@@ -36,7 +36,12 @@ fn admin_ctx(name: &str) -> Result<AdminCtx> {
     let cfg_path = tmp_path.join(format!("{name}.json"));
     fs::write(&cfg_path, serde_json::to_string_pretty(&cfg)?)?;
 
-    Ok(AdminCtx { cfg_path, db_path, blob_path, tmp })
+    Ok(AdminCtx {
+        cfg_path,
+        db_path,
+        blob_path,
+        tmp,
+    })
 }
 
 fn run_hub(args: &[&str]) -> Result<(String, String, i32)> {
@@ -100,7 +105,10 @@ fn test_backup_creates_db_and_manifest() -> Result<()> {
     let dest_str = dest.to_string_lossy().to_string();
     let (stdout, _stderr, code) = run_hub(&["backup", &cfg, &dest_str])?;
     assert_eq!(code, 0, "backup should exit 0; stdout=\n{stdout}");
-    assert!(dest.join("munode.db").exists(), "db file should be backed up");
+    assert!(
+        dest.join("munode.db").exists(),
+        "db file should be backed up"
+    );
     let manifest = dest.join("manifest.json");
     assert!(manifest.exists(), "manifest.json should exist");
     let m: serde_json::Value = serde_json::from_str(&fs::read_to_string(&manifest)?)?;
@@ -140,8 +148,10 @@ fn test_admin_list_users() -> Result<()> {
     run_hub(&["migrate", &cfg])?;
     let (stdout, _stderr, code) = run_hub(&["admin", &cfg, "list-users"])?;
     assert_eq!(code, 0, "admin list-users should exit 0; stdout=\n{stdout}");
-    assert!(stdout.contains("Username") || stdout.contains("Total:"),
-        "list-users should show table or total; got:\n{stdout}");
+    assert!(
+        stdout.contains("Username") || stdout.contains("Total:"),
+        "list-users should show table or total; got:\n{stdout}"
+    );
     Ok(())
 }
 
@@ -152,7 +162,10 @@ fn test_admin_list_channels_shows_root() -> Result<()> {
     run_hub(&["migrate", &cfg])?;
     let (stdout, _stderr, code) = run_hub(&["admin", &cfg, "list-channels"])?;
     assert_eq!(code, 0);
-    assert!(stdout.contains("Root"), "should show Root channel; got:\n{stdout}");
+    assert!(
+        stdout.contains("Root"),
+        "should show Root channel; got:\n{stdout}"
+    );
     Ok(())
 }
 
@@ -163,7 +176,10 @@ fn test_admin_list_bans() -> Result<()> {
     run_hub(&["migrate", &cfg])?;
     let (stdout, _stderr, code) = run_hub(&["admin", &cfg, "list-bans"])?;
     assert_eq!(code, 0);
-    assert!(stdout.contains("Total:"), "should show ban total; got:\n{stdout}");
+    assert!(
+        stdout.contains("Total:"),
+        "should show ban total; got:\n{stdout}"
+    );
     Ok(())
 }
 
@@ -174,7 +190,10 @@ fn test_admin_cleanup_bans() -> Result<()> {
     run_hub(&["migrate", &cfg])?;
     let (stdout, _stderr, code) = run_hub(&["admin", &cfg, "cleanup-bans"])?;
     assert_eq!(code, 0);
-    assert!(stdout.contains("Removed"), "should mention 'Removed'; got:\n{stdout}");
+    assert!(
+        stdout.contains("Removed"),
+        "should mention 'Removed'; got:\n{stdout}"
+    );
     Ok(())
 }
 

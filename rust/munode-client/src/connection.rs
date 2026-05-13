@@ -262,8 +262,7 @@ pub async fn udp_read_loop(
                 // to at most one request every 5 s).
                 let now = tokio::time::Instant::now();
                 if now.duration_since(last_good) > std::time::Duration::from_secs(5)
-                    && now.duration_since(last_resync_request)
-                        > std::time::Duration::from_secs(5)
+                    && now.duration_since(last_resync_request) > std::time::Duration::from_secs(5)
                 {
                     last_resync_request = now;
                     if let Some(tx) = tcp_tx.as_ref() {
@@ -300,7 +299,12 @@ pub fn send_message<M: prost::Message>(
 
 /// Bind a UDP socket to an OS-assigned local port and connect it to `host:port`.
 pub async fn create_udp_socket(host: &str, port: u16) -> Result<Arc<UdpSocket>> {
-    let socket = UdpSocket::bind("0.0.0.0:0").await.context("UDP bind failed")?;
-    socket.connect((host, port)).await.context("UDP connect failed")?;
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .context("UDP bind failed")?;
+    socket
+        .connect((host, port))
+        .await
+        .context("UDP connect failed")?;
     Ok(Arc::new(socket))
 }

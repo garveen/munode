@@ -6,12 +6,12 @@
 //! encryption and UDP socket writes (UDP path) or UdpTunnel framing and
 //! mpsc sends (TCP path) — remain in the respective modules.
 
+use crate::hot_slot::{BroadcastCache, get_hot_slot};
+use crate::hub_client::HubClient;
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::{atomic::Ordering, Arc};
-use smallvec::SmallVec;
-use crate::hub_client::HubClient;
-use crate::hot_slot::{BroadcastCache, get_hot_slot};
+use std::sync::{Arc, atomic::Ordering};
 
 /// Which local sessions and remote edges should receive a voice packet.
 ///
@@ -64,11 +64,9 @@ pub async fn compute_voice_targets(
 
     if voice_target >= 1 && voice_target <= 30 {
         // ── Whisper / shout targeting ────────────────────────────────────────
-        if let Some(cached) = edge_state.get_cached_whisper_route(
-            sender_session,
-            voice_target,
-            current_version,
-        ) {
+        if let Some(cached) =
+            edge_state.get_cached_whisper_route(sender_session, voice_target, current_version)
+        {
             return Some(VoiceTargets {
                 direct_sessions: cached.direct_sessions,
                 channel_sessions: cached.channel_sessions,
@@ -173,7 +171,10 @@ pub async fn compute_voice_targets(
                 continue;
             }
             let ch_members = edge_state.client_manager.get_channel_sessions(ch_id).await;
-            let ch_listeners = edge_state.client_manager.get_listening_sessions(ch_id).await;
+            let ch_listeners = edge_state
+                .client_manager
+                .get_listening_sessions(ch_id)
+                .await;
             for target in ch_members.into_iter().chain(ch_listeners.into_iter()) {
                 if target == sender_session || direct_set.contains(&target) {
                     continue;
@@ -257,54 +258,57 @@ pub async fn compute_voice_targets(
             }
         };
 
-        let (raw_sessions, relay_edge_ids): (Cow<'_, [u32]>, SmallVec<[u32; 8]>) = if let Some(ref c) = cache_hit {
-            // Cache hit: borrow the cached session slice directly to avoid a per-packet Vec clone.
-            (Cow::Borrowed(c.local_sessions.as_slice()), c.relay_edge_ids.clone())
-        } else {
-            // Cache miss: full computation.
-            let linked_channels = edge_state
-                .channel_manager
-                .get_all_linked_channels(sender_channel)
-                .await;
+        let (raw_sessions, relay_edge_ids): (Cow<'_, [u32]>, SmallVec<[u32; 8]>) =
+            if let Some(ref c) = cache_hit {
+                // Cache hit: borrow the cached session slice directly to avoid a per-packet Vec clone.
+                (
+                    Cow::Borrowed(c.local_sessions.as_slice()),
+                    c.relay_edge_ids.clone(),
+                )
+            } else {
+                // Cache miss: full computation.
+                let linked_channels = edge_state
+                    .channel_manager
+                    .get_all_linked_channels(sender_channel)
+                    .await;
 
-            let sessions = edge_state
-                .client_manager
-                .get_channel_session_ids_with_listeners_in_set(&linked_channels, sender_session)
-                .await;
+                let sessions = edge_state
+                    .client_manager
+                    .get_channel_session_ids_with_listeners_in_set(&linked_channels, sender_session)
+                    .await;
 
-            let remote_users = edge_state
-                .channel_manager
-                .get_remote_users_in_channels(&linked_channels)
-                .await;
+                let remote_users = edge_state
+                    .channel_manager
+                    .get_remote_users_in_channels(&linked_channels)
+                    .await;
 
-            let relay_ids: SmallVec<[u32; 8]> = {
-                let mut seen = HashSet::new();
-                remote_users
-                    .iter()
-                    .filter(|ru| {
-                        !ru.deaf
-                            && !ru.self_deaf
-                            && ru.edge_id != 0
-                            && ru.edge_id != my_edge_id
-                    })
-                    .filter_map(|ru| seen.insert(ru.edge_id).then_some(ru.edge_id))
-                    .collect()
+                let relay_ids: SmallVec<[u32; 8]> = {
+                    let mut seen = HashSet::new();
+                    remote_users
+                        .iter()
+                        .filter(|ru| {
+                            !ru.deaf && !ru.self_deaf && ru.edge_id != 0 && ru.edge_id != my_edge_id
+                        })
+                        .filter_map(|ru| seen.insert(ru.edge_id).then_some(ru.edge_id))
+                        .collect()
+                };
+
+                // Atomically write cache before returning — only when the slot actually
+                // belongs to sender_session (i.e. this is a local sender, not a relayed
+                // packet whose session ID collides with a local session).
+                let slot = get_hot_slot(sender_session);
+                if slot.is_active_for(sender_session) {
+                    slot.broadcast_cache
+                        .store(Arc::new(Some(Arc::new(BroadcastCache {
+                            local_sessions: SmallVec::from_iter(sessions.iter().copied()),
+                            relay_edge_ids: relay_ids.clone(),
+                        }))));
+                    slot.broadcast_cache_version
+                        .store(current_version, Ordering::Release);
+                }
+
+                (Cow::Owned(sessions), relay_ids)
             };
-
-            // Atomically write cache before returning — only when the slot actually
-            // belongs to sender_session (i.e. this is a local sender, not a relayed
-            // packet whose session ID collides with a local session).
-            let slot = get_hot_slot(sender_session);
-            if slot.is_active_for(sender_session) {
-                slot.broadcast_cache.store(Arc::new(Some(Arc::new(BroadcastCache {
-                    local_sessions: SmallVec::from_iter(sessions.iter().copied()),
-                    relay_edge_ids: relay_ids.clone(),
-                }))));
-                slot.broadcast_cache_version.store(current_version, Ordering::Release);
-            }
-
-            (Cow::Owned(sessions), relay_ids)
-        };
 
         // Deaf-filter runs on every packet (HotSlot reads are lock-free atomics).
         let local_sessions: SmallVec<[u32; 32]> = raw_sessions
@@ -331,7 +335,12 @@ pub async fn compute_voice_targets(
                 if slot.is_active_for(sender_session) {
                     slot.plugin_context.load_full()
                 } else {
-                    Arc::new(edge_state.client_manager.get_plugin_context(sender_session).await)
+                    Arc::new(
+                        edge_state
+                            .client_manager
+                            .get_plugin_context(sender_session)
+                            .await,
+                    )
                 }
             };
             if sender_ctx.is_empty() {

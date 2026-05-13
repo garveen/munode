@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use tracing_subscriber::{fmt, reload, EnvFilter, Registry};
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, Registry, fmt, reload};
 
 /// Handle for dynamically reloading the active log-level filter at runtime.
 ///
@@ -30,8 +30,8 @@ impl LogReloadHandle {
     /// this call, e.g. a global subscriber was already registered at init time).
     pub fn reload_level(&self, level: &str) {
         let Some(handle) = &self.handle else { return };
-        let new_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(level));
+        let new_filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
         if let Err(e) = handle.reload(new_filter) {
             tracing::warn!("Failed to reload log filter: {}", e);
         }
@@ -54,8 +54,7 @@ pub fn init_logging(level: &str) {
 /// subscriber is already registered).  Prefer [`init_logging_with_reload`] when
 /// runtime log-level changes are required.
 pub fn init_logging_with_format(level: &str, format: &str) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     if format == "json" {
         let _ = fmt()
@@ -88,8 +87,7 @@ pub fn init_logging_with_format(level: &str, format: &str) {
 /// If a global subscriber was already registered (e.g. in tests) the returned
 /// handle will be a no-op; log output continues through the existing subscriber.
 pub fn init_logging_with_reload(level: &str, format: &str) -> LogReloadHandle {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     // The explicit `Registry` type parameter is required so that the reload
     // handle has a concrete type before the layer is composed with the
@@ -110,7 +108,13 @@ pub fn init_logging_with_reload(level: &str, format: &str) -> LogReloadHandle {
             )
             .try_init()
             .is_ok();
-        LogReloadHandle { handle: if ok { Some(Arc::new(reload_handle)) } else { None } }
+        LogReloadHandle {
+            handle: if ok {
+                Some(Arc::new(reload_handle))
+            } else {
+                None
+            },
+        }
     } else {
         let ok = tracing_subscriber::registry()
             .with(reload_layer)
@@ -122,6 +126,12 @@ pub fn init_logging_with_reload(level: &str, format: &str) -> LogReloadHandle {
             )
             .try_init()
             .is_ok();
-        LogReloadHandle { handle: if ok { Some(Arc::new(reload_handle)) } else { None } }
+        LogReloadHandle {
+            handle: if ok {
+                Some(Arc::new(reload_handle))
+            } else {
+                None
+            },
+        }
     }
 }

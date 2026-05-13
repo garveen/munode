@@ -6,24 +6,31 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_save_channel.as_ref()
+        let params = request
+            .edge_save_channel
+            .as_ref()
             .context("Missing edge_save_channel params")?;
 
         // Validate channel name against configured regex (for create and rename).
         if let Some(channel_name) = &params.name {
             if let Some(re) = &self.channel_name_regex {
                 if !re.is_match(channel_name) {
-                    warn!("Rejecting channel name '{}': does not match configured channel_name_regex", channel_name);
-                    return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
-                        r.edge_save_channel = Some(EdgeSaveChannelResult {
-                            success: false,
-                            channel_id: None,
-                            error: Some(format!(
-                                "Invalid channel name: '{}' does not meet naming requirements",
-                                channel_name
-                            )),
-                        });
-                    }));
+                    warn!(
+                        "Rejecting channel name '{}': does not match configured channel_name_regex",
+                        channel_name
+                    );
+                    return Ok(
+                        self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: None,
+                                error: Some(format!(
+                                    "Invalid channel name: '{}' does not meet naming requirements",
+                                    channel_name
+                                )),
+                            });
+                        }),
+                    );
                 }
             }
         }
@@ -50,13 +57,18 @@ impl RpcHandler {
             if count_limit > 0 {
                 let current_count = self.state.channel_store.count().await as u32;
                 if current_count >= count_limit {
-                    return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
-                        r.edge_save_channel = Some(EdgeSaveChannelResult {
-                            success: false,
-                            channel_id: None,
-                            error: Some(format!("Channel count limit ({}) reached", count_limit)),
-                        });
-                    }));
+                    return Ok(
+                        self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: None,
+                                error: Some(format!(
+                                    "Channel count limit ({}) reached",
+                                    count_limit
+                                )),
+                            });
+                        }),
+                    );
                 }
             }
 
@@ -80,31 +92,49 @@ impl RpcHandler {
                         d
                     };
                     if depth > nesting_limit {
-                        return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
-                            r.edge_save_channel = Some(EdgeSaveChannelResult {
-                                success: false,
-                                channel_id: None,
-                                error: Some(format!("Channel nesting limit ({}) exceeded", nesting_limit)),
-                            });
-                        }));
+                        return Ok(self.make_response_packet(
+                            request_id,
+                            "edge.saveChannel",
+                            |r| {
+                                r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                    success: false,
+                                    channel_id: None,
+                                    error: Some(format!(
+                                        "Channel nesting limit ({}) exceeded",
+                                        nesting_limit
+                                    )),
+                                });
+                            },
+                        ));
                     }
                 }
             }
 
             // Create new channel
-            let channel_name = params.name.clone().unwrap_or_else(|| "New Channel".to_string());
+            let channel_name = params
+                .name
+                .clone()
+                .unwrap_or_else(|| "New Channel".to_string());
 
             // Check for duplicate sibling name (Murmur Messages.cpp:1344).
             {
                 let all_channels = self.state.channel_store.get_all_channels().await;
-                if all_channels.iter().any(|c| c.parent_id == params.parent_id && c.name == channel_name) {
-                    return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
-                        r.edge_save_channel = Some(EdgeSaveChannelResult {
-                            success: false,
-                            channel_id: None,
-                            error: Some(format!("A channel named '{}' already exists in this location", channel_name)),
-                        });
-                    }));
+                if all_channels
+                    .iter()
+                    .any(|c| c.parent_id == params.parent_id && c.name == channel_name)
+                {
+                    return Ok(
+                        self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: None,
+                                error: Some(format!(
+                                    "A channel named '{}' already exists in this location",
+                                    channel_name
+                                )),
+                            });
+                        }),
+                    );
                 }
             }
 
@@ -121,7 +151,11 @@ impl RpcHandler {
                 inherit_acl: params.inherit_acl.unwrap_or(true),
                 links: std::collections::HashSet::new(),
             };
-            let id = self.state.channel_store.create_and_persist(ch.clone()).await
+            let id = self
+                .state
+                .channel_store
+                .create_and_persist(ch.clone())
+                .await
                 .context("Failed to create and persist channel")?;
 
             // Broadcast channel created
@@ -131,7 +165,11 @@ impl RpcHandler {
                 parent_id: ch.parent_id,
                 description: Some(ch.description.clone()),
                 position: Some(ch.position),
-                max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
+                max_users: if ch.max_users > 0 {
+                    Some(ch.max_users)
+                } else {
+                    None
+                },
                 temporary: Some(is_temp),
                 inherit_acl: Some(ch.inherit_acl),
                 links: vec![],
@@ -145,9 +183,17 @@ impl RpcHandler {
             if is_temp {
                 if let Some(creator_session) = params.creator_session {
                     if creator_session != 0 {
-                        if let Some(session) = self.state.session_manager.get_session(creator_session).await {
+                        if let Some(session) = self
+                            .state
+                            .session_manager
+                            .get_session(creator_session)
+                            .await
+                        {
                             let old_ch = session.channel_id;
-                            self.state.session_manager.move_user_to_channel(creator_session, id).await;
+                            self.state
+                                .session_manager
+                                .move_user_to_channel(creator_session, id)
+                                .await;
                             let moved_params = HubUserMovedParams {
                                 session_id: creator_session,
                                 edge_id: session.edge_id,
@@ -156,7 +202,8 @@ impl RpcHandler {
                             };
                             self.broadcast_notification("hub.userMoved", |n| {
                                 n.user_moved = Some(moved_params);
-                            }).await;
+                            })
+                            .await;
                             info!(
                                 session_id = creator_session,
                                 channel_id = id,
@@ -179,14 +226,23 @@ impl RpcHandler {
                     let new_name = name.clone();
                     let effective_parent = params.parent_id.map(Some).unwrap_or(ch.parent_id);
                     let all_channels = self.state.channel_store.get_all_channels().await;
-                    if all_channels.iter().any(|c| c.parent_id == effective_parent && c.id != id && c.name == new_name) {
-                        return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
-                            r.edge_save_channel = Some(EdgeSaveChannelResult {
-                                success: false,
-                                channel_id: Some(id),
-                                error: Some(format!("A channel named '{}' already exists in this location", new_name)),
-                            });
-                        }));
+                    if all_channels.iter().any(|c| {
+                        c.parent_id == effective_parent && c.id != id && c.name == new_name
+                    }) {
+                        return Ok(self.make_response_packet(
+                            request_id,
+                            "edge.saveChannel",
+                            |r| {
+                                r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                    success: false,
+                                    channel_id: Some(id),
+                                    error: Some(format!(
+                                        "A channel named '{}' already exists in this location",
+                                        new_name
+                                    )),
+                                });
+                            },
+                        ));
                     }
                     ch.name = new_name;
                 }
@@ -206,7 +262,10 @@ impl RpcHandler {
                     ch.description = desc.clone();
                 }
 
-                self.state.channel_store.update_and_persist(ch.clone()).await
+                self.state
+                    .channel_store
+                    .update_and_persist(ch.clone())
+                    .await
                     .context("Failed to update and persist channel")?;
 
                 // Broadcast channel updated
@@ -216,7 +275,11 @@ impl RpcHandler {
                     parent_id: ch.parent_id,
                     description: Some(ch.description),
                     position: Some(ch.position),
-                    max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
+                    max_users: if ch.max_users > 0 {
+                        Some(ch.max_users)
+                    } else {
+                        None
+                    },
                     temporary: Some(ch.temporary),
                     inherit_acl: Some(ch.inherit_acl),
                     links: ch.links.iter().copied().collect(),
@@ -235,9 +298,11 @@ impl RpcHandler {
             error: None,
         };
 
-        Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
-            r.edge_save_channel = Some(result);
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                r.edge_save_channel = Some(result);
+            }),
+        )
     }
 
     pub(super) async fn handle_acl(
@@ -245,7 +310,9 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_handle_acl.as_ref()
+        let params = request
+            .edge_handle_acl
+            .as_ref()
             .context("Missing edge_handle_acl params")?;
 
         if params.query {
@@ -254,8 +321,11 @@ impl RpcHandler {
             // channel, collect parent-channel ACLs that have apply_subs=true (marked inherited),
             // then append the target channel's own ACLs (marked not-inherited).
             let channel_id = params.channel_id;
-            let inherit_acl = self.state.channel_store
-                .get_channel(channel_id).await
+            let inherit_acl = self
+                .state
+                .channel_store
+                .get_channel(channel_id)
+                .await
                 .map(|c| c.inherit_acl)
                 .unwrap_or(true);
 
@@ -322,19 +392,22 @@ impl RpcHandler {
             }
 
             // Load channel groups for this channel from the in-memory store.
-            let groups_proto: Vec<munode_protocol::mumbleproto::acl::ChanGroup> =
-                self.state.acl_manager.get_channel_groups(channel_id).await
-                    .iter()
-                    .map(|g| munode_protocol::mumbleproto::acl::ChanGroup {
-                        name: g.name.clone(),
-                        inherited: Some(false),
-                        inherit: Some(g.inherit),
-                        inheritable: Some(g.inheritable),
-                        add: g.add.clone(),
-                        remove: g.remove.clone(),
-                        inherited_members: vec![],
-                    })
-                    .collect();
+            let groups_proto: Vec<munode_protocol::mumbleproto::acl::ChanGroup> = self
+                .state
+                .acl_manager
+                .get_channel_groups(channel_id)
+                .await
+                .iter()
+                .map(|g| munode_protocol::mumbleproto::acl::ChanGroup {
+                    name: g.name.clone(),
+                    inherited: Some(false),
+                    inherit: Some(g.inherit),
+                    inheritable: Some(g.inheritable),
+                    add: g.add.clone(),
+                    remove: g.remove.clone(),
+                    inherited_members: vec![],
+                })
+                .collect();
 
             // Encode ACL data as raw bytes (Mumble ACL message format)
             // Do NOT set query=true in the response: the official Mumble client initialises its
@@ -360,17 +433,21 @@ impl RpcHandler {
                 channel_id: Some(params.channel_id),
                 permission_denied: None,
             };
-            Ok(self.make_response_packet(request_id, "edge.handleACL", |r| {
-                r.edge_handle_acl = Some(result);
-            }))
+            Ok(
+                self.make_response_packet(request_id, "edge.handleACL", |r| {
+                    r.edge_handle_acl = Some(result);
+                }),
+            )
         } else {
             // ACL update: parse raw data and save
             let acl_msg: munode_protocol::mumbleproto::Acl =
                 prost::Message::decode(params.raw_data.as_slice())
                     .context("Failed to decode ACL message")?;
 
-            let entries: Vec<crate::acl_manager::AclEntry> = acl_msg.acls.iter().map(|a| {
-                crate::acl_manager::AclEntry {
+            let entries: Vec<crate::acl_manager::AclEntry> = acl_msg
+                .acls
+                .iter()
+                .map(|a| crate::acl_manager::AclEntry {
                     channel_id: params.channel_id,
                     user_id: a.user_id.map(|id| id as i32),
                     group_name: a.group.clone(),
@@ -378,29 +455,44 @@ impl RpcHandler {
                     apply_subs: a.apply_subs.unwrap_or(true),
                     allow: a.grant.unwrap_or(0),
                     deny: a.deny.unwrap_or(0),
-                }
-            }).collect();
+                })
+                .collect();
 
-            self.state.acl_manager.save_acls(params.channel_id, &entries).await?;
+            self.state
+                .acl_manager
+                .save_acls(params.channel_id, &entries)
+                .await?;
 
             // Save channel groups through the AclManager (write-through: DB + in-memory).
-            let channel_groups: Vec<crate::acl_manager::ChannelGroup> = acl_msg.groups.iter().map(|g| {
-                crate::acl_manager::ChannelGroup {
+            let channel_groups: Vec<crate::acl_manager::ChannelGroup> = acl_msg
+                .groups
+                .iter()
+                .map(|g| crate::acl_manager::ChannelGroup {
                     id: 0,
                     name: g.name.clone(),
                     inherit: g.inherit.unwrap_or(true),
                     inheritable: g.inheritable.unwrap_or(true),
                     add: g.add.clone(),
                     remove: g.remove.clone(),
-                }
-            }).collect();
-            if let Err(e) = self.state.acl_manager.save_channel_groups(params.channel_id, channel_groups).await {
+                })
+                .collect();
+            if let Err(e) = self
+                .state
+                .acl_manager
+                .save_channel_groups(params.channel_id, channel_groups)
+                .await
+            {
                 warn!("Failed to save channel groups: {}", e);
             }
 
             // Update inherit_acl flag on channel if provided
             if let Some(inherit) = acl_msg.inherit_acls {
-                if let Some(mut ch) = self.state.channel_store.get_channel(params.channel_id).await {
+                if let Some(mut ch) = self
+                    .state
+                    .channel_store
+                    .get_channel(params.channel_id)
+                    .await
+                {
                     ch.inherit_acl = inherit;
                     self.state.channel_store.update_channel(ch).await;
                 }
@@ -412,17 +504,31 @@ impl RpcHandler {
             // Super-users are always guaranteed Write regardless of ACL entries, so skip.
             let actor_user_id = params.actor_user_id as i32;
             if actor_user_id > 0 {
-                let actor_groups: Vec<String> = match self.state.session_manager
-                    .get_session(params.actor_session).await {
+                let actor_groups: Vec<String> = match self
+                    .state
+                    .session_manager
+                    .get_session(params.actor_session)
+                    .await
+                {
                     Some(s) => s.groups.clone(),
                     None => vec![],
                 };
-                let still_has_write = self.state.acl_manager
-                    .has_permission(actor_user_id, params.channel_id, &actor_groups, permission::WRITE)
+                let still_has_write = self
+                    .state
+                    .acl_manager
+                    .has_permission(
+                        actor_user_id,
+                        params.channel_id,
+                        &actor_groups,
+                        permission::WRITE,
+                    )
                     .await;
                 if !still_has_write {
-                    let mut entries = self.state.acl_manager
-                        .get_channel_acls(params.channel_id).await;
+                    let mut entries = self
+                        .state
+                        .acl_manager
+                        .get_channel_acls(params.channel_id)
+                        .await;
                     entries.push(crate::acl_manager::AclEntry {
                         channel_id: params.channel_id,
                         user_id: Some(actor_user_id),
@@ -432,8 +538,16 @@ impl RpcHandler {
                         allow: permission::WRITE | permission::TRAVERSE,
                         deny: 0,
                     });
-                    if let Err(e) = self.state.acl_manager.save_acls(params.channel_id, &entries).await {
-                        warn!("Failed to save self-protection ACL for user {}: {}", actor_user_id, e);
+                    if let Err(e) = self
+                        .state
+                        .acl_manager
+                        .save_acls(params.channel_id, &entries)
+                        .await
+                    {
+                        warn!(
+                            "Failed to save self-protection ACL for user {}: {}",
+                            actor_user_id, e
+                        );
                     }
                 }
             }
@@ -441,7 +555,11 @@ impl RpcHandler {
             // Audit log the ACL change.
             let db = self.state.database.clone();
             let log_channel_id = params.channel_id;
-            let log_actor = if params.actor_user_id > 0 { Some(params.actor_user_id as i32) } else { None };
+            let log_actor = if params.actor_user_id > 0 {
+                Some(params.actor_user_id as i32)
+            } else {
+                None
+            };
             let log_entries = entries.clone();
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = db.log_acl_change(log_channel_id, log_actor, &log_entries) {
@@ -453,11 +571,20 @@ impl RpcHandler {
             // channel is now enter-restricted (computed once here to avoid an extra RPC
             // round-trip per Edge per AclUpdated event).
             let is_enter_restricted = {
-                let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
+                let channel_snapshot = self
+                    .state
+                    .channel_store
+                    .get_parent_and_inherit_snapshot()
+                    .await;
                 let chain = build_ancestor_chain(&channel_snapshot, params.channel_id);
                 let inherit_flags: Vec<bool> = chain
                     .iter()
-                    .map(|&cid| channel_snapshot.get(&cid).map(|(_, inh)| *inh).unwrap_or(true))
+                    .map(|&cid| {
+                        channel_snapshot
+                            .get(&cid)
+                            .map(|(_, inh)| *inh)
+                            .unwrap_or(true)
+                    })
                     .collect();
                 let acl_snapshot = self.state.acl_manager.acl_entries_snapshot().await;
                 AclManager::is_enter_restricted_with_chain(
@@ -472,9 +599,11 @@ impl RpcHandler {
                     serde_json::json!({
                         "channel_id": params.channel_id,
                         "is_enter_restricted": is_enter_restricted,
-                    }).to_string()
+                    })
+                    .to_string(),
                 );
-            }).await;
+            })
+            .await;
 
             let result = EdgeHandleAclResult {
                 success: true,
@@ -483,9 +612,11 @@ impl RpcHandler {
                 channel_id: Some(params.channel_id),
                 permission_denied: None,
             };
-            Ok(self.make_response_packet(request_id, "edge.handleACL", |r| {
-                r.edge_handle_acl = Some(result);
-            }))
+            Ok(
+                self.make_response_packet(request_id, "edge.handleACL", |r| {
+                    r.edge_handle_acl = Some(result);
+                }),
+            )
         }
     }
 
@@ -497,27 +628,51 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = match &request.edge_save_channel_listeners {
             Some(p) => p,
-            None => return Ok(self.make_error_packet(request_id, -1, "Missing edge_save_channel_listeners params")),
+            None => {
+                return Ok(self.make_error_packet(
+                    request_id,
+                    -1,
+                    "Missing edge_save_channel_listeners params",
+                ));
+            }
         };
         // Only save for registered users (user_id > 0); guests (user_id == 0) are skipped.
         if params.user_id > 0 {
-            if let Err(e) = self.state.user_store.save_listeners(params.user_id, &params.channel_ids).await {
-                warn!("Failed to save channel listeners for user {}: {}", params.user_id, e);
-                return Ok(self.make_response_packet(request_id, "edge.saveChannelListeners", |r| {
-                    r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
-                        success: false,
-                        error: Some(e.to_string()),
-                    });
-                }));
+            if let Err(e) = self
+                .state
+                .user_store
+                .save_listeners(params.user_id, &params.channel_ids)
+                .await
+            {
+                warn!(
+                    "Failed to save channel listeners for user {}: {}",
+                    params.user_id, e
+                );
+                return Ok(self.make_response_packet(
+                    request_id,
+                    "edge.saveChannelListeners",
+                    |r| {
+                        r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
+                            success: false,
+                            error: Some(e.to_string()),
+                        });
+                    },
+                ));
             }
-            debug!("Saved {} channel listeners for user {}", params.channel_ids.len(), params.user_id);
+            debug!(
+                "Saved {} channel listeners for user {}",
+                params.channel_ids.len(),
+                params.user_id
+            );
         }
-        Ok(self.make_response_packet(request_id, "edge.saveChannelListeners", |r| {
-            r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
-                success: true,
-                error: None,
-            });
-        }))
+        Ok(
+            self.make_response_packet(request_id, "edge.saveChannelListeners", |r| {
+                r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
+                    success: true,
+                    error: None,
+                });
+            }),
+        )
     }
 
     /// Handle edge.loadChannelListeners — retrieve a user's persisted listening channels.
@@ -528,36 +683,55 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = match &request.edge_load_channel_listeners {
             Some(p) => p,
-            None => return Ok(self.make_error_packet(request_id, -1, "Missing edge_load_channel_listeners params")),
+            None => {
+                return Ok(self.make_error_packet(
+                    request_id,
+                    -1,
+                    "Missing edge_load_channel_listeners params",
+                ));
+            }
         };
         if params.user_id == 0 {
             // Guests have no persistent listeners.
-            return Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
-                r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
-                    success: true,
-                    channel_ids: vec![],
-                    error: None,
-                });
-            }));
+            return Ok(
+                self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+                    r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                        success: true,
+                        channel_ids: vec![],
+                        error: None,
+                    });
+                }),
+            );
         }
-        let channel_ids = match self.state.user_store
+        let channel_ids = match self
+            .state
+            .user_store
             .consume_listeners(params.user_id, crate::user_store::LISTENER_TTL_SECS)
             .await
         {
             Ok(ids) => ids,
             Err(e) => {
-                warn!("Failed to consume channel listeners for user {}: {}", params.user_id, e);
+                warn!(
+                    "Failed to consume channel listeners for user {}: {}",
+                    params.user_id, e
+                );
                 Vec::new()
             }
         };
-        debug!("Consumed {} channel listeners for user {}", channel_ids.len(), params.user_id);
-        Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
-            r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
-                success: true,
-                channel_ids,
-                error: None,
-            });
-        }))
+        debug!(
+            "Consumed {} channel listeners for user {}",
+            channel_ids.len(),
+            params.user_id
+        );
+        Ok(
+            self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+                r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                    success: true,
+                    channel_ids,
+                    error: None,
+                });
+            }),
+        )
     }
 
     /// Check if a channel is temporary and empty, and if so delete it and broadcast.
@@ -586,8 +760,11 @@ impl RpcHandler {
                 return;
             }
             // Keep channel if it still has sub-channels
-            let has_children = self.state.channel_store
-                .get_all_channels().await
+            let has_children = self
+                .state
+                .channel_store
+                .get_all_channels()
+                .await
                 .iter()
                 .any(|c| c.parent_id == Some(current_id));
             if has_children {
@@ -596,7 +773,10 @@ impl RpcHandler {
             let parent_id = ch.parent_id;
             // Delete this empty temporary channel via the coordinated helper
             // (persists to DB, clears ACL/group memory, broadcasts to edges).
-            info!("Deleting empty temporary channel {} ('{}')", current_id, ch.name);
+            info!(
+                "Deleting empty temporary channel {} ('{}')",
+                current_id, ch.name
+            );
             self.remove_channel_coordinated(current_id).await;
             // Continue to check the parent channel
             match parent_id {
@@ -676,7 +856,10 @@ impl RpcHandler {
                 }
                 match parent_map.get(&cur).copied().flatten() {
                     Some(p) => cur = p,
-                    None => { chain.push(0); break; }
+                    None => {
+                        chain.push(0);
+                        break;
+                    }
                 }
             }
             chain
@@ -693,12 +876,16 @@ impl RpcHandler {
 
         // Track current occupancy per channel so that as we displace multiple users
         // we account for users we have already decided to move there in this batch.
-        let mut channel_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut channel_counts: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
         for s in &all_sessions {
             *channel_counts.entry(s.channel_id).or_insert(0) += 1;
         }
 
-        for session in all_sessions.iter().filter(|s| subtree_set.contains(&s.channel_id)) {
+        for session in all_sessions
+            .iter()
+            .filter(|s| subtree_set.contains(&s.channel_id))
+        {
             // Walk ancestor_chain to find the first channel the user can enter that
             // is not full.  Root (id=0) is always the unconditional fallback.
             // Mirrors Murmur: while (target->cParent &&
@@ -718,12 +905,17 @@ impl RpcHandler {
                         continue; // full — walk up
                     }
                 }
-                if self.state.acl_manager.has_permission(
-                    session.user_id as i32,
-                    ch_id,
-                    &session.groups,
-                    munode_common::permission::ENTER,
-                ).await {
+                if self
+                    .state
+                    .acl_manager
+                    .has_permission(
+                        session.user_id as i32,
+                        ch_id,
+                        &session.groups,
+                        munode_common::permission::ENTER,
+                    )
+                    .await
+                {
                     target_channel = ch_id;
                     break;
                 }
@@ -732,11 +924,16 @@ impl RpcHandler {
             // Update the in-batch occupancy counters so subsequent displacees account
             // for earlier moves in this same removal batch.
             if let Some(cnt) = channel_counts.get_mut(&session.channel_id) {
-                if *cnt > 0 { *cnt -= 1; }
+                if *cnt > 0 {
+                    *cnt -= 1;
+                }
             }
             *channel_counts.entry(target_channel).or_insert(0) += 1;
 
-            self.state.session_manager.move_user_to_channel(session.session_id, target_channel).await;
+            self.state
+                .session_manager
+                .move_user_to_channel(session.session_id, target_channel)
+                .await;
             let moved_params = HubUserMovedParams {
                 session_id: session.session_id,
                 edge_id: session.edge_id,
@@ -745,7 +942,8 @@ impl RpcHandler {
             };
             self.broadcast_notification("hub.userMoved", |n| {
                 n.user_moved = Some(moved_params.clone());
-            }).await;
+            })
+            .await;
             info!(
                 session_id = session.session_id,
                 from = session.channel_id,
@@ -756,7 +954,8 @@ impl RpcHandler {
 
         // --- 3. Remove channel-listener state for the sub-tree ---
         for session in self.state.session_manager.get_all_sessions().await.iter() {
-            let removed: Vec<u32> = session.listening_channels
+            let removed: Vec<u32> = session
+                .listening_channels
                 .iter()
                 .copied()
                 .filter(|ch| subtree_set.contains(ch))
@@ -765,7 +964,12 @@ impl RpcHandler {
                 continue;
             }
             // Update the session in-memory.
-            if let Some(mut s) = self.state.session_manager.get_session(session.session_id).await {
+            if let Some(mut s) = self
+                .state
+                .session_manager
+                .get_session(session.session_id)
+                .await
+            {
                 s.listening_channels.retain(|ch| !subtree_set.contains(ch));
                 self.state.session_manager.add_session(s).await;
             }
@@ -779,7 +983,8 @@ impl RpcHandler {
             };
             self.broadcast_notification("hub.userStateBroadcast", |n| {
                 n.user_state_broadcast = Some(broadcast.clone());
-            }).await;
+            })
+            .await;
         }
 
         // --- 4. Remove each channel (children first) ---
@@ -799,7 +1004,8 @@ impl RpcHandler {
             self.state.acl_manager.remove_channel(ch_id).await;
             self.broadcast_notification("hub.channelRemoved", |n| {
                 n.channel_removed = Some(HubChannelRemovedParams { channel_id: ch_id });
-            }).await;
+            })
+            .await;
         }
     }
 }

@@ -1,24 +1,24 @@
 use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::net::SocketAddr;
 #[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 
+use async_channel;
 use dashmap::DashMap;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn, trace};
-use async_channel;
+use tracing::{debug, info, trace, warn};
 
 use munode_protocol::transport::EDGE_MAGIC;
 
-use crate::hub_client::HubClient;
 use crate::hot_slot::get_hot_slot;
+use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
 // ── Edge-to-Edge packet type bytes (1-byte prefix on the dedicated edge socket) ─────────────────
@@ -166,6 +166,8 @@ impl UdpServer {
             Arc::clone(&socket)
         };
 
+        edge_state.set_client_udp_socket(Arc::clone(&socket));
+
         let (client_tx, client_rx) = async_channel::bounded(65536);
         let (relay_tx, relay_rx) = async_channel::bounded(4096);
 
@@ -216,8 +218,10 @@ impl UdpServer {
             let probe_hub = Arc::clone(&self.hub_client);
             let probe_quality = Arc::clone(&self.peer_quality);
             tokio::spawn(async move {
-                let mut ping_interval = tokio::time::interval(Duration::from_secs(PROBE_PING_INTERVAL_SECS));
-                let mut report_interval = tokio::time::interval(Duration::from_secs(PROBE_REPORT_INTERVAL_SECS));
+                let mut ping_interval =
+                    tokio::time::interval(Duration::from_secs(PROBE_PING_INTERVAL_SECS));
+                let mut report_interval =
+                    tokio::time::interval(Duration::from_secs(PROBE_REPORT_INTERVAL_SECS));
                 loop {
                     tokio::select! {
                         _ = ping_interval.tick() => {
@@ -367,28 +371,13 @@ impl UdpServer {
     }
 
     #[inline]
-    fn encrypt_for_addr(&self, target: u32, addr: SocketAddr, plaintext: &[u8]) -> Option<(Vec<u8>, SocketAddr)> {
-        let slot = get_hot_slot(target);
-        let cs_guard = slot.crypt_state.load();
-        let cs_arc = match &**cs_guard {
-            Some(cs) => Arc::clone(cs),
-            None => return None,
-        };
-        let mut encrypted = Vec::with_capacity(plaintext.len() + 4);
-        match cs_arc.lock() {
-            Ok(mut cs) => {
-                cs.encrypt(plaintext, &mut encrypted);
-            }
-            Err(e) => {
-                warn!("CryptState poisoned session {} — dropped: {}", target, e);
-                return None;
-            }
-        };
-        if encrypted.is_empty() {
-            None
-        } else {
-            Some((encrypted, addr))
-        }
+    fn encrypt_for_addr(
+        &self,
+        target: u32,
+        addr: SocketAddr,
+        plaintext: &[u8],
+    ) -> Option<(Vec<u8>, SocketAddr)> {
+        encrypt_voice_for_addr(target, addr, plaintext)
     }
 
     /// Detect and respond to an unencrypted Mumble UDP ping packet.
@@ -408,10 +397,12 @@ impl UdpServer {
     /// Returns `true` if the packet was a recognised ping format.
     async fn try_handle_udp_ping(&self, data: &[u8], peer_addr: SocketAddr) -> bool {
         // ── Legacy ping: 12 bytes, first 4 bytes are all zero ────────────────
-        if data.len() == 12
-            && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0
-        {
-            if self.edge_state.allow_ping.load(std::sync::atomic::Ordering::Relaxed) {
+        if data.len() == 12 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0 {
+            if self
+                .edge_state
+                .allow_ping
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
                 let (user_count, max_users, bandwidth) = self.ping_server_info().await;
                 let mut resp = [0u8; 24];
                 // Version in legacy format: major<<16 | minor<<8 | patch  (report 1.5.0)
@@ -423,7 +414,10 @@ impl UdpServer {
                 resp[16..20].copy_from_slice(&(max_users as u32).to_be_bytes());
                 resp[20..24].copy_from_slice(&bandwidth.to_be_bytes());
                 if let Err(e) = self.socket.send_to(&resp, peer_addr).await {
-                    debug!("Failed to send legacy UDP ping response to {}: {}", peer_addr, e);
+                    debug!(
+                        "Failed to send legacy UDP ping response to {}: {}",
+                        peer_addr, e
+                    );
                 } else {
                     debug!("Responded to legacy UDP ping from {}", peer_addr);
                 }
@@ -433,7 +427,11 @@ impl UdpServer {
 
         // ── Protobuf ping: first byte == 0x01 (UDPMessageType::Ping) ─────────
         if data.len() >= 2 && data[0] == 0x01 {
-            if self.edge_state.allow_ping.load(std::sync::atomic::Ordering::Relaxed) {
+            if self
+                .edge_state
+                .allow_ping
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
                 let payload = &data[1..];
                 let (timestamp, request_extra) = parse_mumble_udp_ping(payload);
                 let (user_count, max_users, bandwidth) = if request_extra {
@@ -455,7 +453,10 @@ impl UdpServer {
                     bandwidth,
                 );
                 if let Err(e) = self.socket.send_to(&resp, peer_addr).await {
-                    debug!("Failed to send protobuf UDP ping response to {}: {}", peer_addr, e);
+                    debug!(
+                        "Failed to send protobuf UDP ping response to {}: {}",
+                        peer_addr, e
+                    );
                 } else {
                     debug!("Responded to protobuf UDP ping from {}", peer_addr);
                 }
@@ -469,10 +470,21 @@ impl UdpServer {
     /// Returns (current_users, max_users, max_bandwidth_bps) for ping responses.
     async fn ping_server_info(&self) -> (usize, usize, u32) {
         let local = self.edge_state.client_manager.client_count().await;
-        let remote = self.edge_state.channel_manager.get_all_remote_users().await.len();
+        let remote = self
+            .edge_state
+            .channel_manager
+            .get_all_remote_users()
+            .await
+            .len();
         // max_users and max_bandwidth are mirrored as AtomicU32 (lock-free reads).
-        let max_users = self.edge_state.max_users.load(std::sync::atomic::Ordering::Relaxed) as usize;
-        let bandwidth = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
+        let max_users = self
+            .edge_state
+            .max_users
+            .load(std::sync::atomic::Ordering::Relaxed) as usize;
+        let bandwidth = self
+            .edge_state
+            .max_bandwidth_bps
+            .load(std::sync::atomic::Ordering::Relaxed);
         (local + remote, max_users, bandwidth)
     }
 
@@ -515,7 +527,10 @@ impl UdpServer {
         let crypt_arc = match &**slot.crypt_state.load() {
             Some(cs) => Arc::clone(cs),
             None => {
-                debug!("No CryptState in HotSlot for {} — UDP packet dropped", session_id);
+                debug!(
+                    "No CryptState in HotSlot for {} — UDP packet dropped",
+                    session_id
+                );
                 return;
             }
         };
@@ -526,7 +541,10 @@ impl UdpServer {
         let bw_arc = match &**slot.bandwidth.load() {
             Some(bw) => Arc::clone(bw),
             None => {
-                debug!("No BandwidthRecord in HotSlot for {} — UDP packet dropped", session_id);
+                debug!(
+                    "No BandwidthRecord in HotSlot for {} — UDP packet dropped",
+                    session_id
+                );
                 return;
             }
         };
@@ -537,11 +555,17 @@ impl UdpServer {
         // Performing the check here avoids AES work entirely when a client is
         // bursting (packet backlog) or being used as an amplification source.
         {
-            let max_bps = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
+            let max_bps = self
+                .edge_state
+                .max_bandwidth_bps
+                .load(std::sync::atomic::Ordering::Relaxed);
             if max_bps > 0 {
                 let max_bytes = max_bps / 8;
-                let window_secs = (self.edge_state.rolling_stats_window
-                    .load(std::sync::atomic::Ordering::Relaxed) as usize)
+                let window_secs = (self
+                    .edge_state
+                    .rolling_stats_window
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    as usize)
                     .min(crate::bandwidth::MAX_WINDOW_SLOTS);
                 // 28 = IP(20) + UDP(8); OCB2 tag(4) is already in data.len()
                 let packet_size = (data.len() as u32).saturating_add(28);
@@ -555,7 +579,11 @@ impl UdpServer {
                     Err(_) => true, // poisoned — allow packet through
                 };
                 if !within_budget {
-                    trace!("Rate limit exceeded for session {} — dropping {} B before decrypt", session_id, data.len());
+                    trace!(
+                        "Rate limit exceeded for session {} — dropping {} B before decrypt",
+                        session_id,
+                        data.len()
+                    );
                     return;
                 }
             }
@@ -565,13 +593,20 @@ impl UdpServer {
             let mut cs = match crypt_arc.lock() {
                 Ok(cs) => cs,
                 Err(e) => {
-                    warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
+                    warn!(
+                        "CryptState mutex poisoned for session {} — packet dropped: {}",
+                        session_id, e
+                    );
                     return;
                 }
             };
             let mut plain = Vec::new();
             if !cs.decrypt(data, &mut plain) {
-                debug!("OCB2 decrypt failed for session {} ({} bytes)", session_id, data.len());
+                debug!(
+                    "OCB2 decrypt failed for session {} ({} bytes)",
+                    session_id,
+                    data.len()
+                );
                 return;
             }
             plain
@@ -584,12 +619,24 @@ impl UdpServer {
         let pkt_type = plaintext[0] >> 5;
         if pkt_type == 1 {
             // Ping (type 0b001): echo back encrypted only when allow_ping is enabled
-            if self.edge_state.allow_ping.load(std::sync::atomic::Ordering::Relaxed) {
+            if self
+                .edge_state
+                .allow_ping
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
                 self.send_encrypted(session_id, &plaintext).await;
             }
         } else {
             // Rate check already done above; pass None to skip it in route_voice.
-            self.route_voice(session_id, &plaintext, sender_channel, suppress, muted, None).await;
+            self.route_voice(
+                session_id,
+                &plaintext,
+                sender_channel,
+                suppress,
+                muted,
+                None,
+            )
+            .await;
         }
     }
 
@@ -605,12 +652,13 @@ impl UdpServer {
         }
 
         // Build the set of already-mapped sessions for quick exclusion.
-        let already_mapped: std::collections::HashSet<u32> = {
-            self.session_to_addr.iter().map(|r| *r.key()).collect()
-        };
+        let already_mapped: std::collections::HashSet<u32> =
+            { self.session_to_addr.iter().map(|r| *r.key()).collect() };
 
         // Single lock: get all session candidates for identification.
-        let candidates = self.edge_state.client_manager
+        let candidates = self
+            .edge_state
+            .client_manager
             .get_udp_identification_candidates(&already_mapped)
             .await;
 
@@ -620,7 +668,10 @@ impl UdpServer {
                 let mut cs = match cs_arc.lock() {
                     Ok(cs) => cs,
                     Err(e) => {
-                        warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
+                        warn!(
+                            "CryptState mutex poisoned for session {} — packet dropped: {}",
+                            session_id, e
+                        );
                         continue;
                     }
                 };
@@ -636,18 +687,34 @@ impl UdpServer {
                 }
                 let pkt_type = plain[0] >> 5;
                 if pkt_type == 1 {
-                    if self.edge_state.allow_ping.load(std::sync::atomic::Ordering::Relaxed) {
+                    if self
+                        .edge_state
+                        .allow_ping
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         self.send_encrypted(session_id, &plain).await;
                     }
                 } else {
-                    self.route_voice(session_id, &plain, sender_channel, suppress, mute || self_mute, Some(bw_arc)).await;
+                    self.route_voice(
+                        session_id,
+                        &plain,
+                        sender_channel,
+                        suppress,
+                        mute || self_mute,
+                        Some(bw_arc),
+                    )
+                    .await;
                 }
                 return;
             }
             // Failed decrypt leaves the state unchanged (decrypt() restores IV)
         }
 
-        debug!("Unidentified UDP packet from {} ({} bytes)", peer_addr, data.len());
+        debug!(
+            "Unidentified UDP packet from {} ({} bytes)",
+            peer_addr,
+            data.len()
+        );
     }
 
     /// Route decrypted voice to channel members, encrypting per-recipient.
@@ -657,15 +724,33 @@ impl UdpServer {
     /// `muted` is `true` when the sender is server-muted or self-muted.
     /// Pass `Some(bw_arc)` to perform the rate-limit check here (identify path).
     /// Pass `None` when the caller has already checked before decrypt (hot path).
-    async fn route_voice(&self, sender_session: u32, plaintext: &[u8], sender_channel: u32, suppress: bool, muted: bool, bw_arc: Option<Arc<std::sync::Mutex<crate::bandwidth::BandwidthRecord>>>) {
-        trace!("route_voice: session={} channel={}", sender_session, sender_channel);
+    async fn route_voice(
+        &self,
+        sender_session: u32,
+        plaintext: &[u8],
+        sender_channel: u32,
+        suppress: bool,
+        muted: bool,
+        bw_arc: Option<Arc<std::sync::Mutex<crate::bandwidth::BandwidthRecord>>>,
+    ) {
+        trace!(
+            "route_voice: session={} channel={}",
+            sender_session, sender_channel
+        );
 
         // Rate-limit check: only runs when bw_arc is Some (identify path).
         // For the hot path (handle_known_client) this was already checked before decrypt.
         if let Some(bw_arc) = bw_arc {
-            let window_secs = (self.edge_state.rolling_stats_window.load(std::sync::atomic::Ordering::Relaxed) as usize)
+            let window_secs = (self
+                .edge_state
+                .rolling_stats_window
+                .load(std::sync::atomic::Ordering::Relaxed)
+                as usize)
                 .min(crate::bandwidth::MAX_WINDOW_SLOTS);
-            let max_bps = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
+            let max_bps = self
+                .edge_state
+                .max_bandwidth_bps
+                .load(std::sync::atomic::Ordering::Relaxed);
             let max_bytes = if max_bps > 0 { max_bps / 8 } else { 0 };
             // 20 bytes IPv4 + 8 bytes UDP + 4 bytes OCB2 tag = 32 bytes wire overhead.
             const WIRE_OVERHEAD: u32 = 32;
@@ -696,7 +781,11 @@ impl UdpServer {
         }
 
         // Block suppressed or muted users from speaking
-        let voice_target = if !plaintext.is_empty() { (plaintext[0] & 0x1F) as u32 } else { 0 };
+        let voice_target = if !plaintext.is_empty() {
+            (plaintext[0] & 0x1F) as u32
+        } else {
+            0
+        };
         if (suppress || muted) && voice_target != 31 {
             return;
         }
@@ -708,63 +797,40 @@ impl UdpServer {
         // `compute_voice_targets` handles VoiceTarget lookup, channel expansion,
         // deaf/suppress filtering.  Returns None for loopback (31) → drop.
         let Some(targets) = crate::routing::compute_voice_targets(
-            plaintext, sender_session, sender_channel, &self.edge_state, &self.hub_client,
-        ).await else {
+            plaintext,
+            sender_session,
+            sender_channel,
+            &self.edge_state,
+            &self.hub_client,
+        )
+        .await
+        else {
             return; // loopback or no VoiceTarget config
         };
 
         // --- Local delivery ------------------------------------------------
         if !targets.is_whisper {
-            trace!("route_voice: {} local targets", targets.local_sessions.len());
+            trace!(
+                "route_voice: {} local targets",
+                targets.local_sessions.len()
+            );
         }
 
         for group in crate::voice::local_delivery_groups(&targets) {
-            let forwarded = crate::voice::inject_session_into_voice(
-                plaintext,
-                sender_session,
-                group.context,
+            let forwarded =
+                crate::voice::inject_session_into_voice(plaintext, sender_session, group.context);
+            crate::voice::deliver_voice_locally_prefer_udp(
+                group.sessions,
+                &forwarded,
+                Some(&self.socket),
+                self.session_to_addr.as_ref(),
             );
-            let mut client_batch: Vec<(Vec<u8>, SocketAddr)> =
-                Vec::with_capacity(group.sessions.len());
-            let mut no_udp_targets: Vec<u32> = Vec::new();
-
-            for &target in group.sessions {
-                let addr_opt = self.session_to_addr.get(&target).map(|r| *r.value());
-                if let Some(addr) = addr_opt {
-                    if let Some(packet) = self.encrypt_for_addr(target, addr, &forwarded) {
-                        client_batch.push(packet);
-                    }
-                } else {
-                    no_udp_targets.push(target);
-                }
-            }
-
-            #[cfg(target_os = "linux")]
-            {
-                let sent = batch_sendmmsg(self.socket.as_raw_fd(), &client_batch);
-                if sent < client_batch.len() {
-                    debug!(
-                        "sendmmsg partial: sent {}/{} UDP packets to local sessions",
-                        sent, client_batch.len()
-                    );
-                }
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let sent = batch_sendmmsg_fallback_seq(&self.socket, &client_batch);
-                if sent < client_batch.len() {
-                    debug!("seq-send partial: sent {}/{}", sent, client_batch.len());
-                }
-            }
-
-            for target in no_udp_targets {
-                self.fallback_to_tcp(target, &forwarded).await;
-            }
         }
 
         // relay_payload preserves the original voice_target_id in low 5 bits so remote edges
         // can look up their own VoiceTarget config and apply correct AudioContext per recipient.
-        let relay_payload = crate::voice::inject_session_into_voice(plaintext, sender_session, voice_target as u8);
+        let relay_payload =
+            crate::voice::inject_session_into_voice(plaintext, sender_session, voice_target as u8);
         if targets.relay_edge_ids.is_empty() {
             return;
         }
@@ -774,7 +840,8 @@ impl UdpServer {
         // trusted cluster-internal nodes.  The nonce encodes sender_edge_id + counter,
         // so it is unique even when multiple Edges encrypt simultaneously.
         // Plaintext: [session_id_BE(4)][voice_payload] — matches edge packet body.
-        let enc_direct: Option<(u64, Vec<u8>)> = if let Some(crypto) = &self.edge_state.edge_crypto {
+        let enc_direct: Option<(u64, Vec<u8>)> = if let Some(crypto) = &self.edge_state.edge_crypto
+        {
             let mut plain = Vec::with_capacity(4 + plaintext.len());
             plain.extend_from_slice(&sender_session.to_be_bytes());
             plain.extend_from_slice(plaintext);
@@ -785,7 +852,10 @@ impl UdpServer {
         };
 
         let threshold = self.edge_state.consecutive_failure_threshold;
-        let max_ttl = self.edge_state.max_ttl.load(std::sync::atomic::Ordering::Relaxed);
+        let max_ttl = self
+            .edge_state
+            .max_ttl
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         use crate::state::RouteDecision;
 
@@ -806,8 +876,10 @@ impl UdpServer {
             let mut hub_tcp_targets: Vec<u32> = Vec::new();
 
             for &target_edge_id in &targets.relay_edge_ids {
-                debug!("edge={} UDP voice: routing from session {} to edge {}",
-                    my_edge_id, sender_session, target_edge_id);
+                debug!(
+                    "edge={} UDP voice: routing from session {} to edge {}",
+                    my_edge_id, sender_session, target_edge_id
+                );
 
                 let decision = route_guard.get(&target_edge_id).and_then(|candidates| {
                     candidates
@@ -821,7 +893,9 @@ impl UdpServer {
                             let fail_count = next_hop_id
                                 .and_then(|id| {
                                     failures_guard.as_ref().and_then(|failures| {
-                                        failures.get(&id).map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+                                        failures
+                                            .get(&id)
+                                            .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
                                     })
                                 })
                                 .unwrap_or(0);
@@ -832,12 +906,17 @@ impl UdpServer {
                 });
 
                 match decision {
-                    Some(RouteDecision::DirectUdp) | Some(RouteDecision::RelayChain { .. }) | None => {
+                    Some(RouteDecision::DirectUdp)
+                    | Some(RouteDecision::RelayChain { .. })
+                    | None => {
                         let (next_hop, send_addr) = match decision {
                             Some(RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
                                 (hops[0], peer_guard.get(hops[0]).map(|p| p.udp_addr))
                             }
-                            _ => (target_edge_id, peer_guard.get(target_edge_id).map(|p| p.udp_addr)),
+                            _ => (
+                                target_edge_id,
+                                peer_guard.get(target_edge_id).map(|p| p.udp_addr),
+                            ),
                         };
                         let ttl_for_relay: Option<u8> = match decision {
                             Some(RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
@@ -847,10 +926,13 @@ impl UdpServer {
                         };
 
                         if let Some(addr) = send_addr {
-                            let pkt: Vec<u8> = if let Some((counter, ciphertext)) = enc_direct.as_ref() {
+                            let pkt: Vec<u8> = if let Some((counter, ciphertext)) =
+                                enc_direct.as_ref()
+                            {
                                 if ttl_for_relay.is_some() {
                                     let ttl = ttl_for_relay.unwrap();
-                                    let mut p = Vec::with_capacity(1 + 4 + 8 + 1 + 4 + ciphertext.len());
+                                    let mut p =
+                                        Vec::with_capacity(1 + 4 + 8 + 1 + 4 + ciphertext.len());
                                     p.push(EDGE_PKT_ENC_RELAY);
                                     p.extend_from_slice(&my_edge_id.to_be_bytes());
                                     p.extend_from_slice(&counter.to_be_bytes());
@@ -917,31 +999,44 @@ impl UdpServer {
         if !edge_send_pkts.is_empty() {
             let sent_count;
             #[cfg(target_os = "linux")]
-            { sent_count = batch_sendmmsg(self.edge_socket.as_raw_fd(), &edge_send_pkts); }
+            {
+                sent_count = batch_sendmmsg(self.edge_socket.as_raw_fd(), &edge_send_pkts);
+            }
             #[cfg(not(target_os = "linux"))]
-            { sent_count = batch_sendmmsg_fallback_seq(&self.edge_socket, &edge_send_pkts); }
+            {
+                sent_count = batch_sendmmsg_fallback_seq(&self.edge_socket, &edge_send_pkts);
+            }
 
             // Update hop-success counters for sent packets.
             for (target_id, next_hop) in &edge_meta[..sent_count] {
                 reset_hop_failure(&self.edge_state.next_hop_failures, *next_hop, threshold);
-                debug!("Voice dispatched to edge {} (via next-hop {})", target_id, next_hop);
+                debug!(
+                    "Voice dispatched to edge {} (via next-hop {})",
+                    target_id, next_hop
+                );
             }
             // Partial failure: fall back unsent packets to Hub TCP.
             if sent_count < edge_meta.len() && self.edge_state.enable_hub_tcp_fallback {
                 warn!(
                     "edge sendmmsg partial: sent {}/{}, falling back {} to Hub TCP",
-                    sent_count, edge_meta.len(), edge_meta.len() - sent_count
+                    sent_count,
+                    edge_meta.len(),
+                    edge_meta.len() - sent_count
                 );
                 for (target_id, next_hop) in &edge_meta[sent_count..] {
                     increment_hop_failure(&self.edge_state.next_hop_failures, *next_hop);
-                    self.hub_client.relay_voice_via_hub(*target_id, relay_payload.clone()).await;
+                    self.hub_client
+                        .relay_voice_via_hub(*target_id, relay_payload.clone())
+                        .await;
                 }
             }
         }
 
         // Phase C: Hub TCP relay targets (async).
         for target_id in hub_tcp_targets {
-            self.hub_client.relay_voice_via_hub(target_id, relay_payload.clone()).await;
+            self.hub_client
+                .relay_voice_via_hub(target_id, relay_payload.clone())
+                .await;
         }
     }
 
@@ -952,14 +1047,21 @@ impl UdpServer {
             None => return,
         };
         let slot = get_hot_slot(session_id);
-        if !slot.is_active_for(session_id) { return; }
+        if !slot.is_active_for(session_id) {
+            return;
+        }
         let cs_guard = slot.crypt_state.load();
         if let Some(cs_arc) = &**cs_guard {
             let mut encrypted = Vec::new();
             match cs_arc.lock() {
-                Ok(mut cs) => { cs.encrypt(plaintext, &mut encrypted); }
+                Ok(mut cs) => {
+                    cs.encrypt(plaintext, &mut encrypted);
+                }
                 Err(e) => {
-                    warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
+                    warn!(
+                        "CryptState mutex poisoned for session {} — packet dropped: {}",
+                        session_id, e
+                    );
                     return;
                 }
             }
@@ -971,7 +1073,9 @@ impl UdpServer {
     async fn fallback_to_tcp(&self, session_id: u32, plaintext: &[u8]) {
         let data = crate::voice::wrap_udptunnel(plaintext);
         let slot = get_hot_slot(session_id);
-        if !slot.is_active_for(session_id) { return; }
+        if !slot.is_active_for(session_id) {
+            return;
+        }
         let sender_guard = slot.sender.load();
         if let Some(sender) = &**sender_guard {
             sender.try_send(data).ok();
@@ -998,15 +1102,23 @@ impl UdpServer {
             return;
         }
         let sender_edge_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let counter = u64::from_be_bytes([data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11]]);
+        let counter = u64::from_be_bytes([
+            data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
+        ]);
         let ciphertext = &data[12..];
         match crypto.decrypt(sender_edge_id, counter, ciphertext, &[]) {
             Some(plain) if plain.len() >= 4 => {
                 // plain = [session_id_BE(4)][voice_payload] — identical to unencrypted format
                 self.handle_edge_packet(&plain, peer_addr).await;
             }
-            Some(_) => debug!("Encrypted edge voice: decrypted payload too short from edge {}", sender_edge_id),
-            None => debug!("Encrypted edge voice: AEAD authentication failed from edge {}", sender_edge_id),
+            Some(_) => debug!(
+                "Encrypted edge voice: decrypted payload too short from edge {}",
+                sender_edge_id
+            ),
+            None => debug!(
+                "Encrypted edge voice: AEAD authentication failed from edge {}",
+                sender_edge_id
+            ),
         }
     }
 
@@ -1024,7 +1136,9 @@ impl UdpServer {
             return;
         }
         let sender_edge_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let counter = u64::from_be_bytes([data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11]]);
+        let counter = u64::from_be_bytes([
+            data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
+        ]);
         let ttl = data[12];
         let target_edge_id = u32::from_be_bytes([data[13], data[14], data[15], data[16]]);
         let ciphertext = &data[17..];
@@ -1052,8 +1166,14 @@ impl UdpServer {
                     let dummy_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
                     self.handle_edge_packet(&plain, dummy_addr).await;
                 }
-                Some(_) => debug!("Encrypted relay: decrypted payload too short from edge {}", sender_edge_id),
-                None => debug!("Encrypted relay: AEAD authentication failed from edge {}", sender_edge_id),
+                Some(_) => debug!(
+                    "Encrypted relay: decrypted payload too short from edge {}",
+                    sender_edge_id
+                ),
+                None => debug!(
+                    "Encrypted relay: AEAD authentication failed from edge {}",
+                    sender_edge_id
+                ),
             }
             return;
         }
@@ -1077,7 +1197,11 @@ impl UdpServer {
             // ArcSwap load: lock-free, no need for try_read.
             let table = self.edge_state.route_table.load();
             let reg = self.edge_state.peer_registry.load();
-            match table.get(&target_edge_id).and_then(|cs| cs.first()).map(|c| &c.decision) {
+            match table
+                .get(&target_edge_id)
+                .and_then(|cs| cs.first())
+                .map(|c| &c.decision)
+            {
                 Some(crate::state::RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
                     reg.get(hops[0]).map(|p| p.udp_addr)
                 }
@@ -1087,12 +1211,22 @@ impl UdpServer {
 
         if let Some(addr) = target_addr {
             if let Err(e) = self.edge_socket.send_to(&forward, addr).await {
-                warn!("Forward encrypted relay to edge {} failed: {}", target_edge_id, e);
+                warn!(
+                    "Forward encrypted relay to edge {} failed: {}",
+                    target_edge_id, e
+                );
             } else {
-                debug!("Forwarded encrypted relay to edge {} (ttl={})", target_edge_id, ttl - 1);
+                debug!(
+                    "Forwarded encrypted relay to edge {} (ttl={})",
+                    target_edge_id,
+                    ttl - 1
+                );
             }
         } else {
-            debug!("Encrypted relay target edge {} not in peer registry — dropping", target_edge_id);
+            debug!(
+                "Encrypted relay target edge {} not in peer registry — dropping",
+                target_edge_id
+            );
         }
     }
 
@@ -1136,7 +1270,8 @@ impl UdpServer {
         let next_hop_addr = {
             use crate::state::RouteDecision;
             let table = self.edge_state.route_table.load();
-            let decision = table.get(&target_edge_id)
+            let decision = table
+                .get(&target_edge_id)
                 .and_then(|cs| cs.first())
                 .map(|c| c.decision.clone());
             let reg = self.edge_state.peer_registry.load();
@@ -1156,12 +1291,23 @@ impl UdpServer {
             forward.extend_from_slice(&sender_session.to_be_bytes());
             forward.extend_from_slice(voice_data);
             if let Err(e) = self.edge_socket.send_to(&forward, addr).await {
-                warn!("Forward relay packet to edge {} at {} failed: {}", target_edge_id, addr, e);
+                warn!(
+                    "Forward relay packet to edge {} at {} failed: {}",
+                    target_edge_id, addr, e
+                );
             } else {
-                debug!("Forwarded relay packet to edge {} at {} (ttl={})", target_edge_id, addr, ttl - 1);
+                debug!(
+                    "Forwarded relay packet to edge {} at {} (ttl={})",
+                    target_edge_id,
+                    addr,
+                    ttl - 1
+                );
             }
         } else {
-            debug!("Relay target edge {} not in peer registry — dropping relay packet", target_edge_id);
+            debug!(
+                "Relay target edge {} not in peer registry — dropping relay packet",
+                target_edge_id
+            );
         }
     }
 
@@ -1174,30 +1320,48 @@ impl UdpServer {
         }
         let sender_session = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
         let voice_data = &data[4..];
-        trace!("Relayed voice from edge {} (sender_session={}, {} bytes)", peer_addr, sender_session, voice_data.len());
+        trace!(
+            "Relayed voice from edge {} (sender_session={}, {} bytes)",
+            peer_addr,
+            sender_session,
+            voice_data.len()
+        );
         // Delegate to deliver_voice_locally, which emits RelayedVoice for unified routing.
         self.deliver_voice_locally(sender_session, voice_data).await;
     }
 
     /// Deliver a relayed voice packet to local clients on this Edge.
     async fn deliver_voice_locally(&self, sender_session: u32, voice_data: &[u8]) {
-        trace!("deliver_voice_locally: session={}, {} bytes", sender_session, voice_data.len());
+        trace!(
+            "deliver_voice_locally: session={}, {} bytes",
+            sender_session,
+            voice_data.len()
+        );
         // Build server-to-client format: [header][session_varint][seq][audio]
         // Preserve the original voice_target_id in low-5 bits so routing can
         // set the correct AudioContext per recipient.
-        let voice_packet = crate::voice::inject_session_into_voice(voice_data, sender_session, voice_data.first().copied().unwrap_or(0) & 0x1f);
+        let voice_packet = crate::voice::inject_session_into_voice(
+            voice_data,
+            sender_session,
+            voice_data.first().copied().unwrap_or(0) & 0x1f,
+        );
         if !voice_packet.is_empty() {
-            crate::voice::deliver_relayed_voice(voice_packet, &self.edge_state, &self.hub_client).await;
+            crate::voice::deliver_relayed_voice(voice_packet, &self.edge_state, &self.hub_client)
+                .await;
         }
     }
 
     /// Handle a UDP quality probe packet (ping or pong).
     /// Probe format after stripping type byte: [subtype(1B): 0=ping 1=pong][seq_BE(4B)][sent_ms_BE(8B)]
     async fn handle_probe_packet(&self, data: &[u8], from_addr: SocketAddr) {
-        if data.len() < 13 { return; }
+        if data.len() < 13 {
+            return;
+        }
         let ptype = data[0];
         let seq = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-        let sent_ms = u64::from_be_bytes([data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12]]);
+        let sent_ms = u64::from_be_bytes([
+            data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12],
+        ]);
 
         if ptype == 0 {
             // Ping — echo back as pong using the new format
@@ -1210,11 +1374,10 @@ impl UdpServer {
         } else if ptype == 1 {
             // Pong — update quality measurement
             let now_ms = probe_current_millis();
-            let sender_edge_id = {
-                self.edge_state.peer_registry.load().find_by_addr(from_addr)
-            };
+            let sender_edge_id = { self.edge_state.peer_registry.load().find_by_addr(from_addr) };
             if let Some(edge_id) = sender_edge_id {
-                let mut pq = self.peer_quality.lock().await;                let entry = pq.entry(edge_id).or_default();
+                let mut pq = self.peer_quality.lock().await;
+                let entry = pq.entry(edge_id).or_default();
                 if let Some(sent) = entry.pending_pings.remove(&seq) {
                     let rtt = (now_ms.saturating_sub(sent)) as f32;
                     entry.rtt_samples.push_back(rtt);
@@ -1347,8 +1510,6 @@ fn write_pb_varint(out: &mut Vec<u8>, mut value: u64) {
     }
 }
 
-
-
 /// Atomically increment the consecutive failure counter for `edge_id`.
 ///
 /// Uses a read lock for the common case (key already present) and falls back to
@@ -1386,7 +1547,9 @@ fn reset_hop_failure(
     edge_id: u32,
     threshold: u32,
 ) {
-    if threshold == 0 { return; }
+    if threshold == 0 {
+        return;
+    }
     if let Ok(map) = failures.read() {
         if let Some(counter) = map.get(&edge_id) {
             counter.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -1409,8 +1572,11 @@ fn reset_hop_failure(
 /// Non-blocking UDP `sendmmsg` completes in < 1 μs; the `spawn_blocking` context-
 /// switch overhead (~50–100 μs) would be far higher than the operation itself.
 #[cfg(target_os = "linux")]
-fn batch_sendmmsg(fd: std::os::unix::io::RawFd, pkts: &[(Vec<u8>, SocketAddr)]) -> usize {
-    use nix::sys::socket::{sendmmsg, ControlMessage, MsgFlags, MultiHeaders, SockaddrStorage};
+pub(crate) fn batch_sendmmsg(
+    fd: std::os::unix::io::RawFd,
+    pkts: &[(Vec<u8>, SocketAddr)],
+) -> usize {
+    use nix::sys::socket::{ControlMessage, MsgFlags, MultiHeaders, SockaddrStorage, sendmmsg};
     use std::io::IoSlice;
 
     if pkts.is_empty() {
@@ -1418,13 +1584,15 @@ fn batch_sendmmsg(fd: std::os::unix::io::RawFd, pkts: &[(Vec<u8>, SocketAddr)]) 
     }
 
     // Build one [IoSlice; 1] per packet; each borrows from the corresponding Vec<u8>.
-    let iovs: Vec<[IoSlice<'_>; 1]> = pkts.iter()
+    let iovs: Vec<[IoSlice<'_>; 1]> = pkts
+        .iter()
         .map(|(data, _)| [IoSlice::new(data.as_slice())])
         .collect();
 
     // Convert std::net::SocketAddr → nix SockaddrStorage.
     // SockaddrStorage implements From<SocketAddr> for both V4 and V6.
-    let addrs: Vec<Option<SockaddrStorage>> = pkts.iter()
+    let addrs: Vec<Option<SockaddrStorage>> = pkts
+        .iter()
         .map(|(_, addr)| Some(SockaddrStorage::from(*addr)))
         .collect();
 
@@ -1448,15 +1616,48 @@ fn batch_sendmmsg(fd: std::os::unix::io::RawFd, pkts: &[(Vec<u8>, SocketAddr)]) 
 /// Non-Linux fallback: sequential non-blocking sends using tokio's try_send_to.
 /// Called only on macOS/other platforms; production servers always run Linux.
 #[cfg(not(target_os = "linux"))]
-fn batch_sendmmsg_fallback_seq(sock: &tokio::net::UdpSocket, pkts: &[(Vec<u8>, SocketAddr)]) -> usize {
+pub(crate) fn batch_sendmmsg_fallback_seq(
+    sock: &tokio::net::UdpSocket,
+    pkts: &[(Vec<u8>, SocketAddr)],
+) -> usize {
     let mut sent = 0;
     for (data, addr) in pkts {
         match sock.try_send_to(data, *addr) {
-            Ok(_) => { sent += 1; }
+            Ok(_) => {
+                sent += 1;
+            }
             Err(_) => break, // stop on first error (buffer full)
         }
     }
     sent
+}
+
+pub(crate) fn encrypt_voice_for_addr(
+    target: u32,
+    addr: SocketAddr,
+    plaintext: &[u8],
+) -> Option<(Vec<u8>, SocketAddr)> {
+    let slot = get_hot_slot(target);
+    let cs_guard = slot.crypt_state.load();
+    let cs_arc = match &**cs_guard {
+        Some(cs) => Arc::clone(cs),
+        None => return None,
+    };
+    let mut encrypted = Vec::with_capacity(plaintext.len() + 4);
+    match cs_arc.lock() {
+        Ok(mut cs) => {
+            cs.encrypt(plaintext, &mut encrypted);
+        }
+        Err(e) => {
+            warn!("CryptState poisoned session {} — dropped: {}", target, e);
+            return None;
+        }
+    };
+    if encrypted.is_empty() {
+        None
+    } else {
+        Some((encrypted, addr))
+    }
 }
 
 /// Current time in milliseconds (for probe RTT measurement).
@@ -1466,10 +1667,6 @@ fn probe_current_millis() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-
-
-
-
 
 /// Test-only: attempt to route a single voice packet directly via UDP to the given target Edge,
 /// applying the `test_udp_drop_rate` network-degradation hook.

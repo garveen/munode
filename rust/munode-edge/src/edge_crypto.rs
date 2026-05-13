@@ -18,7 +18,11 @@ pub(crate) struct ReplayWindow {
 
 impl ReplayWindow {
     pub(crate) fn new() -> Self {
-        Self { max_seen: 0, initialized: false, seen_mask: 0 }
+        Self {
+            max_seen: 0,
+            initialized: false,
+            seen_mask: 0,
+        }
     }
 
     const WINDOW: u64 = 64;
@@ -27,8 +31,12 @@ impl ReplayWindow {
     /// definitely outside the acceptance window, saving an AEAD operation.
     #[inline]
     pub(crate) fn pre_check(&self, counter: u64) -> bool {
-        if !self.initialized { return true; }
-        if counter > self.max_seen { return true; }
+        if !self.initialized {
+            return true;
+        }
+        if counter > self.max_seen {
+            return true;
+        }
         (self.max_seen - counter) < Self::WINDOW
     }
 
@@ -84,7 +92,8 @@ pub struct EdgeCrypto {
     /// - The read lock is held only long enough to clone the `Arc` (hot path).
     /// - The write lock is needed only for the first packet from a new sender (rare).
     /// - The per-sender `Mutex` is then acquired independently without holding the map lock.
-    replay_windows: std::sync::RwLock<std::collections::HashMap<u32, Arc<std::sync::Mutex<ReplayWindow>>>>,
+    replay_windows:
+        std::sync::RwLock<std::collections::HashMap<u32, Arc<std::sync::Mutex<ReplayWindow>>>>,
 }
 
 impl EdgeCrypto {
@@ -99,7 +108,8 @@ impl EdgeCrypto {
         );
         // HMAC-SHA256 produces 32 bytes — exactly the ChaCha20-Poly1305 key size.
         let key_bytes = &key_material.as_ref()[..32];
-        let unbound = ring::aead::UnboundKey::new(&ring::aead::CHACHA20_POLY1305, key_bytes).ok()?;
+        let unbound =
+            ring::aead::UnboundKey::new(&ring::aead::CHACHA20_POLY1305, key_bytes).ok()?;
         Some(Self {
             key: ring::aead::LessSafeKey::new(unbound),
             counter: AtomicU64::new(0),
@@ -133,7 +143,12 @@ impl EdgeCrypto {
 
     /// Same as `encrypt`, but consumes an owned buffer so callers that already
     /// built a `Vec<u8>` can avoid an extra pre-encryption copy.
-    pub fn encrypt_owned(&self, mut plaintext: Vec<u8>, sender_edge_id: u32, aad: &[u8]) -> (u64, Vec<u8>) {
+    pub fn encrypt_owned(
+        &self,
+        mut plaintext: Vec<u8>,
+        sender_edge_id: u32,
+        aad: &[u8],
+    ) -> (u64, Vec<u8>) {
         let counter = self.counter.fetch_add(1, Ordering::Relaxed);
         let nonce = Self::build_nonce(sender_edge_id, counter);
         // Appends the 16-byte Poly1305 tag in-place.  Sealing can only fail on an
@@ -159,7 +174,13 @@ impl EdgeCrypto {
     /// - `pre_check` rejects obviously stale counters before the AEAD operation.
     /// - The read lock on `replay_windows` is held only for an Arc clone (~ns).
     /// - Per-sender Mutex is rarely contended because voice senders are sequential.
-    pub fn decrypt(&self, sender_edge_id: u32, counter: u64, ciphertext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
+    pub fn decrypt(
+        &self,
+        sender_edge_id: u32,
+        counter: u64,
+        ciphertext: &[u8],
+        aad: &[u8],
+    ) -> Option<Vec<u8>> {
         const TAG_LEN: usize = 16;
         if ciphertext.len() <= TAG_LEN {
             return None;
@@ -178,7 +199,9 @@ impl EdgeCrypto {
             // Slow path (first packet from this sender): insert under write lock.
             let w = Arc::new(std::sync::Mutex::new(ReplayWindow::new()));
             if let Ok(mut map) = self.replay_windows.write() {
-                map.entry(sender_edge_id).or_insert_with(|| w.clone()).clone()
+                map.entry(sender_edge_id)
+                    .or_insert_with(|| w.clone())
+                    .clone()
             } else {
                 // Poisoned map — skip replay check for this packet
                 w
@@ -186,7 +209,8 @@ impl EdgeCrypto {
         });
 
         // ── Step 2: cheap pre-check (no AEAD) ────────────────────────────────
-        let pre_ok = window_arc.lock()
+        let pre_ok = window_arc
+            .lock()
             .map(|w| w.pre_check(counter))
             .unwrap_or(true); // poisoned window → allow AEAD to decide
         if !pre_ok {
@@ -196,14 +220,16 @@ impl EdgeCrypto {
         // ── Step 3: AEAD authentication + decryption ─────────────────────────
         let nonce = Self::build_nonce(sender_edge_id, counter);
         let mut buf = ciphertext.to_vec();
-        let plaintext_len = self.key
+        let plaintext_len = self
+            .key
             .open_in_place(nonce, ring::aead::Aad::from(aad), &mut buf)
             .ok()?
             .len();
         buf.truncate(plaintext_len);
 
         // ── Step 4: confirm in replay window (mark as seen or detect duplicate) ─
-        let accepted = window_arc.lock()
+        let accepted = window_arc
+            .lock()
             .map(|mut w| w.mark_seen(counter))
             .unwrap_or(true); // poisoned window → accept (AEAD already succeeded)
         if !accepted {

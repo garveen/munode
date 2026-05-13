@@ -35,18 +35,28 @@ impl<'a> Voice<'a> {
         id: u32,
         targets: Vec<mumbleproto::voice_target::Target>,
     ) -> Result<()> {
-        self.client.send_proto(MessageType::VoiceTarget, &mumbleproto::VoiceTarget {
-            id: Some(id),
-            targets,
-        })
+        self.client.send_proto(
+            MessageType::VoiceTarget,
+            &mumbleproto::VoiceTarget {
+                id: Some(id),
+                targets,
+            },
+        )?;
+        self.client.mark_recent_voice_target_update(id).await;
+        Ok(())
     }
 
     /// Clear whisper target `id`.
     pub async fn clear_target(&self, id: u32) -> Result<()> {
-        self.client.send_proto(MessageType::VoiceTarget, &mumbleproto::VoiceTarget {
-            id: Some(id),
-            targets: vec![],
-        })
+        self.client.send_proto(
+            MessageType::VoiceTarget,
+            &mumbleproto::VoiceTarget {
+                id: Some(id),
+                targets: vec![],
+            },
+        )?;
+        self.client.clear_recent_voice_target_update(id).await;
+        Ok(())
     }
 
     /// Toggle force-TCP voice mode (pin all voice through the TCP UDPTunnel).

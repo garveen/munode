@@ -19,8 +19,8 @@
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use futures_util::SinkExt;
 use tokio::net::{TcpListener, UdpSocket};
@@ -46,7 +46,11 @@ async fn tcp_listener_on_random_port() -> (TcpListener, u16) {
 
 /// Bind a random UDP socket and return it together with its local address.
 async fn udp_socket_on_random_port() -> (Arc<UdpSocket>, SocketAddr) {
-    let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("bind UDP socket"));
+    let sock = Arc::new(
+        UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("bind UDP socket"),
+    );
     let addr = sock.local_addr().unwrap();
     (sock, addr)
 }
@@ -81,7 +85,8 @@ async fn start_voice_ws_server() -> (u16, Arc<EdgeState>) {
     let server_state = state.clone();
     tokio::spawn(async move {
         // Hub host/port are unused because tests only exercise the /voice path.
-        run_edge_ws_server_with_listener(listener, "127.0.0.1".to_string(), 0, None, server_state).await;
+        run_edge_ws_server_with_listener(listener, "127.0.0.1".to_string(), 0, None, server_state)
+            .await;
     });
 
     // Give the accept loop a moment to start.
@@ -98,7 +103,11 @@ fn peer_registry_upsert_and_lookup_by_id() {
     let addr: SocketAddr = "10.0.0.2:64000".parse().unwrap();
     reg.upsert(
         7,
-        PeerEdgeInfo { udp_addr: addr, host: "10.0.0.2".into(), relay_port: Some(64100) },
+        PeerEdgeInfo {
+            udp_addr: addr,
+            host: "10.0.0.2".into(),
+            relay_port: Some(64100),
+        },
     );
 
     let info = reg.get(7).expect("entry must exist after upsert");
@@ -112,7 +121,14 @@ fn peer_registry_upsert_and_lookup_by_id() {
 fn peer_registry_remove_clears_entry() {
     let mut reg = PeerRegistry::default();
     let addr: SocketAddr = "10.0.0.3:64001".parse().unwrap();
-    reg.upsert(8, PeerEdgeInfo { udp_addr: addr, host: "10.0.0.3".into(), relay_port: None });
+    reg.upsert(
+        8,
+        PeerEdgeInfo {
+            udp_addr: addr,
+            host: "10.0.0.3".into(),
+            relay_port: None,
+        },
+    );
     reg.remove(8);
 
     assert!(reg.get(8).is_none(), "entry must be absent after remove");
@@ -124,9 +140,23 @@ fn peer_registry_relay_peers_filters_by_relay_port() {
     let mut reg = PeerRegistry::default();
     let addr: SocketAddr = "10.0.0.4:64002".parse().unwrap();
     // Has relay_port
-    reg.upsert(10, PeerEdgeInfo { udp_addr: addr, host: "10.0.0.4".into(), relay_port: Some(9000) });
+    reg.upsert(
+        10,
+        PeerEdgeInfo {
+            udp_addr: addr,
+            host: "10.0.0.4".into(),
+            relay_port: Some(9000),
+        },
+    );
     // No relay_port
-    reg.upsert(11, PeerEdgeInfo { udp_addr: addr, host: "10.0.0.5".into(), relay_port: None });
+    reg.upsert(
+        11,
+        PeerEdgeInfo {
+            udp_addr: addr,
+            host: "10.0.0.5".into(),
+            relay_port: None,
+        },
+    );
 
     let relay_peers = reg.relay_peers();
     assert_eq!(relay_peers.len(), 1, "only one peer has a relay_port");
@@ -143,9 +173,30 @@ fn peer_registry_all_udp_peers_returns_all_entries() {
     let a1: SocketAddr = "10.0.0.1:1000".parse().unwrap();
     let a2: SocketAddr = "10.0.0.2:2000".parse().unwrap();
     let a3: SocketAddr = "10.0.0.3:3000".parse().unwrap();
-    reg.upsert(1, PeerEdgeInfo { udp_addr: a1, host: "h1".into(), relay_port: Some(9001) });
-    reg.upsert(2, PeerEdgeInfo { udp_addr: a2, host: "h2".into(), relay_port: None });
-    reg.upsert(3, PeerEdgeInfo { udp_addr: a3, host: "h3".into(), relay_port: None });
+    reg.upsert(
+        1,
+        PeerEdgeInfo {
+            udp_addr: a1,
+            host: "h1".into(),
+            relay_port: Some(9001),
+        },
+    );
+    reg.upsert(
+        2,
+        PeerEdgeInfo {
+            udp_addr: a2,
+            host: "h2".into(),
+            relay_port: None,
+        },
+    );
+    reg.upsert(
+        3,
+        PeerEdgeInfo {
+            udp_addr: a3,
+            host: "h3".into(),
+            relay_port: None,
+        },
+    );
 
     let all = reg.all_udp_peers();
     let ids: HashSet<u32> = all.iter().map(|(id, _)| *id).collect();
@@ -161,7 +212,10 @@ async fn route_table_accepts_all_route_decision_variants() {
     let state = fresh_edge_state();
 
     let candidates = vec![
-        RouteCandidate { decision: RouteDecision::DirectUdp, cost: 10.0 },
+        RouteCandidate {
+            decision: RouteDecision::DirectUdp,
+            cost: 10.0,
+        },
         RouteCandidate {
             decision: RouteDecision::RelayChain {
                 hops: vec![3, 4],
@@ -169,8 +223,14 @@ async fn route_table_accepts_all_route_decision_variants() {
             },
             cost: 50.0,
         },
-        RouteCandidate { decision: RouteDecision::HubTcp, cost: 150.0 },
-        RouteCandidate { decision: RouteDecision::DirectTcp, cost: 25.0 },
+        RouteCandidate {
+            decision: RouteDecision::HubTcp,
+            cost: 150.0,
+        },
+        RouteCandidate {
+            decision: RouteDecision::DirectTcp,
+            cost: 25.0,
+        },
     ];
 
     {
@@ -182,7 +242,9 @@ async fn route_table_accepts_all_route_decision_variants() {
     let entry = table.get(&99).expect("route table entry must exist");
     assert_eq!(entry.len(), 4);
     assert!(matches!(entry[0].decision, RouteDecision::DirectUdp));
-    assert!(matches!(&entry[1].decision, RouteDecision::RelayChain { hops, .. } if hops == &[3, 4]));
+    assert!(
+        matches!(&entry[1].decision, RouteDecision::RelayChain { hops, .. } if hops == &[3, 4])
+    );
     assert!(matches!(entry[2].decision, RouteDecision::HubTcp));
     assert!(matches!(entry[3].decision, RouteDecision::DirectTcp));
 }
@@ -239,18 +301,15 @@ async fn direct_tcp_voice_frame_delivered_as_relayed_event() {
     .unwrap();
 
     // Wait for the server to emit RelayedVoice (up to 1 second).
-    let voice_pkt = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        async {
-            loop {
-                match event_rx.recv().await {
-                    Ok(EdgeEvent::RelayedVoice { voice_packet }) => return voice_packet,
-                    Ok(_) => continue,
-                    Err(_) => panic!("event channel closed"),
-                }
+    let voice_pkt = tokio::time::timeout(tokio::time::Duration::from_secs(1), async {
+        loop {
+            match event_rx.recv().await {
+                Ok(EdgeEvent::RelayedVoice { voice_packet }) => return voice_packet,
+                Ok(_) => continue,
+                Err(_) => panic!("event channel closed"),
             }
-        },
-    )
+        }
+    })
     .await
     .expect("timed out waiting for RelayedVoice");
 
@@ -327,7 +386,9 @@ async fn voice_tcp_conn_send_delivers_relayed_voice_event() {
         loop {
             let conns = client_state.voice_tcp_conns.read().await;
             if let Some(pool) = conns.get(&peer_edge_id) {
-                if pool.has_live_sender() { return true; }
+                if pool.has_live_sender() {
+                    return true;
+                }
             }
             drop(conns);
             tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
@@ -335,7 +396,10 @@ async fn voice_tcp_conn_send_delivers_relayed_voice_event() {
     })
     .await
     .unwrap_or(false);
-    assert!(registered, "voice_tcp_conns pool must have a live sender before sending");
+    assert!(
+        registered,
+        "voice_tcp_conns pool must have a live sender before sending"
+    );
 
     // Build and send a DirectTcp frame: [0x01][session_BE(4)][voice...]
     let session: u32 = 77_777;
@@ -352,23 +416,23 @@ async fn voice_tcp_conn_send_delivers_relayed_voice_event() {
     }
 
     // Server must emit RelayedVoice.
-    let voice_pkt = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        async {
-            loop {
-                match event_rx.recv().await {
-                    Ok(EdgeEvent::RelayedVoice { voice_packet }) => return voice_packet,
-                    Ok(_) => continue,
-                    Err(_) => panic!("event channel closed"),
-                }
+    let voice_pkt = tokio::time::timeout(tokio::time::Duration::from_secs(1), async {
+        loop {
+            match event_rx.recv().await {
+                Ok(EdgeEvent::RelayedVoice { voice_packet }) => return voice_packet,
+                Ok(_) => continue,
+                Err(_) => panic!("event channel closed"),
             }
-        },
-    )
+        }
+    })
     .await
     .expect("timed out waiting for RelayedVoice from DirectTcp send");
 
     assert_eq!(voice_pkt[0], 0x80, "Opus header must be first byte");
-    assert!(voice_pkt.ends_with(&[0xAA, 0xBB, 0xCC]), "audio payload must be intact");
+    assert!(
+        voice_pkt.ends_with(&[0xAA, 0xBB, 0xCC]),
+        "audio payload must be intact"
+    );
 }
 
 // ── UDP routing with network degradation ─────────────────────────────────────
@@ -418,7 +482,10 @@ async fn udp_voice_packet_delivered_on_healthy_link() {
 
     let failures = edge_state.next_hop_failures.read().unwrap();
     assert_eq!(
-        failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
+        failures
+            .get(&target_edge_id)
+            .map(|a| a.load(Ordering::Relaxed))
+            .unwrap_or(0),
         0,
         "no failures should be recorded on a healthy link"
     );
@@ -458,12 +525,18 @@ async fn degraded_link_increments_failure_counter_and_drops_packets() {
     }
 
     // All packets should have been dropped (drop_rate=100%).
-    assert_eq!(dropped, batch, "all packets must be dropped at 100% drop rate");
+    assert_eq!(
+        dropped, batch,
+        "all packets must be dropped at 100% drop rate"
+    );
 
     // Failure counter must equal the number of dropped packets.
     let failures = edge_state.next_hop_failures.read().unwrap();
     assert_eq!(
-        failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
+        failures
+            .get(&target_edge_id)
+            .map(|a| a.load(Ordering::Relaxed))
+            .unwrap_or(0),
         batch as u32,
         "each dropped packet must increment next_hop_failures"
     );
@@ -502,7 +575,11 @@ async fn recovery_after_degradation_clears_failure_counter() {
     {
         let failures = edge_state.next_hop_failures.read().unwrap();
         assert!(
-            failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0) > 0,
+            failures
+                .get(&target_edge_id)
+                .map(|a| a.load(Ordering::Relaxed))
+                .unwrap_or(0)
+                > 0,
             "failure counter should be non-zero after degraded send"
         );
     }
@@ -535,7 +612,10 @@ async fn recovery_after_degradation_clears_failure_counter() {
     // Success resets the failure counter for this hop.
     let failures = edge_state.next_hop_failures.read().unwrap();
     assert_eq!(
-        failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
+        failures
+            .get(&target_edge_id)
+            .map(|a| a.load(Ordering::Relaxed))
+            .unwrap_or(0),
         0,
         "failure counter must be reset to 0 after a successful send"
     );
@@ -583,7 +663,10 @@ async fn zero_failure_threshold_does_not_reset_failures_on_success() {
     // With threshold=0, the counter must remain 7 (not reset to 0).
     let failures = edge_state.next_hop_failures.read().unwrap();
     assert_eq!(
-        failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
+        failures
+            .get(&target_edge_id)
+            .map(|a| a.load(Ordering::Relaxed))
+            .unwrap_or(0),
         7,
         "failure counter must not be reset when consecutive_failure_threshold=0"
     );
@@ -643,5 +726,9 @@ async fn relay_udp_packet_wire_format_is_correct() {
         "bytes 6–9 must be sender_session in big-endian"
     );
     // Verify payload
-    assert_eq!(&buf[10..n], payload, "remaining bytes must be the voice payload");
+    assert_eq!(
+        &buf[10..n],
+        payload,
+        "remaining bytes must be the voice payload"
+    );
 }

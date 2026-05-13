@@ -38,14 +38,11 @@ pub struct RawFrame {
 ///
 /// Panics if the encoded payload exceeds `u32::MAX` bytes (~4 GiB), which is
 /// impossible in practice given the protocol's 8 MiB message size limit.
-pub fn encode_message<M: Message>(
-    msg_type: MessageType,
-    message: &M,
-    buf: &mut BytesMut,
-) {
+pub fn encode_message<M: Message>(msg_type: MessageType, message: &M, buf: &mut BytesMut) {
     let payload = message.encode_to_vec();
-    let len: u32 = payload.len().try_into()
-        .expect("encoded message exceeds u32::MAX bytes — impossible given the 8 MiB protocol limit");
+    let len: u32 = payload.len().try_into().expect(
+        "encoded message exceeds u32::MAX bytes — impossible given the 8 MiB protocol limit",
+    );
     buf.put_u16(msg_type as u16);
     buf.put_u32(len);
     buf.put_slice(&payload);
@@ -75,8 +72,8 @@ pub fn decode_frame(buf: &mut BytesMut) -> Result<Option<RawFrame>, FrameError> 
         return Ok(None);
     }
 
-    let message_type = MessageType::from_u16(msg_type_raw)
-        .ok_or(FrameError::UnknownMessageType(msg_type_raw))?;
+    let message_type =
+        MessageType::from_u16(msg_type_raw).ok_or(FrameError::UnknownMessageType(msg_type_raw))?;
 
     buf.advance(HEADER_SIZE);
     let payload = buf.split_to(payload_len).to_vec();

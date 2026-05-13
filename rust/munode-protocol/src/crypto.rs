@@ -9,7 +9,7 @@
 
 use aes::{
     Aes128,
-    cipher::{BlockEncrypt, BlockDecrypt, KeyInit},
+    cipher::{BlockDecrypt, BlockEncrypt, KeyInit},
 };
 
 /// OCB2-AES128 cryptographic state for a client connection.
@@ -134,7 +134,13 @@ impl CryptState {
         // Reserve 4-byte header + payload space
         dst.resize(header_pos + 4 + source.len(), 0);
 
-        let success = ocb_encrypt(&self.cipher, &nonce, source, &mut dst[header_pos + 4..], &mut tag);
+        let success = ocb_encrypt(
+            &self.cipher,
+            &nonce,
+            source,
+            &mut dst[header_pos + 4..],
+            &mut tag,
+        );
 
         dst[header_pos] = nonce[0];
         dst[header_pos + 1] = tag[0];
@@ -256,9 +262,19 @@ impl CryptState {
         let dst_start = dst.len();
         dst.resize(dst_start + plain_len, 0);
         let mut tag = [0u8; 16];
-        let ok = ocb_decrypt(&self.cipher, &self.decrypt_iv, &source[4..], &mut dst[dst_start..], &mut tag);
+        let ok = ocb_decrypt(
+            &self.cipher,
+            &self.decrypt_iv,
+            &source[4..],
+            &mut dst[dst_start..],
+            &mut tag,
+        );
 
-        if !ok || tag[0] != expected_tag[0] || tag[1] != expected_tag[1] || tag[2] != expected_tag[2] {
+        if !ok
+            || tag[0] != expected_tag[0]
+            || tag[1] != expected_tag[1]
+            || tag[2] != expected_tag[2]
+        {
             // Decryption failed: truncate dst and restore IV
             dst.truncate(dst_start);
             self.decrypt_iv = save_iv;
@@ -319,7 +335,9 @@ fn ocb_encrypt(
         // could enable an attack — flip one bit to prevent it.
         let mut flip_bit = false;
         if plain.len() - offset - 16 <= 16 {
-            let sum = plain[offset..offset + 15].iter().fold(0u8, |acc, &x| acc | x);
+            let sum = plain[offset..offset + 15]
+                .iter()
+                .fold(0u8, |acc, &x| acc | x);
             if sum == 0 {
                 flip_bit = true;
                 // Note: success remains true (we mitigate rather than fail)
@@ -497,7 +515,7 @@ fn s2(block: &mut [u8; 16]) {
 #[inline]
 fn s3(block: &mut [u8; 16]) {
     let v = u128::from_be_bytes(*block);
-    let carry = v >> 127;              // 0 or 1
+    let carry = v >> 127; // 0 or 1
     let shifted = (v << 1) ^ (carry * 0x87);
     *block = (shifted ^ v).to_be_bytes();
 }
@@ -684,8 +702,14 @@ mod tests {
         // Replay the exact same ciphertext — should be rejected because the IV[0]
         // value is already in decrypt_history.
         let mut out2 = Vec::new();
-        assert!(!recv.decrypt(&encrypted, &mut out2), "Replayed packet should be rejected");
-        assert!(out2.is_empty(), "Output should be empty on replay rejection");
+        assert!(
+            !recv.decrypt(&encrypted, &mut out2),
+            "Replayed packet should be rejected"
+        );
+        assert!(
+            out2.is_empty(),
+            "Output should be empty on replay rejection"
+        );
     }
 
     /// Verify that the IV counter wraps from 0xFF back to 0x00 correctly and
@@ -698,7 +722,9 @@ mod tests {
         let mut enc_iv = [0u8; 16];
         let dec_iv = [0u8; 16];
         // Fill key with non-zero bytes for a meaningful cipher
-        for (i, b) in key.iter_mut().enumerate() { *b = (i as u8).wrapping_add(1); }
+        for (i, b) in key.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_add(1);
+        }
         enc_iv[0] = 0xFF; // IV[0] is about to wrap
         sender.set_key(&key, &enc_iv, &dec_iv);
 
@@ -707,7 +733,10 @@ mod tests {
         let mut encrypted_ff = Vec::new();
         assert!(sender.encrypt(plaintext, &mut encrypted_ff));
         // After encrypt, IV[0] should be 0x00 (wrapped around)
-        assert_eq!(sender.encrypt_iv[0], 0x00, "IV[0] should wrap to 0x00 after 0xFF");
+        assert_eq!(
+            sender.encrypt_iv[0], 0x00,
+            "IV[0] should wrap to 0x00 after 0xFF"
+        );
 
         // Encrypt again at IV[0] = 0x00
         let mut encrypted_00 = Vec::new();
@@ -720,12 +749,18 @@ mod tests {
 
         // Decrypt first packet (sender sent at 0xFF)
         let mut out1 = Vec::new();
-        assert!(receiver.decrypt(&encrypted_ff, &mut out1), "Should decrypt packet with IV[0]=0xFF");
+        assert!(
+            receiver.decrypt(&encrypted_ff, &mut out1),
+            "Should decrypt packet with IV[0]=0xFF"
+        );
         assert_eq!(out1, plaintext);
 
         // Decrypt second packet (sender sent at 0x00, i.e. post-wraparound)
         let mut out2 = Vec::new();
-        assert!(receiver.decrypt(&encrypted_00, &mut out2), "Should decrypt packet with IV[0]=0x00 (post-wrap)");
+        assert!(
+            receiver.decrypt(&encrypted_00, &mut out2),
+            "Should decrypt packet with IV[0]=0x00 (post-wrap)"
+        );
         assert_eq!(out2, plaintext);
     }
 }
