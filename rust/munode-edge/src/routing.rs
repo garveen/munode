@@ -119,6 +119,8 @@ pub async fn compute_voice_targets(
             check
         }
 
+        let mut relay_edge_set: HashSet<u32> = HashSet::new();
+
         // Deaf-filter direct session targets.
         let mut direct_sessions: SmallVec<[u32; 8]> = SmallVec::new();
         for &target in &direct_set {
@@ -126,21 +128,47 @@ pub async fn compute_voice_targets(
                 continue;
             }
             let slot = crate::hot_slot::get_hot_slot(target);
-            if !slot.is_active_for(target) {
+            if slot.is_active_for(target) {
+                if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
+                    || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    continue;
+                }
+
+                let target_channel = slot.channel_id.load(std::sync::atomic::Ordering::Relaxed);
+                let permission = can_whisper_to_channel(
+                    hub_client,
+                    edge_state,
+                    sender_session,
+                    target_channel,
+                    &mut whisper_perm_cache,
+                )
+                .await;
+                cacheable_route &= permission.authoritative;
+                if !permission.allowed {
+                    continue;
+                }
+
+                direct_sessions.push(target);
                 continue;
             }
-            if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
-                || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed)
+
+            let Some(remote_user) = edge_state.channel_manager.get_remote_user(target).await else {
+                continue;
+            };
+            if remote_user.edge_id == 0
+                || remote_user.edge_id == my_edge_id
+                || remote_user.deaf
+                || remote_user.self_deaf
             {
                 continue;
             }
 
-            let target_channel = slot.channel_id.load(std::sync::atomic::Ordering::Relaxed);
             let permission = can_whisper_to_channel(
                 hub_client,
                 edge_state,
                 sender_session,
-                target_channel,
+                remote_user.channel_id,
                 &mut whisper_perm_cache,
             )
             .await;
@@ -149,7 +177,7 @@ pub async fn compute_voice_targets(
                 continue;
             }
 
-            direct_sessions.push(target);
+            relay_edge_set.insert(remote_user.edge_id);
         }
 
         // Expand channel targets (with optional group filter) and deaf-filter.
@@ -176,7 +204,7 @@ pub async fn compute_voice_targets(
                 .get_listening_sessions(ch_id)
                 .await;
             for target in ch_members.into_iter().chain(ch_listeners.into_iter()) {
-                if target == sender_session || direct_set.contains(&target) {
+                if target == sender_session {
                     continue;
                 }
                 if !seen_channel_targets.insert(target) {
@@ -203,12 +231,51 @@ pub async fn compute_voice_targets(
             }
         }
 
-        // Relay whisper to every peer edge — each receiving edge applies its
-        // own local VoiceTarget cache to decide which of its users hears it.
-        let relay_edge_ids: SmallVec<[u32; 8]> = edge_state
-            .peer_registry
-            .load()
-            .udp_peer_ids_except(my_edge_id);
+        if !direct_sessions.is_empty() && !seen_channel_targets.is_empty() {
+            // Match Murmur's receiver merge semantics: if a user matches both a
+            // direct whisper and a channel shout target, SHOUT wins.
+            direct_sessions.retain(|target| !seen_channel_targets.contains(target));
+        }
+
+        if !vt.resolved_channels.is_empty() {
+            let target_channels: HashSet<u32> = vt.resolved_channels.keys().copied().collect();
+            let remote_candidates = edge_state
+                .channel_manager
+                .get_remote_users_in_channels(&target_channels)
+                .await;
+
+            for remote_user in remote_candidates {
+                if remote_user.session_id == sender_session
+                    || remote_user.edge_id == 0
+                    || remote_user.edge_id == my_edge_id
+                    || remote_user.deaf
+                    || remote_user.self_deaf
+                {
+                    continue;
+                }
+
+                let matches_channel_target = vt.resolved_channels.iter().any(|(&ch_id, group_filter)| {
+                    let in_target = remote_user.channel_id == ch_id
+                        || remote_user.listening_channels.contains(&ch_id);
+                    if !in_target {
+                        return false;
+                    }
+
+                    match group_filter {
+                        None => true,
+                        Some(groups) => remote_user.groups.iter().any(|group| groups.contains(group)),
+                    }
+                });
+
+                if matches_channel_target {
+                    relay_edge_set.insert(remote_user.edge_id);
+                }
+            }
+        }
+
+        let mut relay_edges: Vec<u32> = relay_edge_set.into_iter().collect();
+        relay_edges.sort_unstable();
+        let relay_edge_ids: SmallVec<[u32; 8]> = relay_edges.into_iter().collect();
 
         // Never pin a route derived from fail-closed permission lookups. That
         // would turn one transient Hub/RPC miss into a long-lived empty route.
@@ -367,5 +434,177 @@ pub async fn compute_voice_targets(
             relay_edge_ids,
             is_whisper: false,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_voice_targets;
+    use crate::channel_manager::{ChannelManager, RemoteUser};
+    use crate::client::ClientManager;
+    use crate::hub_client::HubClient;
+    use crate::state::EdgeState;
+    use crate::voice_target::{VoiceTargetChannelConfig, VoiceTargetConfig};
+    use munode_common::config::{EdgeConfig, HubServerConfig, NetworkConfig, ServerConfig, TlsConfig};
+    use munode_common::permission;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    fn test_config() -> EdgeConfig {
+        EdgeConfig {
+            server_id: 1,
+            name: "test".to_string(),
+            network: NetworkConfig {
+                host: "127.0.0.1".to_string(),
+                port: 64738,
+                edge_port: None,
+                external_host: "127.0.0.1".to_string(),
+                external_port: None,
+                region: None,
+                proxy_protocol: false,
+                trusted_proxy_ips: Vec::new(),
+            },
+            tls: TlsConfig {
+                cert: "test.pem".to_string(),
+                key: "test.key".to_string(),
+                ca: None,
+            },
+            hub_server: HubServerConfig {
+                host: "localhost".to_string(),
+                control_port: 8080,
+                reconnect_interval: 5000,
+                heartbeat_interval: 10000,
+                hmac_secret: None,
+                pool_size: 1,
+                static_peers: vec![],
+                tls: false,
+            },
+            server: ServerConfig::default(),
+            voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
+            web_api: munode_common::config::EdgeWebApiConfig::default(),
+            webtransport: munode_common::config::WebtransportConfig::default(),
+            log_level: "info".to_string(),
+            log_format: "text".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn whisper_relay_targets_include_remote_target_edges_without_peer_registry() {
+        let channel_manager = ChannelManager::new();
+        let client_manager = ClientManager::new();
+        let edge_state = EdgeState::new(channel_manager.clone(), client_manager, false);
+        edge_state.edge_id.store(1, Ordering::Relaxed);
+
+        channel_manager
+            .upsert_remote_user(RemoteUser {
+                session_id: 20_001,
+                edge_id: 2,
+                user_id: 2,
+                username: "remote-user".to_string(),
+                channel_id: 7,
+                cert_hash: None,
+                groups: vec![],
+                mute: false,
+                deaf: false,
+                suppress: false,
+                self_mute: false,
+                self_deaf: false,
+                priority_speaker: false,
+                recording: false,
+                listening_channels: vec![],
+            })
+            .await;
+
+        edge_state
+            .voice_targets
+            .write()
+            .await
+            .entry(10_001)
+            .or_default()
+            .insert(
+                3,
+                VoiceTargetConfig {
+                    sessions: vec![],
+                    channels: vec![VoiceTargetChannelConfig {
+                        channel_id: 7,
+                        links: false,
+                        children: false,
+                        group: None,
+                    }],
+                    resolved_channels: HashMap::from([(7, None)]),
+                },
+            );
+        edge_state
+            .permission_cache
+            .insert((10_001, 7), permission::WHISPER);
+
+        let hub_client = HubClient::new(&test_config(), Arc::clone(&edge_state));
+        let targets = compute_voice_targets(&[3], 10_001, 7, &edge_state, &hub_client)
+            .await
+            .expect("voice target should resolve");
+
+        assert_eq!(
+            targets.relay_edge_ids.as_slice(),
+            &[2],
+            "whisper sender should relay to remote edges that host matching target users even before peer_registry is populated"
+        );
+    }
+
+    #[tokio::test]
+    async fn whisper_relay_targets_include_remote_direct_sessions_without_peer_registry() {
+        let channel_manager = ChannelManager::new();
+        let client_manager = ClientManager::new();
+        let edge_state = EdgeState::new(channel_manager.clone(), client_manager, false);
+        edge_state.edge_id.store(1, Ordering::Relaxed);
+
+        channel_manager
+            .upsert_remote_user(RemoteUser {
+                session_id: 20_001,
+                edge_id: 2,
+                user_id: 2,
+                username: "remote-user".to_string(),
+                channel_id: 9,
+                cert_hash: None,
+                groups: vec![],
+                mute: false,
+                deaf: false,
+                suppress: false,
+                self_mute: false,
+                self_deaf: false,
+                priority_speaker: false,
+                recording: false,
+                listening_channels: vec![],
+            })
+            .await;
+
+        edge_state
+            .voice_targets
+            .write()
+            .await
+            .entry(10_001)
+            .or_default()
+            .insert(
+                4,
+                VoiceTargetConfig {
+                    sessions: vec![20_001],
+                    channels: vec![],
+                    resolved_channels: HashMap::new(),
+                },
+            );
+        edge_state
+            .permission_cache
+            .insert((10_001, 9), permission::WHISPER);
+
+        let hub_client = HubClient::new(&test_config(), Arc::clone(&edge_state));
+        let targets = compute_voice_targets(&[4], 10_001, 7, &edge_state, &hub_client)
+            .await
+            .expect("voice target should resolve");
+
+        assert_eq!(
+            targets.relay_edge_ids.as_slice(),
+            &[2],
+            "whisper sender should relay to remote direct-session targets even before peer_registry is populated"
+        );
     }
 }

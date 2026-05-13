@@ -33,6 +33,48 @@ async fn wait_for_voice_from(
     .unwrap_or(false)
 }
 
+async fn wait_for_voice_target_from(
+    receiver: &munode_client::MumbleClient,
+    sender_session: u32,
+    timeout: Duration,
+) -> Option<u8> {
+    let mut rx = receiver.subscribe();
+    tokio::time::timeout(timeout, async move {
+        loop {
+            match rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break Some(v.target),
+                Ok(_) => continue,
+                Err(_) => break None,
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn collect_voice_targets_from(
+    receiver: &munode_client::MumbleClient,
+    sender_session: u32,
+    timeout: Duration,
+) -> Vec<u8> {
+    let mut rx = receiver.subscribe();
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut targets = Vec::new();
+
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let recv_result = tokio::time::timeout(remaining, rx.recv()).await;
+        match recv_result {
+            Ok(Ok(ClientEvent::Voice(v))) if v.session == sender_session => targets.push(v.target),
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+
+    targets
+}
+
 async fn assert_cross_edge_voice_delivery(
     env: &crate::harness::TestEnvironment,
     sender_edge: usize,
@@ -511,6 +553,182 @@ async fn test_whisper_to_specific_channel() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_cross_edge_whisper_to_specific_user() -> Result<()> {
+    let env = TestEnvBuilder::new().edges(2).start().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig {
+                username: "user1",
+                edge: 1,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+            ClientConfig {
+                username: "user2",
+                edge: 2,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+            ClientConfig {
+                username: "user3",
+                edge: 2,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+        ],
+    )
+    .await?;
+    let (sender, target, non_target) = (&clients[0], &clients[1], &clients[2]);
+
+    sender.channel(1).join().await?;
+    target.channel(1).join().await?;
+    non_target.channel(1).join().await?;
+    sleep_ms(800).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let target_session = target.session_id().unwrap();
+
+    sender
+        .voice()
+        .set_target(
+            12,
+            vec![mumbleproto::voice_target::Target {
+                session: vec![target_session],
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(500).await;
+
+    let audio = random_voice_data(20);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut target_received = false;
+    let mut non_target_received = false;
+
+    while tokio::time::Instant::now() < deadline && !target_received {
+        sender.voice().send(4, 12, 1, &audio).await?;
+
+        if !target_received {
+            target_received =
+                wait_for_voice_from(target, sender_session, Duration::from_millis(500)).await;
+        }
+
+        if !non_target_received {
+            non_target_received =
+                wait_for_voice_from(non_target, sender_session, Duration::from_millis(200)).await;
+        }
+
+        if !target_received {
+            sleep_ms(150).await;
+        }
+    }
+
+    assert!(
+        target_received,
+        "cross-edge direct whisper target should receive voice"
+    );
+    assert!(
+        !non_target_received,
+        "cross-edge direct whisper should not leak to non-target users"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cross_edge_whisper_to_specific_user_from_edge2() -> Result<()> {
+    let env = TestEnvBuilder::new().edges(2).start().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig {
+                username: "user1",
+                edge: 2,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+            ClientConfig {
+                username: "user2",
+                edge: 1,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+            ClientConfig {
+                username: "user3",
+                edge: 1,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+        ],
+    )
+    .await?;
+    let (sender, target, non_target) = (&clients[0], &clients[1], &clients[2]);
+
+    sender.channel(1).join().await?;
+    target.channel(1).join().await?;
+    non_target.channel(1).join().await?;
+    sleep_ms(800).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let target_session = target.session_id().unwrap();
+
+    sender
+        .voice()
+        .set_target(
+            13,
+            vec![mumbleproto::voice_target::Target {
+                session: vec![target_session],
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(500).await;
+
+    let audio = random_voice_data(20);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut target_received = false;
+    let mut non_target_received = false;
+
+    while tokio::time::Instant::now() < deadline && !target_received {
+        sender.voice().send(4, 13, 1, &audio).await?;
+
+        if !target_received {
+            target_received =
+                wait_for_voice_from(target, sender_session, Duration::from_millis(500)).await;
+        }
+
+        if !non_target_received {
+            non_target_received =
+                wait_for_voice_from(non_target, sender_session, Duration::from_millis(200)).await;
+        }
+
+        if !target_received {
+            sleep_ms(150).await;
+        }
+    }
+
+    assert!(
+        target_received,
+        "cross-edge direct whisper from edge2 should reach the target user"
+    );
+    assert!(
+        !non_target_received,
+        "cross-edge direct whisper from edge2 should not leak to non-target users"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_whisper_children_target_tracks_new_subchannel_after_creation() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(
@@ -873,6 +1091,181 @@ async fn test_cross_edge_udp_whisper_to_current_channel_members() -> Result<()> 
     assert!(
         remote_received,
         "UDP current-channel whisper should reach users in the same channel on other edges"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cross_edge_udp_channel_whisper_arrives_as_shout_context() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(2)
+        .hub_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_relay": false,
+            }
+        }))
+        .edge_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_fallback": false,
+            }
+        }))
+        .start()
+        .await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig {
+                username: "user1",
+                edge: 1,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+            ClientConfig {
+                username: "user2",
+                edge: 1,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+            ClientConfig {
+                username: "user3",
+                edge: 2,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+        ],
+    )
+    .await?;
+    let (sender, same_edge_target, other_edge_target) = (&clients[0], &clients[1], &clients[2]);
+
+    sender.channel(1).join().await?;
+    same_edge_target.channel(1).join().await?;
+    other_edge_target.channel(1).join().await?;
+    sleep_ms(800).await;
+
+    sender
+        .voice()
+        .set_target(
+            10,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(1),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(500).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut local_target = None;
+    let mut remote_target = None;
+
+    while tokio::time::Instant::now() < deadline
+        && (local_target != Some(1) || remote_target != Some(1))
+    {
+        sender.voice().send(4, 10, 1, &audio).await?;
+
+        if local_target != Some(1) {
+            local_target = wait_for_voice_target_from(
+                same_edge_target,
+                sender_session,
+                Duration::from_millis(500),
+            )
+            .await;
+        }
+
+        if remote_target != Some(1) {
+            remote_target = wait_for_voice_target_from(
+                other_edge_target,
+                sender_session,
+                Duration::from_millis(500),
+            )
+            .await;
+        }
+
+        if local_target != Some(1) || remote_target != Some(1) {
+            sleep_ms(150).await;
+        }
+    }
+
+    assert_eq!(
+        local_target,
+        Some(1),
+        "same-edge channel whisper should arrive as SHOUT context"
+    );
+    assert_eq!(
+        remote_target,
+        Some(1),
+        "cross-edge channel whisper should arrive as SHOUT context"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cross_edge_whisper_prefers_shout_when_direct_and_channel_targets_overlap() -> Result<()> {
+    let env = standard_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 2),
+        ],
+    )
+    .await?;
+    let (sender, target) = (&clients[0], &clients[1]);
+
+    sender.channel(1).join().await?;
+    target.channel(1).join().await?;
+    sleep_ms(800).await;
+
+    let target_session = target.session_id().unwrap();
+    sender
+        .voice()
+        .set_target(
+            11,
+            vec![
+                mumbleproto::voice_target::Target {
+                    session: vec![target_session],
+                    ..Default::default()
+                },
+                mumbleproto::voice_target::Target {
+                    channel_id: Some(1),
+                    links: Some(false),
+                    children: Some(false),
+                    ..Default::default()
+                },
+            ],
+        )
+        .await?;
+    sleep_ms(500).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let mut received_targets = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
+    while tokio::time::Instant::now() < deadline && received_targets != vec![1] {
+        sender.voice().send(4, 11, 1, &audio).await?;
+        received_targets =
+            collect_voice_targets_from(target, sender_session, Duration::from_millis(500)).await;
+        if received_targets != vec![1] {
+            sleep_ms(150).await;
+        }
+    }
+
+    assert_eq!(
+        received_targets,
+        vec![1],
+        "Murmur prefers a single SHOUT delivery when a receiver matches both direct and channel whisper targets"
     );
 
     cleanup_clients(clients).await;

@@ -370,16 +370,6 @@ impl UdpServer {
         }
     }
 
-    #[inline]
-    fn encrypt_for_addr(
-        &self,
-        target: u32,
-        addr: SocketAddr,
-        plaintext: &[u8],
-    ) -> Option<(Vec<u8>, SocketAddr)> {
-        encrypt_voice_for_addr(target, addr, plaintext)
-    }
-
     /// Detect and respond to an unencrypted Mumble UDP ping packet.
     ///
     /// Two formats are recognized:
@@ -1066,19 +1056,6 @@ impl UdpServer {
                 }
             }
             let _ = self.socket.send_to(&encrypted, addr).await;
-        }
-    }
-
-    /// Deliver voice via TCP UDPTunnel (no encryption — TLS handles it).
-    async fn fallback_to_tcp(&self, session_id: u32, plaintext: &[u8]) {
-        let data = crate::voice::wrap_udptunnel(plaintext);
-        let slot = get_hot_slot(session_id);
-        if !slot.is_active_for(session_id) {
-            return;
-        }
-        let sender_guard = slot.sender.load();
-        if let Some(sender) = &**sender_guard {
-            sender.try_send(data).ok();
         }
     }
 
