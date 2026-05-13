@@ -6,6 +6,7 @@
 //! encryption and UDP socket writes (UDP path) or UdpTunnel framing and
 //! mpsc sends (TCP path) — remain in the respective modules.
 
+use crate::channel_manager::RemoteUser;
 use crate::hot_slot::{BroadcastCache, get_hot_slot};
 use crate::hub_client::HubClient;
 use smallvec::SmallVec;
@@ -30,6 +31,63 @@ pub struct VoiceTargets {
     pub relay_edge_ids: SmallVec<[u32; 8]>,
     /// `true` = whisper/shout targeting; `false` = normal broadcast.
     pub is_whisper: bool,
+}
+
+#[inline]
+fn local_session_can_receive(session_id: u32) -> Option<&'static crate::hot_slot::HotSlot> {
+    let slot = get_hot_slot(session_id);
+    if !slot.is_active_for(session_id) {
+        return None;
+    }
+    if slot.deaf.load(Ordering::Relaxed) || slot.self_deaf.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(slot)
+}
+
+#[inline]
+fn remote_user_can_receive(
+    remote_user: &RemoteUser,
+    sender_session: u32,
+    my_edge_id: u32,
+) -> bool {
+    remote_user.session_id != sender_session
+        && remote_user.edge_id != 0
+        && remote_user.edge_id != my_edge_id
+        && !remote_user.deaf
+        && !remote_user.self_deaf
+}
+
+#[inline]
+fn slot_matches_any_group(slot: &crate::hot_slot::HotSlot, groups: &[String]) -> bool {
+    let slot_groups = slot.groups.load();
+    slot_groups.iter().any(|group| groups.contains(group))
+}
+
+#[inline]
+fn collect_remote_relay_edges<'a, I, F>(
+    remote_users: I,
+    sender_session: u32,
+    my_edge_id: u32,
+    matches_target: F,
+) -> HashSet<u32>
+where
+    I: IntoIterator<Item = &'a RemoteUser>,
+    F: Fn(&RemoteUser) -> bool,
+{
+    remote_users
+        .into_iter()
+        .filter(|remote_user| remote_user_can_receive(remote_user, sender_session, my_edge_id))
+        .filter(|remote_user| matches_target(remote_user))
+        .map(|remote_user| remote_user.edge_id)
+        .collect()
+}
+
+#[inline]
+fn sorted_relay_edge_ids(edge_ids: HashSet<u32>) -> SmallVec<[u32; 8]> {
+    let mut relay_edges: Vec<u32> = edge_ids.into_iter().collect();
+    relay_edges.sort_unstable();
+    relay_edges.into_iter().collect()
 }
 
 /// Compute the target set for a voice packet.
@@ -127,14 +185,7 @@ pub async fn compute_voice_targets(
             if target == sender_session {
                 continue;
             }
-            let slot = crate::hot_slot::get_hot_slot(target);
-            if slot.is_active_for(target) {
-                if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
-                    || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    continue;
-                }
-
+            if let Some(slot) = local_session_can_receive(target) {
                 let target_channel = slot.channel_id.load(std::sync::atomic::Ordering::Relaxed);
                 let permission = can_whisper_to_channel(
                     hub_client,
@@ -156,11 +207,7 @@ pub async fn compute_voice_targets(
             let Some(remote_user) = edge_state.channel_manager.get_remote_user(target).await else {
                 continue;
             };
-            if remote_user.edge_id == 0
-                || remote_user.edge_id == my_edge_id
-                || remote_user.deaf
-                || remote_user.self_deaf
-            {
+            if !remote_user_can_receive(&remote_user, sender_session, my_edge_id) {
                 continue;
             }
 
@@ -198,32 +245,19 @@ pub async fn compute_voice_targets(
             if !permission.allowed {
                 continue;
             }
-            let ch_members = edge_state.client_manager.get_channel_sessions(ch_id).await;
-            let ch_listeners = edge_state
+            let channel_targets = edge_state
                 .client_manager
-                .get_listening_sessions(ch_id)
+                .get_channel_session_ids_with_listeners(&[ch_id], sender_session)
                 .await;
-            for target in ch_members.into_iter().chain(ch_listeners.into_iter()) {
-                if target == sender_session {
-                    continue;
-                }
+            for target in channel_targets {
                 if !seen_channel_targets.insert(target) {
                     continue;
                 }
-                let slot = crate::hot_slot::get_hot_slot(target);
-                if !slot.is_active_for(target) {
+                let Some(slot) = local_session_can_receive(target) else {
                     continue;
-                }
-                if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
-                    || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    continue;
-                }
+                };
                 if let Some(groups) = group_filter {
-                    let slot = crate::hot_slot::get_hot_slot(target);
-                    let grps = slot.groups.load();
-                    let in_group = (**grps).iter().any(|g| groups.contains(g));
-                    if !in_group {
+                    if !slot_matches_any_group(slot, groups) {
                         continue;
                     }
                 }
@@ -244,38 +278,31 @@ pub async fn compute_voice_targets(
                 .get_remote_users_in_channels(&target_channels)
                 .await;
 
-            for remote_user in remote_candidates {
-                if remote_user.session_id == sender_session
-                    || remote_user.edge_id == 0
-                    || remote_user.edge_id == my_edge_id
-                    || remote_user.deaf
-                    || remote_user.self_deaf
-                {
-                    continue;
-                }
+            relay_edge_set.extend(collect_remote_relay_edges(
+                remote_candidates.iter(),
+                sender_session,
+                my_edge_id,
+                |remote_user| {
+                    vt.resolved_channels.iter().any(|(&channel_id, group_filter)| {
+                        let in_target = remote_user.channel_id == channel_id
+                            || remote_user.listening_channels.contains(&channel_id);
+                        if !in_target {
+                            return false;
+                        }
 
-                let matches_channel_target = vt.resolved_channels.iter().any(|(&ch_id, group_filter)| {
-                    let in_target = remote_user.channel_id == ch_id
-                        || remote_user.listening_channels.contains(&ch_id);
-                    if !in_target {
-                        return false;
-                    }
-
-                    match group_filter {
-                        None => true,
-                        Some(groups) => remote_user.groups.iter().any(|group| groups.contains(group)),
-                    }
-                });
-
-                if matches_channel_target {
-                    relay_edge_set.insert(remote_user.edge_id);
-                }
-            }
+                        match group_filter {
+                            None => true,
+                            Some(groups) => remote_user
+                                .groups
+                                .iter()
+                                .any(|group| groups.contains(group)),
+                        }
+                    })
+                },
+            ));
         }
 
-        let mut relay_edges: Vec<u32> = relay_edge_set.into_iter().collect();
-        relay_edges.sort_unstable();
-        let relay_edge_ids: SmallVec<[u32; 8]> = relay_edges.into_iter().collect();
+        let relay_edge_ids = sorted_relay_edge_ids(relay_edge_set);
 
         // Never pin a route derived from fail-closed permission lookups. That
         // would turn one transient Hub/RPC miss into a long-lived empty route.
@@ -349,16 +376,13 @@ pub async fn compute_voice_targets(
                     .get_remote_users_in_channels(&linked_channels)
                     .await;
 
-                let relay_ids: SmallVec<[u32; 8]> = {
-                    let mut seen = HashSet::new();
-                    remote_users
-                        .iter()
-                        .filter(|ru| {
-                            !ru.deaf && !ru.self_deaf && ru.edge_id != 0 && ru.edge_id != my_edge_id
-                        })
-                        .filter_map(|ru| seen.insert(ru.edge_id).then_some(ru.edge_id))
-                        .collect()
-                };
+                let relay_edges = collect_remote_relay_edges(
+                    remote_users.iter(),
+                    sender_session,
+                    my_edge_id,
+                    |_| true,
+                );
+                let relay_ids = sorted_relay_edge_ids(relay_edges);
 
                 // Atomically write cache before returning — only when the slot actually
                 // belongs to sender_session (i.e. this is a local sender, not a relayed
@@ -381,16 +405,7 @@ pub async fn compute_voice_targets(
         let local_sessions: SmallVec<[u32; 32]> = raw_sessions
             .iter()
             .copied()
-            .filter(|&t| {
-                let slot = get_hot_slot(t);
-                if !slot.is_active_for(t) {
-                    return false;
-                }
-                if slot.deaf.load(Ordering::Relaxed) || slot.self_deaf.load(Ordering::Relaxed) {
-                    return false;
-                }
-                true
-            })
+            .filter(|&target| local_session_can_receive(target).is_some())
             .collect();
 
         // Plugin context filter: if the sender has a non-empty plugin_context,

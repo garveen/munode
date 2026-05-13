@@ -636,31 +636,6 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn whisper_cache_returns_only_matching_topology_version() {
-        let state = EdgeState::new(ChannelManager::new(), ClientManager::new(), false);
-
-        state.store_cached_whisper_route(
-            10_001,
-            3,
-            7,
-            WhisperRouteCacheEntry {
-                direct_sessions: smallvec![20_001],
-                channel_sessions: smallvec![20_002, 20_003],
-                relay_edge_ids: smallvec![2, 3],
-            },
-        );
-
-        let hit = state
-            .get_cached_whisper_route(10_001, 3, 7)
-            .expect("matching topology version should hit");
-        assert_eq!(hit.direct_sessions.as_slice(), &[20_001]);
-        assert_eq!(hit.channel_sessions.as_slice(), &[20_002, 20_003]);
-        assert_eq!(hit.relay_edge_ids.as_slice(), &[2, 3]);
-
-        assert!(state.get_cached_whisper_route(10_001, 3, 8).is_none());
-    }
-
-    #[test]
     fn whisper_cache_replaces_old_session_entries_on_version_change() {
         let state = EdgeState::new(ChannelManager::new(), ClientManager::new(), false);
 
@@ -692,6 +667,7 @@ mod tests {
         assert_eq!(hit.direct_sessions.as_slice(), &[31_001]);
         assert_eq!(hit.channel_sessions.as_slice(), &[31_002]);
         assert_eq!(hit.relay_edge_ids.as_slice(), &[5]);
+        assert!(state.get_cached_whisper_route(10_001, 2, 7).is_none());
     }
 
     #[test]
