@@ -4,8 +4,10 @@
 //!   GET /api/clients         — List all locally-connected (local) client sessions
 //!   GET /api/remote_clients  — List all remote client sessions (users on peer Edges)
 //!   GET /api/all_clients     — List local + remote clients (with `is_local` flag)
+//!   GET /api/edges           — List known peer Edge nodes and preferred route type
 //!   GET /api/health          — Liveness probe (always 200 OK)
 
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -22,7 +24,8 @@ use axum::{
 use serde::Serialize;
 use tracing::{info, warn};
 
-use crate::state::EdgeState;
+use crate::peer_registry::PeerEdgeInfo;
+use crate::state::{EdgeState, HopTransport, RouteCandidate, RouteDecision};
 
 type AppState = Arc<EdgeState>;
 
@@ -125,6 +128,73 @@ pub struct AllClientListResponse {
     pub timestamp: u64,
 }
 
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeLinkType {
+    Direct,
+    Relay,
+    Unknown,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeRouteKind {
+    DirectUdp,
+    DirectTcp,
+    RelayChain,
+    HubTcp,
+    Unknown,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeHopTransportEntry {
+    Udp,
+    Tcp,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct EdgeRelayHopEntry {
+    pub edge_id: u32,
+    pub transport: EdgeHopTransportEntry,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct EdgeRouteCandidateEntry {
+    pub route: EdgeRouteKind,
+    pub link_type: EdgeLinkType,
+    pub cost: f32,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub relay_hops: Vec<EdgeRelayHopEntry>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct KnownEdgeEntry {
+    pub edge_id: u32,
+    pub has_direct_peer_metadata: bool,
+    pub known_via_route_table: bool,
+    pub remote_session_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub udp_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_port: Option<u16>,
+    pub preferred_link_type: EdgeLinkType,
+    pub preferred_route: EdgeRouteKind,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub preferred_relay_hops: Vec<EdgeRelayHopEntry>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub route_candidates: Vec<EdgeRouteCandidateEntry>,
+}
+
+#[derive(Serialize)]
+pub struct EdgeListResponse {
+    pub edges: Vec<KnownEdgeEntry>,
+    pub total: usize,
+    pub timestamp: u64,
+}
+
 /// Health check response.
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -136,6 +206,119 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn edge_route_kind(decision: &RouteDecision) -> EdgeRouteKind {
+    match decision {
+        RouteDecision::DirectUdp => EdgeRouteKind::DirectUdp,
+        RouteDecision::DirectTcp => EdgeRouteKind::DirectTcp,
+        RouteDecision::RelayChain { .. } => EdgeRouteKind::RelayChain,
+        RouteDecision::HubTcp => EdgeRouteKind::HubTcp,
+    }
+}
+
+fn edge_link_type(route: EdgeRouteKind) -> EdgeLinkType {
+    match route {
+        EdgeRouteKind::DirectUdp | EdgeRouteKind::DirectTcp => EdgeLinkType::Direct,
+        EdgeRouteKind::RelayChain | EdgeRouteKind::HubTcp => EdgeLinkType::Relay,
+        EdgeRouteKind::Unknown => EdgeLinkType::Unknown,
+    }
+}
+
+fn edge_hop_transport(transport: HopTransport) -> EdgeHopTransportEntry {
+    match transport {
+        HopTransport::Udp => EdgeHopTransportEntry::Udp,
+        HopTransport::Tcp => EdgeHopTransportEntry::Tcp,
+    }
+}
+
+fn relay_hops(decision: &RouteDecision) -> Vec<EdgeRelayHopEntry> {
+    match decision {
+        RouteDecision::RelayChain { hops, transports } => hops
+            .iter()
+            .copied()
+            .zip(transports.iter().cloned())
+            .map(|(edge_id, transport)| EdgeRelayHopEntry {
+                edge_id,
+                transport: edge_hop_transport(transport),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn route_candidate_entry(candidate: &RouteCandidate) -> EdgeRouteCandidateEntry {
+    let route = edge_route_kind(&candidate.decision);
+    EdgeRouteCandidateEntry {
+        route,
+        link_type: edge_link_type(route),
+        cost: candidate.cost,
+        relay_hops: relay_hops(&candidate.decision),
+    }
+}
+
+fn build_known_edge_entries(
+    my_edge_id: u32,
+    peer_snapshot: Vec<(u32, PeerEdgeInfo)>,
+    route_table: &HashMap<u32, Vec<RouteCandidate>>,
+    remote_edge_counts: &HashMap<u32, usize>,
+) -> Vec<KnownEdgeEntry> {
+    let peer_map: HashMap<u32, PeerEdgeInfo> = peer_snapshot.into_iter().collect();
+    let mut edge_ids = BTreeSet::new();
+
+    for &edge_id in peer_map.keys() {
+        if edge_id != my_edge_id {
+            edge_ids.insert(edge_id);
+        }
+    }
+    for &edge_id in route_table.keys() {
+        if edge_id != my_edge_id {
+            edge_ids.insert(edge_id);
+        }
+    }
+    for &edge_id in remote_edge_counts.keys() {
+        if edge_id != 0 && edge_id != my_edge_id {
+            edge_ids.insert(edge_id);
+        }
+    }
+
+    edge_ids
+        .into_iter()
+        .map(|edge_id| {
+            let peer_info = peer_map.get(&edge_id);
+            let candidates = route_table.get(&edge_id);
+            let route_candidates = candidates
+                .map(|items| items.iter().map(route_candidate_entry).collect())
+                .unwrap_or_default();
+
+            let (preferred_route, preferred_relay_hops) = if let Some(candidate) =
+                candidates.and_then(|items| items.first())
+            {
+                (
+                    edge_route_kind(&candidate.decision),
+                    relay_hops(&candidate.decision),
+                )
+            } else if peer_info.is_some() {
+                (EdgeRouteKind::DirectUdp, Vec::new())
+            } else {
+                (EdgeRouteKind::Unknown, Vec::new())
+            };
+
+            KnownEdgeEntry {
+                edge_id,
+                has_direct_peer_metadata: peer_info.is_some(),
+                known_via_route_table: candidates.is_some(),
+                remote_session_count: remote_edge_counts.get(&edge_id).copied().unwrap_or(0),
+                host: peer_info.map(|info| info.host.clone()),
+                udp_addr: peer_info.map(|info| info.udp_addr.to_string()),
+                relay_port: peer_info.map(|info| info.relay_port.unwrap_or(info.udp_addr.port())),
+                preferred_link_type: edge_link_type(preferred_route),
+                preferred_route,
+                preferred_relay_hops,
+                route_candidates,
+            }
+        })
+        .collect()
 }
 
 /// `GET /api/clients` — list all locally-connected client sessions.
@@ -269,12 +452,37 @@ async fn handle_all_clients(State(state): State<AppState>) -> Json<AllClientList
     })
 }
 
+/// `GET /api/edges` — list peer Edges known to this Edge and the preferred route.
+async fn handle_edges(State(state): State<AppState>) -> Json<EdgeListResponse> {
+    let my_edge_id = state.get_edge_id();
+    let peer_snapshot = state.peer_registry.load().all_peers();
+    let route_table = state.route_table.load_full();
+    let remote_users = state.channel_manager.get_all_remote_users().await;
+
+    let mut remote_edge_counts = HashMap::new();
+    for user in remote_users {
+        if user.edge_id != 0 && user.edge_id != my_edge_id {
+            *remote_edge_counts.entry(user.edge_id).or_insert(0) += 1;
+        }
+    }
+
+    let edges = build_known_edge_entries(my_edge_id, peer_snapshot, &route_table, &remote_edge_counts);
+    let total = edges.len();
+
+    Json(EdgeListResponse {
+        edges,
+        total,
+        timestamp: now_secs(),
+    })
+}
+
 /// Build the axum router for the Edge Web API.
 pub fn build_router(state: Arc<EdgeState>, api_token: Option<String>) -> Router {
     let router = Router::new()
         .route("/api/clients", get(handle_clients))
         .route("/api/remote_clients", get(handle_remote_clients))
         .route("/api/all_clients", get(handle_all_clients))
+        .route("/api/edges", get(handle_edges))
         // Health remains unauthenticated by design — orchestrators / load
         // balancers must be able to liveness-probe without a credential.
         .route("/api/health", get(handle_health));
@@ -288,6 +496,7 @@ pub fn build_router(state: Arc<EdgeState>, api_token: Option<String>) -> Router 
             .route("/api/clients", get(handle_clients))
             .route("/api/remote_clients", get(handle_remote_clients))
             .route("/api/all_clients", get(handle_all_clients))
+            .route("/api/edges", get(handle_edges))
             .route_layer(middleware::from_fn_with_state(
                 auth_state.clone(),
                 require_bearer_token,
@@ -370,4 +579,83 @@ pub async fn run_web_api(
     axum::serve(listener, router)
         .await
         .map_err(|e| anyhow::anyhow!("Edge Web API server error: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        EdgeLinkType, EdgeRouteKind, build_known_edge_entries,
+    };
+    use crate::peer_registry::PeerEdgeInfo;
+    use crate::state::{HopTransport, RouteCandidate, RouteDecision};
+    use std::collections::HashMap;
+
+    #[test]
+    fn build_known_edge_entries_prefers_route_table_route() {
+        let peer_snapshot = vec![(
+            2,
+            PeerEdgeInfo {
+                udp_addr: "10.0.0.2:65000".parse().unwrap(),
+                host: "10.0.0.2".into(),
+                relay_port: Some(7443),
+            },
+        )];
+        let route_table = HashMap::from([(
+            2,
+            vec![RouteCandidate {
+                decision: RouteDecision::DirectTcp,
+                cost: 1.0,
+            }],
+        )]);
+        let remote_counts = HashMap::from([(2, 3)]);
+
+        let edges = build_known_edge_entries(1, peer_snapshot, &route_table, &remote_counts);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].preferred_route, EdgeRouteKind::DirectTcp);
+        assert_eq!(edges[0].preferred_link_type, EdgeLinkType::Direct);
+        assert_eq!(edges[0].remote_session_count, 3);
+    }
+
+    #[test]
+    fn build_known_edge_entries_falls_back_to_direct_udp_for_peer_metadata() {
+        let peer_snapshot = vec![(
+            2,
+            PeerEdgeInfo {
+                udp_addr: "10.0.0.2:65000".parse().unwrap(),
+                host: "10.0.0.2".into(),
+                relay_port: None,
+            },
+        )];
+
+        let edges = build_known_edge_entries(1, peer_snapshot, &HashMap::new(), &HashMap::new());
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].preferred_route, EdgeRouteKind::DirectUdp);
+        assert_eq!(edges[0].preferred_link_type, EdgeLinkType::Direct);
+        assert_eq!(edges[0].relay_port, Some(65000));
+    }
+
+    #[test]
+    fn build_known_edge_entries_marks_relay_chain_routes() {
+        let route_table = HashMap::from([(
+            4,
+            vec![RouteCandidate {
+                decision: RouteDecision::RelayChain {
+                    hops: vec![2, 3],
+                    transports: vec![HopTransport::Udp, HopTransport::Tcp],
+                },
+                cost: 2.5,
+            }],
+        )]);
+
+        let edges = build_known_edge_entries(1, Vec::new(), &route_table, &HashMap::new());
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].preferred_route, EdgeRouteKind::RelayChain);
+        assert_eq!(edges[0].preferred_link_type, EdgeLinkType::Relay);
+        assert_eq!(edges[0].preferred_relay_hops.len(), 2);
+        assert_eq!(edges[0].preferred_relay_hops[0].edge_id, 2);
+        assert_eq!(edges[0].preferred_relay_hops[1].edge_id, 3);
+    }
 }

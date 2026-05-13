@@ -167,6 +167,14 @@ impl PeerRegistry {
         self.peers.get(&edge_id)
     }
 
+    /// Returns a full snapshot of known peer Edges and their metadata.
+    pub fn all_peers(&self) -> Vec<(u32, PeerEdgeInfo)> {
+        self.peers
+            .iter()
+            .map(|(id, info)| (*id, info.clone()))
+            .collect()
+    }
+
     /// O(1) lookup of the edge ID for a given UDP address.
     /// Used by the probe-pong handler to avoid a linear scan over all peers.
     pub fn find_by_addr(&self, addr: SocketAddr) -> Option<u32> {
