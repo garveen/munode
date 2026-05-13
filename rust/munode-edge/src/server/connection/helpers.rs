@@ -7,6 +7,12 @@ use tracing::debug;
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PermissionQueryOutcome {
+    pub permissions: u32,
+    pub authoritative: bool,
+}
+
 /// Maximum time allowed for the writer task to drain and flush its queue
 /// after the read loop exits.
 const WRITER_DRAIN_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(5);
@@ -127,18 +133,37 @@ pub(crate) async fn get_perm_cached(
     channel: u32,
     fail_open: bool,
 ) -> u32 {
+    get_perm_cached_outcome(hub_client, edge_state, session, channel, fail_open)
+        .await
+        .permissions
+}
+
+pub(crate) async fn get_perm_cached_outcome(
+    hub_client: &HubClient,
+    edge_state: &EdgeState,
+    session: u32,
+    channel: u32,
+    fail_open: bool,
+) -> PermissionQueryOutcome {
     if let Some(v) = edge_state.permission_cache.get(&(session, channel)) {
-        return *v;
+        return PermissionQueryOutcome {
+            permissions: *v,
+            authoritative: true,
+        };
     }
     match hub_client.handle_permission_query(session, channel).await {
         Ok(r) => {
             let bitmask = r.permissions.unwrap_or(if fail_open { u32::MAX } else { 0 });
             edge_state.permission_cache.insert((session, channel), bitmask);
-            bitmask
+            PermissionQueryOutcome {
+                permissions: bitmask,
+                authoritative: true,
+            }
         }
-        Err(_) => {
-            if fail_open { u32::MAX } else { 0 }
-        }
+        Err(_) => PermissionQueryOutcome {
+            permissions: if fail_open { u32::MAX } else { 0 },
+            authoritative: false,
+        },
     }
 }
 

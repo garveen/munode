@@ -78,56 +78,47 @@ pub async fn compute_voice_targets(
             });
         }
 
-        let vt_config: Option<Arc<crate::hot_slot::HotVoiceTarget>> = {
-            let slot = crate::hot_slot::get_hot_slot(sender_session);
-            if slot.is_active_for(sender_session) {
-                let vt_guard = slot.voice_targets.load();
-                if let Some(map) = &**vt_guard {
-                    map.get(&voice_target).cloned()
-                } else {
-                    None
-                }
-            } else {
-                // HotSlot not yet initialised — fall back to the EdgeState cache.
-                let cache = edge_state.voice_targets.read().await;
-                cache
-                    .get(&sender_session)
-                    .and_then(|m| m.get(&voice_target))
-                    .map(|vt| std::sync::Arc::new(crate::hot_slot::HotVoiceTarget {
-                        sessions: vt.sessions.clone(),
-                        resolved_channels: vt.resolved_channels.clone(),
-                    }))
-            }
-        };
+        let vt_config =
+            crate::voice_target::get_routing_voice_target(edge_state, sender_session, voice_target)
+                .await;
 
         let vt = vt_config?;
 
         let direct_set: HashSet<u32> = vt.sessions.iter().copied().collect();
-        let mut whisper_perm_cache: HashMap<u32, bool> = HashMap::new();
+        #[derive(Clone, Copy)]
+        struct WhisperPermissionCheck {
+            allowed: bool,
+            authoritative: bool,
+        }
+
+        let mut whisper_perm_cache: HashMap<u32, WhisperPermissionCheck> = HashMap::new();
+        let mut cacheable_route = true;
 
         async fn can_whisper_to_channel(
             hub_client: &HubClient,
             edge_state: &crate::state::EdgeState,
             sender_session: u32,
             channel_id: u32,
-            local_cache: &mut HashMap<u32, bool>,
-        ) -> bool {
-            if let Some(&allowed) = local_cache.get(&channel_id) {
-                return allowed;
+            local_cache: &mut HashMap<u32, WhisperPermissionCheck>,
+        ) -> WhisperPermissionCheck {
+            if let Some(&cached) = local_cache.get(&channel_id) {
+                return cached;
             }
 
-            let allowed = crate::server::connection::get_perm_cached(
+            let outcome = crate::server::connection::get_perm_cached_outcome(
                 hub_client,
                 edge_state,
                 sender_session,
                 channel_id,
                 false,
             )
-            .await
-                & munode_common::permission::WHISPER
-                != 0;
-            local_cache.insert(channel_id, allowed);
-            allowed
+            .await;
+            let check = WhisperPermissionCheck {
+                allowed: outcome.permissions & munode_common::permission::WHISPER != 0,
+                authoritative: outcome.authoritative,
+            };
+            local_cache.insert(channel_id, check);
+            check
         }
 
         // Deaf-filter direct session targets.
@@ -147,15 +138,16 @@ pub async fn compute_voice_targets(
             }
 
             let target_channel = slot.channel_id.load(std::sync::atomic::Ordering::Relaxed);
-            if !can_whisper_to_channel(
+            let permission = can_whisper_to_channel(
                 hub_client,
                 edge_state,
                 sender_session,
                 target_channel,
                 &mut whisper_perm_cache,
             )
-            .await
-            {
+            .await;
+            cacheable_route &= permission.authoritative;
+            if !permission.allowed {
                 continue;
             }
 
@@ -168,15 +160,16 @@ pub async fn compute_voice_targets(
         let mut channel_sessions: SmallVec<[u32; 16]> = SmallVec::new();
         let mut seen_channel_targets: HashSet<u32> = HashSet::new();
         for (&ch_id, group_filter) in &vt.resolved_channels {
-            if !can_whisper_to_channel(
+            let permission = can_whisper_to_channel(
                 hub_client,
                 edge_state,
                 sender_session,
                 ch_id,
                 &mut whisper_perm_cache,
             )
-            .await
-            {
+            .await;
+            cacheable_route &= permission.authoritative;
+            if !permission.allowed {
                 continue;
             }
             let ch_members = edge_state.client_manager.get_channel_sessions(ch_id).await;
@@ -216,16 +209,20 @@ pub async fn compute_voice_targets(
             .load()
             .udp_peer_ids_except(my_edge_id);
 
-        edge_state.store_cached_whisper_route(
-            sender_session,
-            voice_target,
-            current_version,
-            crate::voice_target::WhisperRouteCacheEntry {
-                direct_sessions: direct_sessions.clone(),
-                channel_sessions: channel_sessions.clone(),
-                relay_edge_ids: relay_edge_ids.clone(),
-            },
-        );
+        // Never pin a route derived from fail-closed permission lookups. That
+        // would turn one transient Hub/RPC miss into a long-lived empty route.
+        if cacheable_route {
+            edge_state.store_cached_whisper_route(
+                sender_session,
+                voice_target,
+                current_version,
+                crate::voice_target::WhisperRouteCacheEntry {
+                    direct_sessions: direct_sessions.clone(),
+                    channel_sessions: channel_sessions.clone(),
+                    relay_edge_ids: relay_edge_ids.clone(),
+                },
+            );
+        }
 
         Some(VoiceTargets {
             direct_sessions,

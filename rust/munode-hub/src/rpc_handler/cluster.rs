@@ -259,4 +259,75 @@ impl RpcHandler {
             r.edge_report_peer_disconnect = Some(EdgeReportPeerDisconnectResult { action: action_str });
         }))
     }
+
+    /// edge.reportQuality — Edge reports link quality to a peer.
+    pub(super) async fn handle_report_quality(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request
+            .edge_report_quality
+            .as_ref()
+            .context("Missing edge_report_quality params")?;
+        let quality_proto = params.quality;
+        let quality = LinkQuality {
+            rtt_ms: quality_proto.rtt as f64,
+            packet_loss: quality_proto.packet_loss as f64,
+            jitter_ms: quality_proto.jitter as f64,
+            samples: quality_proto.samples,
+            last_update: std::time::Instant::now(),
+        };
+        {
+            let mut topo = self.state.topology.write().await;
+            topo.report_quality(params.edge_id, params.target_edge_id, quality);
+        }
+
+        self.push_route_tables_to_all().await;
+
+        Ok(self.make_response_packet(request_id, "edge.reportQuality", |response| {
+            response.edge_report_quality = Some(EdgeReportQualityResult { success: true });
+        }))
+    }
+
+    /// cluster.getStatus — Returns current cluster topology status.
+    pub(super) async fn handle_cluster_get_status(
+        &self,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let health_map = self.state.edge_health.read().await;
+        let topo = self.state.topology.read().await;
+        let now = std::time::Instant::now();
+
+        let edges: Vec<ClusterEdgeStatusProto> = topo
+            .get_all_edges()
+            .into_iter()
+            .map(|edge| {
+                let health = health_map.get(&edge.edge_id);
+                let last_seen_secs = health
+                    .map(|entry| now.duration_since(entry.last_heartbeat).as_secs())
+                    .unwrap_or(u64::MAX);
+                let status = if last_seen_secs < 60 { "healthy" } else { "stale" };
+                let client_count = health.map(|entry| entry.user_count).unwrap_or(0);
+
+                ClusterEdgeStatusProto {
+                    id: edge.edge_id,
+                    name: edge.name.clone(),
+                    host: edge.host.clone(),
+                    port: edge.port,
+                    client_count,
+                    status: status.to_string(),
+                    last_seen: health.map(|entry| {
+                        let secs_ago = now.duration_since(entry.last_heartbeat).as_secs() as i64;
+                        current_millis() as i64 - secs_ago * 1000
+                    }),
+                }
+            })
+            .collect();
+
+        info!("cluster.getStatus: {} edges in topology", edges.len());
+        Ok(self.make_response_packet(request_id, "cluster.getStatus", |response| {
+            response.cluster_get_status = Some(ClusterGetStatusResult { edges });
+        }))
+    }
 }

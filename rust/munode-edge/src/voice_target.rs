@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use munode_protocol::hubedge;
+use munode_protocol::{hubedge, mumbleproto};
 use smallvec::SmallVec;
 
 use crate::channel_manager::ChannelManager;
@@ -62,6 +62,83 @@ pub fn build_hot_vt_map(
             }))
         })
         .collect()
+}
+
+pub async fn get_routing_voice_target(
+    edge_state: &crate::state::EdgeState,
+    sender_session: u32,
+    target_id: u32,
+) -> Option<Arc<crate::hot_slot::HotVoiceTarget>> {
+    let slot = crate::hot_slot::get_hot_slot(sender_session);
+    if slot.is_active_for(sender_session) {
+        let vt_guard = slot.voice_targets.load();
+        if let Some(map) = &**vt_guard {
+            return map.get(&target_id).cloned();
+        }
+    }
+
+    let cache = edge_state.voice_targets.read().await;
+    cache
+        .get(&sender_session)
+        .and_then(|targets| targets.get(&target_id))
+        .map(|voice_target| {
+            Arc::new(crate::hot_slot::HotVoiceTarget {
+                sessions: voice_target.sessions.clone(),
+                resolved_channels: voice_target.resolved_channels.clone(),
+            })
+        })
+}
+
+pub fn voice_target_config_to_proto(
+    config: &VoiceTargetConfig,
+) -> hubedge::VoiceTargetConfigProto {
+    let sessions = config
+        .sessions
+        .iter()
+        .map(|&session| hubedge::VoiceTargetSession { session })
+        .collect();
+    let channels = config
+        .channels
+        .iter()
+        .map(|channel| hubedge::VoiceTargetChannel {
+            channel_id: channel.channel_id,
+            links: Some(channel.links),
+            children: Some(channel.children),
+            group: channel.group.clone(),
+        })
+        .collect();
+
+    hubedge::VoiceTargetConfigProto { sessions, channels }
+}
+
+pub fn mumble_voice_target_to_proto(
+    voice_target: &mumbleproto::VoiceTarget,
+) -> Option<hubedge::VoiceTargetConfigProto> {
+    if voice_target.targets.is_empty() {
+        return None;
+    }
+
+    let mut sessions = Vec::new();
+    let mut channels = Vec::new();
+    for target in &voice_target.targets {
+        sessions.extend(
+            target
+                .session
+                .iter()
+                .copied()
+                .map(|session| hubedge::VoiceTargetSession { session }),
+        );
+        if let Some(channel_id) = target.channel_id {
+            channels.push(hubedge::VoiceTargetChannel {
+                channel_id,
+                links: Some(target.links.unwrap_or(false)),
+                children: Some(target.children.unwrap_or(false)),
+                group: target.group.clone(),
+            });
+        }
+    }
+
+    Some(hubedge::VoiceTargetConfigProto { sessions, channels })
 }
 
 /// Recursively collect all descendant channel IDs into `out`.

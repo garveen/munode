@@ -23,7 +23,7 @@ use munode_protocol::hubedge::{
 
 use crate::state::{EdgeEvent, EdgeState};
 use crate::peer_registry::PeerEdgeInfo;
-use crate::voice_target::apply_voice_target_proto_batch;
+use crate::voice_target::{apply_voice_target_proto_batch, voice_target_config_to_proto};
 
 
 mod notification;
@@ -1794,7 +1794,6 @@ impl HubClient {
     /// if Hub restarts, all VoiceTarget configs are lost, causing "no VoiceTarget
     /// config for session X target Y" errors when clients use whisper/shout.
     async fn do_report_local_voice_targets(&self) -> Result<()> {
-        use munode_protocol::hubedge::{VoiceTargetConfigProto, VoiceTargetSession, VoiceTargetChannel};
         let edge_id = self.edge_id();
 
         // Snapshot the entire voice_targets map under a brief read lock, then
@@ -1802,7 +1801,7 @@ impl HubClient {
         // across rpc_call().await: each call has a 10-second timeout, and
         // keeping the lock live would stall all voice_targets.write() in the
         // notification handler (hub.syncVoiceTarget) for potentially minutes.
-        let snapshot: Vec<(u32, u32, VoiceTargetConfigProto)> = {
+        let snapshot: Vec<(u32, u32, hubedge::VoiceTargetConfigProto)> = {
             let vt_cache = self.edge_state.voice_targets.read().await;
             if vt_cache.is_empty() {
                 return Ok(());
@@ -1810,18 +1809,11 @@ impl HubClient {
             let mut out = Vec::new();
             for (&session_id, targets) in vt_cache.iter() {
                 for (&target_id, vt_config) in targets.iter() {
-                    let sessions: Vec<VoiceTargetSession> = vt_config.sessions.iter()
-                        .map(|&s| VoiceTargetSession { session: s })
-                        .collect();
-                    let channels: Vec<VoiceTargetChannel> = vt_config.channels.iter()
-                        .map(|ch| VoiceTargetChannel {
-                            channel_id: ch.channel_id,
-                            children: Some(ch.children),
-                            links: Some(ch.links),
-                            group: ch.group.clone(),
-                        })
-                        .collect();
-                    out.push((session_id, target_id, VoiceTargetConfigProto { sessions, channels }));
+                    out.push((
+                        session_id,
+                        target_id,
+                        voice_target_config_to_proto(vt_config),
+                    ));
                 }
             }
             out

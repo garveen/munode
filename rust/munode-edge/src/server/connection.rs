@@ -8,6 +8,7 @@ mod tests;
 use helpers::{drain_writer, broadcast_text_message, broadcast_codec_version,
               strip_html_tags, encode_ip_address};
 pub(crate) use helpers::{get_perm_cached, prefetch_whisper_permissions};
+pub(crate) use helpers::get_perm_cached_outcome;
 use login::{do_login_task, LoginTaskArgs, LoginTaskResult};
 use user_state::{handle_user_state_update, handle_admin_user_state_update};
 
@@ -22,7 +23,6 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 use munode_common::config::EdgeConfig;
 use munode_common::permission as perm;
-use munode_protocol::hubedge;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
 use munode_protocol::transport::decode_frame;
@@ -32,7 +32,11 @@ use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::EdgeState;
 use crate::transport::TransportKind;
 use crate::voice::{deliver_voice_tcp, inject_session_into_voice, wrap_udptunnel};
-use crate::voice_target::{apply_voice_target_proto, clear_session_voice_targets};
+use crate::voice_target::{
+    apply_voice_target_proto,
+    clear_session_voice_targets,
+    mumble_voice_target_to_proto,
+};
 
 /// Fallback idle timeout when `server.idle_timeout_secs = 0` (disabled) — effectively no
 /// upper bound, but we still need a finite select! arm.  Set to a large value.
@@ -969,31 +973,7 @@ pub(crate) async fn run_connection_inner(
 
                         // Convert Mumble VoiceTarget to Hub config
                         if target_id >= 1 && target_id <= 30 {
-                            let config = if vt.targets.is_empty() {
-                                // Empty targets = delete the voice target
-                                None
-                            } else {
-                                let mut sessions = Vec::new();
-                                let mut channels = Vec::new();
-                                for target in &vt.targets {
-                                    if !target.session.is_empty() {
-                                        for &s in &target.session {
-                                            sessions.push(hubedge::VoiceTargetSession {
-                                                session: s,
-                                            });
-                                        }
-                                    }
-                                    if let Some(ch_id) = target.channel_id {
-                                        channels.push(hubedge::VoiceTargetChannel {
-                                            channel_id: ch_id,
-                                            links: Some(target.links.unwrap_or(false)),
-                                            children: Some(target.children.unwrap_or(false)),
-                                            group: target.group.clone(),
-                                        });
-                                    }
-                                }
-                                Some(hubedge::VoiceTargetConfigProto { sessions, channels })
-                            };
+                            let config = mumble_voice_target_to_proto(&vt);
 
                             apply_voice_target_proto(
                                 &edge_state,
@@ -1003,13 +983,12 @@ pub(crate) async fn run_connection_inner(
                             )
                             .await;
 
-                            // Sync to Hub (fire-and-forget)
-                            let hub = hub_client.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = hub.sync_voice_target(sid, target_id as u32, config).await {
-                                    warn!("Failed to sync VoiceTarget: {}", e);
-                                }
-                            });
+                            if let Err(e) = hub_client
+                                .sync_voice_target(sid, target_id as u32, config)
+                                .await
+                            {
+                                warn!("Failed to sync VoiceTarget: {}", e);
+                            }
                         }
                     }
                 }
