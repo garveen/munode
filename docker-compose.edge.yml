@@ -1,6 +1,14 @@
 services:
   edge:
-    image: ${MUNODE_IMAGE:-munode:latest}
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      target: edge-runtime
+      cache_from:
+        - type=local,src=.build-cache
+      cache_to:
+        - type=local,dest=.build-cache,mode=max
+    image: ${MUNODE_EDGE_IMAGE:-munode-edge:latest}
     container_name: munode-edge
     restart: unless-stopped
     ulimits:

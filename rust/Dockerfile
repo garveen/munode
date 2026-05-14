@@ -53,19 +53,32 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --bin munode-edge --bin munode-hub \
     && cp target/release/munode-edge target/release/munode-hub /usr/local/bin/
 
-# Stage 2: Minimal runtime image
-FROM alpine:3.23 AS runtime
+# Stage 2: Minimal runtime base image
+FROM alpine:3.23 AS runtime-base
 RUN apk add --no-cache ca-certificates netcat-openbsd su-exec \
     && mkdir -p /app/config /app/certs /app/data /app/logs
 WORKDIR /app
-COPY --from=builder /usr/local/bin/munode-edge /usr/local/bin/munode-hub /app/
 COPY rust/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-EXPOSE 64738/tcp 64738/udp 8443/tcp
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+FROM runtime-base AS edge-runtime
+COPY --from=builder /usr/local/bin/munode-edge /app/munode-edge
+
+EXPOSE 64738/tcp 64738/udp
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
     CMD nc -z localhost 64738 || exit 1
 
-ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["/app/munode-edge", "config/edge.toml"]
+
+FROM runtime-base AS hub-runtime
+COPY --from=builder /usr/local/bin/munode-hub /app/munode-hub
+
+EXPOSE 8443/tcp 8080/tcp
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
+    CMD nc -z localhost 8080 || exit 1
+
+CMD ["/app/munode-hub", "config/hub.toml"]

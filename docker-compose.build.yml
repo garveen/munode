@@ -1,30 +1,37 @@
 # Shared build file for munode-hub and munode-edge.
 #
-# Both services are compiled from the same Dockerfile and share the same
-# runtime image (munode:latest).  Use this file to build the image once
-# instead of letting docker-compose.hub.yml and docker-compose.edge.yml
-# run concurrent BuildKit processes that race on the shared .build-cache.
+# Default workflows already work from the runtime compose files:
+#   docker compose build
+#   docker compose up -d --build
+#
+# Use this file only when you want to prebuild the role-specific images without
+# bringing the runtime services into scope.
 #
 # Standalone usage (build only, no containers started):
 #   docker compose -f docker-compose.build.yml build
 #
-# Then start services from their own compose files:
-#   docker compose -f docker-compose.hub.yml up -d
-#   docker compose -f docker-compose.edge.yml up -d
-#
-# Individual files (docker-compose.hub.yml / docker-compose.edge.yml) keep
-# their own build blocks so they can still build independently when used
-# without this file.
+# The builder services here stay out of the normal COMPOSE_FILE set, so they do
+# not show up during a regular `docker compose up`.
+
+x-build-common: &build-common
+  context: .
+  dockerfile: rust/Dockerfile
+  cache_from:
+    - type=local,src=.build-cache
+  cache_to:
+    - type=local,dest=.build-cache,mode=max
+
 services:
-  builder:
+  hub-builder:
     build:
-      context: .
-      dockerfile: rust/Dockerfile
-      cache_from:
-        - type=local,src=.build-cache
-      cache_to:
-        - type=local,dest=.build-cache,mode=max
-    image: munode:latest
-    # Prevent accidental `docker compose up` — exits immediately.
+      <<: *build-common
+      target: hub-runtime
+    image: ${MUNODE_HUB_IMAGE:-munode-hub:latest}
     command: ["false"]
-    profiles: ["build"]
+
+  edge-builder:
+    build:
+      <<: *build-common
+      target: edge-runtime
+    image: ${MUNODE_EDGE_IMAGE:-munode-edge:latest}
+    command: ["false"]
