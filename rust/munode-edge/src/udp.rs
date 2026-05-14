@@ -188,8 +188,13 @@ impl UdpServer {
 
     /// Register a client's UDP address.
     pub fn register_client(&self, session_id: u32, addr: SocketAddr) {
-        self.addr_to_session.insert(addr, session_id);
-        self.session_to_addr.insert(session_id, addr);
+        bind_session_addr(
+            self.addr_to_session.as_ref(),
+            self.session_to_addr.as_ref(),
+            session_id,
+            addr,
+        );
+
         debug!("Registered UDP client: session {} at {}", session_id, addr);
     }
 
@@ -641,15 +646,13 @@ impl UdpServer {
             return;
         }
 
-        // Build the set of already-mapped sessions for quick exclusion.
-        let already_mapped: std::collections::HashSet<u32> =
-            { self.session_to_addr.iter().map(|r| *r.key()).collect() };
-
         // Single lock: get all session candidates for identification.
+        // Unknown-source packets must be able to re-bind a session whose cached
+        // UDP address went stale after a NAT remap.
         let candidates = self
             .edge_state
             .client_manager
-            .get_udp_identification_candidates(&already_mapped)
+            .get_udp_identification_candidates()
             .await;
 
         for (session_id, cs_arc, sender_channel, suppress, mute, self_mute, bw_arc) in candidates {
@@ -1372,6 +1375,57 @@ impl UdpServer {
                 );
             }
         }
+    }
+}
+
+fn bind_session_addr(
+    addr_to_session: &DashMap<SocketAddr, u32>,
+    session_to_addr: &DashMap<u32, SocketAddr>,
+    session_id: u32,
+    addr: SocketAddr,
+) {
+    if let Some(previous_addr) = session_to_addr.insert(session_id, addr) {
+        if previous_addr != addr {
+            addr_to_session.remove(&previous_addr);
+        }
+    }
+
+    if let Some(previous_session) = addr_to_session.insert(addr, session_id) {
+        if previous_session != session_id {
+            session_to_addr.remove(&previous_session);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_session_addr;
+    use dashmap::DashMap;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
+    fn localhost(port: u16) -> SocketAddr {
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
+    }
+
+    #[test]
+    fn udp_rebind_updates_both_indexes() {
+        let addr_to_session = DashMap::new();
+        let session_to_addr = DashMap::new();
+        let old_addr = localhost(40_001);
+        let new_addr = localhost(40_002);
+
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_001, old_addr);
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_001, new_addr);
+
+        assert!(addr_to_session.get(&old_addr).is_none());
+        assert_eq!(
+            addr_to_session.get(&new_addr).map(|entry| *entry.value()),
+            Some(10_001)
+        );
+        assert_eq!(
+            session_to_addr.get(&10_001).map(|entry| *entry.value()),
+            Some(new_addr)
+        );
     }
 }
 

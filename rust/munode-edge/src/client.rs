@@ -897,13 +897,10 @@ impl ClientManager {
     /// Snapshot all candidates for UDP session identification in a single lock acquisition.
     ///
     /// Returns `(session_id, crypt_arc, channel_id, suppress, bw_arc)` for every session that
-    /// has a CryptState but whose `session_id` is NOT in `already_mapped`.  Used by
-    /// `UdpServer::try_identify_and_handle` to replace the prior `get_authenticated_sessions`
-    /// + N×`get_crypt_state` pattern (N+1 lock acquisitions) with a single read.
-    pub async fn get_udp_identification_candidates(
-        &self,
-        already_mapped: &std::collections::HashSet<u32>,
-    ) -> Vec<(
+    /// has a CryptState. Unknown-source packets must be allowed to re-identify sessions that
+    /// already have a cached UDP address because NAT rebinding can change the source port while
+    /// the old mapping is still cached locally.
+    pub async fn get_udp_identification_candidates(&self) -> Vec<(
         u32,
         Arc<Mutex<CryptState>>,
         u32,
@@ -917,9 +914,6 @@ impl ClientManager {
             .await
             .iter()
             .filter_map(|(&sid, e)| {
-                if already_mapped.contains(&sid) {
-                    return None;
-                }
                 e.crypt_state.as_ref().map(|cs| {
                     (
                         sid,
@@ -1296,6 +1290,23 @@ mod tests {
         assert_eq!(sessions.len(), 2);
         assert!(sessions.contains(&1));
         assert!(sessions.contains(&2));
+    }
+
+    #[tokio::test]
+    async fn udp_identification_candidates_include_sessions_with_existing_mappings() {
+        let mgr = ClientManager::new();
+        let (tx, _rx) = mpsc::channel(16);
+        let sender = ClientSender::new(tx);
+
+        let client = make_test_client(1, 0);
+        mgr.add_client(client, sender).await;
+
+        let crypt = CryptState::new();
+        mgr.set_crypt_state(1, crypt).await;
+
+        let candidates = mgr.get_udp_identification_candidates().await;
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0, 1);
     }
 
     #[tokio::test]
