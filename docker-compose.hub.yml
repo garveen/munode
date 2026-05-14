@@ -5,9 +5,9 @@ services:
       dockerfile: rust/Dockerfile
       target: hub-runtime
       cache_from:
-        - type=local,src=.build-cache
+        - type=local,src=.build-cache/hub
       cache_to:
-        - type=local,dest=.build-cache,mode=max
+        - type=local,dest=.build-cache/hub,mode=max
     image: ${MUNODE_HUB_IMAGE:-munode-hub:latest}
     container_name: munode-hub
     restart: unless-stopped

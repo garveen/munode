@@ -900,7 +900,9 @@ impl ClientManager {
     /// has a CryptState. Unknown-source packets must be allowed to re-identify sessions that
     /// already have a cached UDP address because NAT rebinding can change the source port while
     /// the old mapping is still cached locally.
-    pub async fn get_udp_identification_candidates(&self) -> Vec<(
+    pub async fn get_udp_identification_candidates(
+        &self,
+    ) -> Vec<(
         u32,
         Arc<Mutex<CryptState>>,
         u32,

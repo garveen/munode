@@ -16,16 +16,17 @@
 x-build-common: &build-common
   context: .
   dockerfile: rust/Dockerfile
-  cache_from:
-    - type=local,src=.build-cache
-  cache_to:
-    - type=local,dest=.build-cache,mode=max
 
 services:
   hub-builder:
     build:
       <<: *build-common
       target: hub-runtime
+      # BuildKit local caches are not safe to share across concurrent exports.
+      cache_from:
+        - type=local,src=.build-cache/hub
+      cache_to:
+        - type=local,dest=.build-cache/hub,mode=max
     image: ${MUNODE_HUB_IMAGE:-munode-hub:latest}
     command: ["false"]
 
@@ -33,5 +34,10 @@ services:
     build:
       <<: *build-common
       target: edge-runtime
+      # Keep edge and hub cache state isolated to avoid ingest directory races.
+      cache_from:
+        - type=local,src=.build-cache/edge
+      cache_to:
+        - type=local,dest=.build-cache/edge,mode=max
     image: ${MUNODE_EDGE_IMAGE:-munode-edge:latest}
     command: ["false"]
