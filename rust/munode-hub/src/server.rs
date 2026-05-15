@@ -25,6 +25,8 @@ use crate::session_manager::SessionManager;
 use crate::topology_manager::TopologyManager;
 use crate::user_store::UserStore;
 
+const PERIODIC_EDGE_FULL_SYNC_INTERVAL: Duration = Duration::from_secs(600);
+
 /// An inbound notification envelope from an Edge, with its Edge-assigned sequence number.
 ///
 /// Produced by `EdgeConnection::handle_incoming` for every `RpcNotification` packet and
@@ -464,6 +466,42 @@ impl HubServer {
         tokio::spawn(async move {
             health_check_loop(health_state, health_rpc, heartbeat_timeout).await;
         });
+
+        // Periodically ask every connected Edge to refresh its full Hub snapshot.
+        {
+            let sync_state = state.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(PERIODIC_EDGE_FULL_SYNC_INTERVAL);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                ticker.tick().await;
+
+                loop {
+                    ticker.tick().await;
+
+                    let edge_count = sync_state.edge_connections.read().await.len();
+                    if edge_count == 0 {
+                        continue;
+                    }
+
+                    let packet = EdgeHubPacket {
+                        r#type: PacketType::RpcNotification as i32,
+                        rpc_notification: Some(TypedRpcNotification {
+                            method: "hub.periodicFullSync".to_string(),
+                            timestamp: Some(current_millis() as i64),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    };
+
+                    broadcast_critical_sequenced(&sync_state, packet.encode_to_vec()).await;
+                    info!(
+                        edge_count,
+                        interval_secs = PERIODIC_EDGE_FULL_SYNC_INTERVAL.as_secs(),
+                        "Requested periodic full-sync from all connected Edges via sequenced notification"
+                    );
+                }
+            });
+        }
 
         // Periodically clean up expired ban records (every 5 minutes)
         {

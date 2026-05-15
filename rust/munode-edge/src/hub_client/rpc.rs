@@ -17,9 +17,7 @@ use munode_protocol::hubedge::{
     TypedRpcRequest,
 };
 
-use crate::state::EdgeEvent;
-
-use super::{HubClient, PendingControlNotification};
+use super::{HubClient, PendingControlNotification, RuntimeFullSyncOutcome};
 
 impl HubClient {
     async fn permission_query_actor_identity(&self, session_id: u32) -> (u32, String) {
@@ -39,27 +37,24 @@ impl HubClient {
         (0, String::new())
     }
 
-    /// Trigger a full-sync with Hub and replay the cluster state into the event bus.
+    /// Trigger a refresh full-sync with Hub and return the refreshed snapshot fence.
     ///
-    /// Called when the event listener detects a `Lagged` error, meaning the broadcast
-    /// channel overflowed and some events were dropped.  Re-running a full sync ensures
-    /// all local clients see the current cluster state even after the gap.
+    /// Used by recovery paths after startup. The actual work runs through the
+    /// notification processor so it is serialized with ordered Hub notifications.
+    pub(crate) async fn request_full_sync_with_reason(
+        &self,
+        reason: &str,
+    ) -> Result<RuntimeFullSyncOutcome> {
+        self.enqueue_runtime_full_sync_request(reason, false).await
+    }
+
     pub async fn request_full_sync(&self) {
-        match self.do_full_sync().await {
-            Ok((disappeared, _hub_was_empty, _old_session_ids)) => {
-                // Re-enable accepting_connections eagerly before emitting the event,
-                // so the event-listener async delay doesn't leave a window where
-                // Hub is reachable but new connections are refused.
-                self.edge_state
-                    .accepting_connections
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-                self.edge_state.emit(EdgeEvent::HubRegistered {
-                    disappeared_session_ids: disappeared,
-                });
-                info!("Full-sync triggered after event-bus Lagged");
+        match self.enqueue_runtime_full_sync_request("unspecified", true).await {
+            Ok(outcome) => {
+                info!(hub_seq = outcome.hub_seq, "Requested full-sync completed");
             }
             Err(e) => {
-                warn!("Full-sync after Lagged failed: {:#}", e);
+                warn!("Requested full-sync failed: {:#}", e);
             }
         }
     }

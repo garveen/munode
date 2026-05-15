@@ -79,6 +79,24 @@ struct SequencedNotification {
     notification: TypedRpcNotification,
 }
 
+#[derive(Debug)]
+pub(crate) struct RuntimeFullSyncOutcome {
+    pub disappeared_session_ids: Vec<u32>,
+    pub hub_seq: u64,
+}
+
+enum NotificationProcessorInput {
+    HubNotification(SequencedNotification),
+    RuntimeFullSync(RuntimeFullSyncRequest),
+}
+
+struct RuntimeFullSyncRequest {
+    reason: String,
+    trigger_seq: Option<u64>,
+    emit_hub_registered: bool,
+    completion: Option<oneshot::Sender<Result<RuntimeFullSyncOutcome>>>,
+}
+
 /// Maximum time to wait for a missing (skipped) sequenced notification before
 /// declaring the connection stale and triggering a reconnect + fullsync.
 const NOTIFICATION_GAP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -117,10 +135,7 @@ struct NotificationSequencer {
 
 enum SequenceAction {
     /// Process this notification immediately; it arrived in order.
-    ProcessNow(TypedRpcNotification),
-    /// Process these notifications immediately (flushed from the reorder buffer
-    /// after the gap was resolved).
-    FlushBatch(Vec<TypedRpcNotification>),
+    ProcessNow(SequencedNotification),
     /// Notification was buffered because it arrived out of order.
     Buffered,
     /// Duplicate notification (seq already processed); discard silently.
@@ -156,19 +171,11 @@ impl NotificationSequencer {
 
         if seq == self.expected_seq {
             self.expected_seq += 1;
-            // Check if consecutive buffered notifications can now be flushed.
-            let mut batch = vec![sn.notification];
-            while let Some(notif) = self.reorder_buffer.remove(&self.expected_seq) {
-                self.expected_seq += 1;
-                batch.push(notif);
-            }
-            if self.reorder_buffer.is_empty() {
-                self.gap_since = None;
-            }
-            if batch.len() == 1 {
-                return SequenceAction::ProcessNow(batch.into_iter().next().unwrap());
-            }
-            return SequenceAction::FlushBatch(batch);
+            self.refresh_gap_state();
+            return SequenceAction::ProcessNow(SequencedNotification {
+                seq: Some(seq),
+                notification: sn.notification,
+            });
         }
 
         // seq > expected_seq → gap detected.
@@ -182,6 +189,45 @@ impl NotificationSequencer {
             self.gap_since = Some(Instant::now());
         }
         SequenceAction::Buffered
+    }
+
+    /// Drain any buffered notifications that became contiguous after the last processed one.
+    fn drain_ready(&mut self) -> Vec<SequencedNotification> {
+        let mut batch = Vec::new();
+        while let Some(notification) = self.reorder_buffer.remove(&self.expected_seq) {
+            let seq = self.expected_seq;
+            self.expected_seq += 1;
+            batch.push(SequencedNotification {
+                seq: Some(seq),
+                notification,
+            });
+        }
+        self.refresh_gap_state();
+        batch
+    }
+
+    /// Re-anchor the live sequencer to a fresh full-sync fence.
+    fn reset_after_full_sync(&mut self, fence_seq: u64) {
+        self.expected_seq = fence_seq + 1;
+        self.reorder_buffer
+            .retain(|&seq, _| seq >= self.expected_seq);
+        self.refresh_gap_state();
+    }
+
+    fn refresh_gap_state(&mut self) {
+        match self.reorder_buffer.first_key_value().map(|(&seq, _)| seq) {
+            None => {
+                self.gap_since = None;
+            }
+            Some(next_seq) if next_seq == self.expected_seq => {
+                self.gap_since = None;
+            }
+            Some(_) => {
+                if self.gap_since.is_none() {
+                    self.gap_since = Some(Instant::now());
+                }
+            }
+        }
     }
 
     /// Returns true if there is an unresolved gap that has exceeded the timeout.
@@ -293,10 +339,14 @@ pub struct HubClient {
     /// Time when this HubClient was created (for uptime reporting).
     start_time: Instant,
     /// Sender for the serial notification processor task.
-    /// Any slot receiving a Hub notification feeds it into this channel.
-    notification_tx: Mutex<Option<mpsc::UnboundedSender<SequencedNotification>>>,
+    /// Any slot receiving a Hub notification, plus any local runtime resync
+    /// request, feeds it into this channel.
+    notification_tx: Mutex<Option<mpsc::UnboundedSender<NotificationProcessorInput>>>,
     /// Expected next notification sequence number, set after fullsync.
     notification_expected_seq: AtomicU64,
+    /// Serializes runtime full-sync requests so periodic reconciliation,
+    /// lag recovery, and any future manual triggers do not overlap.
+    full_sync_lock: Mutex<()>,
     /// Guards the post-register sync sequence (fullSync, joinCluster,
     /// reportLocalUsers, etc.) so it runs exactly once across all pool slots.
     /// CAS from false→true to claim the sync.
@@ -357,6 +407,7 @@ impl HubClient {
             start_time: Instant::now(),
             notification_tx: Mutex::new(None),
             notification_expected_seq: AtomicU64::new(1),
+            full_sync_lock: Mutex::new(()),
             sync_done: AtomicBool::new(false),
             sync_notify: tokio::sync::Notify::new(),
             pending_notifications: tokio::sync::Mutex::new(Vec::new()),
@@ -377,6 +428,122 @@ impl HubClient {
 
     pub async fn state(&self) -> HubConnectionState {
         *self.state.read().await
+    }
+
+    async fn enqueue_runtime_full_sync_request(
+        &self,
+        reason: &str,
+        emit_hub_registered: bool,
+    ) -> Result<RuntimeFullSyncOutcome> {
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let send_result = {
+            let tx_guard = self.notification_tx.lock().await;
+            tx_guard
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("notification processor unavailable"))?
+                .send(NotificationProcessorInput::RuntimeFullSync(RuntimeFullSyncRequest {
+                    reason: reason.to_string(),
+                    trigger_seq: None,
+                    emit_hub_registered,
+                    completion: Some(completion_tx),
+                }))
+        };
+
+        send_result.map_err(|_| anyhow::anyhow!("notification processor channel closed"))?;
+
+        completion_rx
+            .await
+            .context("runtime full-sync completion dropped")?
+    }
+
+    async fn process_sequenced_notification(
+        self: &Arc<Self>,
+        sequencer: &mut NotificationSequencer,
+        notification: SequencedNotification,
+    ) {
+        match notification.notification.method.as_str() {
+            "hub.periodicFullSync" => {
+                self.handle_runtime_full_sync_request(
+                    sequencer,
+                    RuntimeFullSyncRequest {
+                        reason: "hub periodic refresh".to_string(),
+                        trigger_seq: notification.seq,
+                        emit_hub_registered: true,
+                        completion: None,
+                    },
+                )
+                .await;
+            }
+            "hub.forceFullSync" => {
+                self.handle_runtime_full_sync_request(
+                    sequencer,
+                    RuntimeFullSyncRequest {
+                        reason: "hub forced refresh".to_string(),
+                        trigger_seq: notification.seq,
+                        emit_hub_registered: true,
+                        completion: None,
+                    },
+                )
+                .await;
+            }
+            _ => {
+                self.handle_notification(notification.notification).await;
+            }
+        }
+    }
+
+    async fn handle_runtime_full_sync_request(
+        self: &Arc<Self>,
+        sequencer: &mut NotificationSequencer,
+        request: RuntimeFullSyncRequest,
+    ) {
+        let _full_sync_guard = self.full_sync_lock.lock().await;
+
+        info!(
+            reason = %request.reason,
+            trigger_seq = request.trigger_seq.unwrap_or(0),
+            "Starting runtime full-sync request"
+        );
+
+        match self.do_full_sync().await {
+            Ok((disappeared, _hub_was_empty, _old_session_ids, hub_seq)) => {
+                sequencer.reset_after_full_sync(hub_seq);
+                self.edge_state
+                    .accepting_connections
+                    .store(true, Ordering::Relaxed);
+                let outcome = RuntimeFullSyncOutcome {
+                    disappeared_session_ids: disappeared,
+                    hub_seq,
+                };
+                if request.emit_hub_registered {
+                    self.edge_state.emit(EdgeEvent::HubRegistered {
+                        disappeared_session_ids: outcome.disappeared_session_ids.clone(),
+                    });
+                }
+                info!(
+                    reason = %request.reason,
+                    trigger_seq = request.trigger_seq.unwrap_or(0),
+                    hub_seq = outcome.hub_seq,
+                    expected_next = outcome.hub_seq + 1,
+                    emit_hub_registered = request.emit_hub_registered,
+                    "Runtime full-sync completed and live notification sequencer reset"
+                );
+                if let Some(completion) = request.completion {
+                    let _ = completion.send(Ok(outcome));
+                }
+            }
+            Err(e) => {
+                warn!(
+                    reason = %request.reason,
+                    trigger_seq = request.trigger_seq.unwrap_or(0),
+                    "Runtime full-sync failed: {:#}",
+                    e
+                );
+                if let Some(completion) = request.completion {
+                    let _ = completion.send(Err(e));
+                }
+            }
+        }
     }
 
     /// Queue a control notification that failed to reach Hub.
@@ -842,7 +1009,8 @@ impl HubClient {
         {
             let mut tx_guard = self.notification_tx.lock().await;
             if tx_guard.is_none() {
-                let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<SequencedNotification>();
+                let (notif_tx, mut notif_rx) =
+                    mpsc::unbounded_channel::<NotificationProcessorInput>();
                 *tx_guard = Some(notif_tx);
                 let notif_self = self.clone();
                 let gap_disconnect = gap_disconnect.clone();
@@ -879,23 +1047,40 @@ impl HubClient {
                         } else {
                             notif_rx.recv().await
                         };
-                        let sn = match notif {
-                            Some(sn) => sn,
+                        let input = match notif {
+                            Some(input) => input,
                             None => break,
                         };
-                        match sequencer.feed(sn) {
-                            SequenceAction::ProcessNow(n) => {
-                                notif_self.handle_notification(n).await;
-                            }
-                            SequenceAction::FlushBatch(batch) => {
-                                for n in batch {
-                                    notif_self.handle_notification(n).await;
+                        match input {
+                            NotificationProcessorInput::HubNotification(sn) => {
+                                match sequencer.feed(sn) {
+                                    SequenceAction::ProcessNow(n) => {
+                                        notif_self
+                                            .process_sequenced_notification(&mut sequencer, n)
+                                            .await;
+                                        loop {
+                                            let ready = sequencer.drain_ready();
+                                            if ready.is_empty() {
+                                                break;
+                                            }
+                                            for n in ready {
+                                                notif_self
+                                                    .process_sequenced_notification(&mut sequencer, n)
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                    SequenceAction::Unsequenced(n) => {
+                                        notif_self.handle_notification(n).await;
+                                    }
+                                    SequenceAction::Buffered | SequenceAction::Duplicate => {}
                                 }
                             }
-                            SequenceAction::Unsequenced(n) => {
-                                notif_self.handle_notification(n).await;
+                            NotificationProcessorInput::RuntimeFullSync(request) => {
+                                notif_self
+                                    .handle_runtime_full_sync_request(&mut sequencer, request)
+                                    .await;
                             }
-                            SequenceAction::Buffered | SequenceAction::Duplicate => {}
                         }
                     }
                     // The channel closed because the teardown already dropped the sender
@@ -973,7 +1158,8 @@ impl HubClient {
             // do_full_sync so the Hub snapshot excludes ghost sessions and includes
             // the correct channel tree.
             self.flush_pending_notifications().await;
-            let (disappeared, hub_was_empty, old_session_ids) = self.do_full_sync().await?;
+            let (disappeared, hub_was_empty, old_session_ids, _hub_seq) =
+                self.do_full_sync().await?;
             self.do_fetch_voice_targets().await;
             self.do_join_cluster().await?;
             if let Err(e) = self.do_report_local_users().await {
@@ -1433,7 +1619,10 @@ impl HubClient {
                             seq: packet.notification_seq,
                             notification,
                         };
-                        if tx.send(sn).is_err() {
+                        if tx
+                            .send(NotificationProcessorInput::HubNotification(sn))
+                            .is_err()
+                        {
                             warn!("Notification processor channel closed");
                         }
                     }
@@ -1610,7 +1799,10 @@ impl HubClient {
     /// * `old_session_ids` – the snapshot of remote session IDs taken *before*
     ///   the cache was cleared.  Passed back to the caller so the grace timer
     ///   can perform a post-grace diff against the repopulated cache.
-    async fn do_full_sync(&self) -> Result<(Vec<u32>, bool, std::collections::HashSet<u32>)> {
+    /// * `hub_seq` – the Hub notification fence returned with the snapshot.
+    async fn do_full_sync(
+        &self,
+    ) -> Result<(Vec<u32>, bool, std::collections::HashSet<u32>, u64)> {
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
@@ -1746,7 +1938,7 @@ impl HubClient {
         self.edge_state
             .topology_version
             .fetch_add(1, std::sync::atomic::Ordering::Release);
-        Ok((disappeared, hub_was_empty, old_session_ids))
+        Ok((disappeared, hub_was_empty, old_session_ids, hub_seq))
     }
 
     /// Fetch all existing VoiceTarget configs from Hub and populate the local cache.

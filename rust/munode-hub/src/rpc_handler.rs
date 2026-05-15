@@ -1061,6 +1061,14 @@ pub(crate) async fn run_edge_notif_processor(
                     for n in seq.skip_gap() {
                         rpc_handler.handle_notification(n, edge_id).await;
                     }
+                    warn!(
+                        edge_id,
+                        "Edge {} seq gap skipped — sending hub.forceFullSync to trigger resync",
+                        edge_id
+                    );
+                    rpc_handler
+                        .send_notification_to_edge(edge_id, "hub.forceFullSync", |_| {})
+                        .await;
                     continue;
                 }
             }

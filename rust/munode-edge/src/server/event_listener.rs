@@ -820,22 +820,29 @@ pub(crate) async fn hub_event_listener(
                     count,
                     "Event listener lagged — triggering full re-sync to recover missed events"
                 );
-                hub_client.request_full_sync().await;
+                let mut pending_hub_registered = match hub_client
+                    .request_full_sync_with_reason("event listener lagged")
+                    .await
+                {
+                    Ok(outcome) => Some(outcome.disappeared_session_ids),
+                    Err(e) => {
+                        warn!("Event listener lagged — runtime full-sync failed: {:#}", e);
+                        None
+                    }
+                };
+                if pending_hub_registered.is_none() {
+                    continue;
+                }
                 // After the sync, the broadcast channel may have accumulated many stale events
-                // (primarily high-frequency RelayedVoice packets) while we were blocked awaiting
-                // the Hub RPC.  Naively calling recv() here would immediately return another
-                // Lagged error, creating an infinite sync loop.  Instead, drain all pending
-                // events now: keep track of the latest HubRegistered (superseding earlier ones),
-                // discard everything else (voice, etc.) since the full sync already gives us
-                // fresh authoritative state.  Then process HubRegistered inline before resuming
-                // normal event consumption.
-                let mut pending_hub_registered: Option<Vec<u32>> = None;
+                // (primarily high-frequency RelayedVoice packets) while the runtime full-sync was
+                // queued or executing. Drain them now and keep only the latest HubRegistered, which
+                // may supersede the sync result we just received if a newer ordered resync finished
+                // before we caught up.
                 loop {
                     match event_rx.try_recv() {
                         Ok(EdgeEvent::HubRegistered {
                             disappeared_session_ids,
                         }) => {
-                            // Keep only the latest; earlier ones are superseded by the same sync.
                             pending_hub_registered = Some(disappeared_session_ids);
                         }
                         Ok(_) => {}      // discard stale events (RelayedVoice, etc.)
