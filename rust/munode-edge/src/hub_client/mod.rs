@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use flate2::read::ZlibDecoder;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use prost::Message;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::time;
@@ -441,12 +441,14 @@ impl HubClient {
             tx_guard
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("notification processor unavailable"))?
-                .send(NotificationProcessorInput::RuntimeFullSync(RuntimeFullSyncRequest {
-                    reason: reason.to_string(),
-                    trigger_seq: None,
-                    emit_hub_registered,
-                    completion: Some(completion_tx),
-                }))
+                .send(NotificationProcessorInput::RuntimeFullSync(
+                    RuntimeFullSyncRequest {
+                        reason: reason.to_string(),
+                        trigger_seq: None,
+                        emit_hub_registered,
+                        completion: Some(completion_tx),
+                    },
+                ))
         };
 
         send_result.map_err(|_| anyhow::anyhow!("notification processor channel closed"))?;
@@ -905,22 +907,8 @@ impl HubClient {
         }
         info!("Connecting to Hub at {} (slot {})", url, slot);
 
-        const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-        let (mut ws_stream, _) =
-            time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
-                .await
-                .with_context(|| {
-                    format!(
-                        "Hub WebSocket connect timed out after {:?} (slot {})",
-                        CONNECT_TIMEOUT, slot
-                    )
-                })?
-                .with_context(|| {
-                    format!(
-                        "Failed to connect to Hub WebSocket at {} (slot {})",
-                        url, slot
-                    )
-                })?;
+        let connect_label = format!("Hub WebSocket at {} (slot {})", url, slot);
+        let mut ws_stream = crate::control_ws::connect(url, &connect_label).await?;
 
         // Challenge-response auth handshake for relay connections.
         if let Some(secret) = hmac_secret {
@@ -951,48 +939,22 @@ impl HubClient {
 
         let (writer_fail_tx_via, writer_fail_rx_via) = tokio::sync::oneshot::channel::<()>();
 
-        /// Maximum time allowed for a single WebSocket frame write to complete.
-        ///
-        /// If the underlying TCP connection enters a stuck state (send buffer full,
-        /// remote not reading), `ws_write.send()` blocks indefinitely, preventing
-        /// the writer from draining `send_rx`.  Once the 4096-slot channel fills up,
-        /// every caller of `send_raw` also blocks forever — including auth RPCs, which
-        /// means Hub's Lua auth never receives the request while Hub→Edge notifications
-        /// continue flowing normally through the reader task.
-        ///
-        /// Timing out the write triggers the normal slot-failure path: `writer_fail`
-        /// fires, the reader breaks, the slot is cleaned up, and a fresh connection is
-        /// established (usually within seconds via exponential backoff).
-        const WS_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-
         let writer_handle = tokio::spawn(async move {
             let mut fail_tx = Some(writer_fail_tx_via);
+            let write_label = format!("Hub WebSocket writer (slot {})", slot);
             while let Some(data) = send_rx.recv().await {
-                let result = time::timeout(
-                    WS_WRITE_TIMEOUT,
-                    ws_write.send(tungstenite::Message::Binary(Bytes::from(data))),
+                if let Err(e) = crate::control_ws::send_with_timeout(
+                    &mut ws_write,
+                    tungstenite::Message::Binary(Bytes::from(data)),
+                    &write_label,
                 )
-                .await;
-                match result {
-                    Ok(Ok(())) => {} // write succeeded
-                    Ok(Err(e)) => {
-                        error!("WebSocket write error (slot {}): {}", slot, e);
-                        if let Some(tx) = fail_tx.take() {
-                            let _ = tx.send(());
-                        }
-                        break;
+                .await
+                {
+                    error!("{} failed: {:#}", write_label, e);
+                    if let Some(tx) = fail_tx.take() {
+                        let _ = tx.send(());
                     }
-                    Err(_) => {
-                        error!(
-                            "WebSocket write timed out after {:?} (slot {}) — \
-                             TCP send buffer may be stalled; closing connection",
-                            WS_WRITE_TIMEOUT, slot
-                        );
-                        if let Some(tx) = fail_tx.take() {
-                            let _ = tx.send(());
-                        }
-                        break;
-                    }
+                    break;
                 }
             }
         });
@@ -1065,7 +1027,10 @@ impl HubClient {
                                             }
                                             for n in ready {
                                                 notif_self
-                                                    .process_sequenced_notification(&mut sequencer, n)
+                                                    .process_sequenced_notification(
+                                                        &mut sequencer,
+                                                        n,
+                                                    )
                                                     .await;
                                             }
                                         }
@@ -1327,10 +1292,10 @@ impl HubClient {
     /// Attempt a single WebSocket connection on `slot`.
     /// All slots are peer-equal: any slot can perform registration & sync.
     async fn try_connect_slot(self: &Arc<Self>, slot: usize) -> Result<()> {
-        let scheme = if self.config.tls { "wss" } else { "ws" };
-        let url = format!(
-            "{}://{}:{}",
-            scheme, self.config.host, self.config.control_port
+        let url = crate::control_ws::build_hub_url(
+            &self.config.host,
+            self.config.control_port,
+            self.config.tls,
         );
         self.try_connect_via_url(&url, slot, None).await
     }
@@ -1800,9 +1765,7 @@ impl HubClient {
     ///   the cache was cleared.  Passed back to the caller so the grace timer
     ///   can perform a post-grace diff against the repopulated cache.
     /// * `hub_seq` – the Hub notification fence returned with the snapshot.
-    async fn do_full_sync(
-        &self,
-    ) -> Result<(Vec<u32>, bool, std::collections::HashSet<u32>, u64)> {
+    async fn do_full_sync(&self) -> Result<(Vec<u32>, bool, std::collections::HashSet<u32>, u64)> {
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
@@ -2182,8 +2145,6 @@ impl HubClient {
     /// if Hub restarts, all VoiceTarget configs are lost, causing "no VoiceTarget
     /// config for session X target Y" errors when clients use whisper/shout.
     async fn do_report_local_voice_targets(&self) -> Result<()> {
-        let edge_id = self.edge_id();
-
         // Snapshot the entire voice_targets map under a brief read lock, then
         // release it before any RPC calls.  The read guard must NOT be held
         // across rpc_call().await: each call has a 10-second timeout, and
@@ -2209,20 +2170,7 @@ impl HubClient {
 
         let mut upload_count = 0;
         for (session_id, target_id, config) in snapshot {
-            let request_id = self.next_request_id();
-            let request = TypedRpcRequest {
-                request_id,
-                method: "edge.syncVoiceTarget".to_string(),
-                timeout_ms: Some(10000),
-                edge_sync_voice_target: Some(hubedge::EdgeSyncVoiceTargetParams {
-                    edge_id,
-                    client_session: session_id,
-                    target_id,
-                    config: Some(config),
-                }),
-                ..Default::default()
-            };
-            if let Err(e) = self.rpc_call(request).await {
+            if let Err(e) = self.sync_voice_target(session_id, target_id, Some(config)).await {
                 warn!(
                     "Failed to re-upload VoiceTarget session={} target={} to Hub: {}",
                     session_id, target_id, e

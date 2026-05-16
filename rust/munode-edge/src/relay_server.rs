@@ -43,10 +43,13 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
+use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, error, info, trace, warn};
+
+use munode_protocol::hubedge;
 
 use crate::hub_client::HubClient;
 use crate::state::{EdgeEvent, EdgeState};
@@ -60,6 +63,13 @@ const RELAY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Voice TCP connection channel buffer size.
 const VOICE_TCP_CHAN_BUF: usize = 256;
+
+/// `/voice` frame type: direct voice for this edge.
+const VOICE_TCP_FRAME_DIRECT: u8 = 0x01;
+/// `/voice` frame type: relay-forward voice (currently dropped on this channel).
+const VOICE_TCP_FRAME_RELAY: u8 = 0x02;
+/// `/voice` frame type: peer-to-peer VoiceTarget config sync.
+const VOICE_TCP_FRAME_SYNC_TARGET: u8 = 0x03;
 
 /// Length of the auth nonce in bytes (256-bit random value).
 const RELAY_AUTH_NONCE_LEN: usize = 32;
@@ -310,6 +320,11 @@ pub async fn run_edge_ws_server_with_listener(
 /// either malicious or grossly malformed and should be dropped.
 const MAX_VOICE_FRAME_SIZE: usize = 8192;
 
+/// Maximum size (bytes) for a VoiceTarget sync frame carried on `/voice`.
+/// VoiceTarget configs are rare control updates and may legitimately be much
+/// larger than an Opus frame when they contain many explicit sessions.
+const MAX_VOICE_TARGET_SYNC_FRAME_SIZE: usize = 64 * 1024;
+
 /// Handle an incoming `/voice` WebSocket connection from a peer Edge.
 ///
 /// Protocol:
@@ -317,6 +332,8 @@ const MAX_VOICE_FRAME_SIZE: usize = 8192;
 /// 2. Subsequent binary messages:
 ///    - `[0x01][session_BE(4)][plaintext...]` → deliver locally via `RelayedVoice`.
 ///    - `[0x02][ttl(1)][target_BE(4)][session_BE(4)][plaintext...]` → relay (dropped for now).
+///    - `[0x03][session_BE(4)][target_BE(4)][VoiceTargetConfigProto?]` → sync VoiceTarget.
+///      Empty protobuf payload clears the target on the receiving edge.
 async fn handle_voice_connection(
     mut ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     peer_addr: std::net::SocketAddr,
@@ -391,7 +408,12 @@ async fn handle_voice_connection(
 
         // Reject oversized frames to prevent memory exhaustion from a
         // malicious or buggy peer.
-        if data.len() > MAX_VOICE_FRAME_SIZE {
+        let max_frame_size = if data[0] == VOICE_TCP_FRAME_SYNC_TARGET {
+            MAX_VOICE_TARGET_SYNC_FRAME_SIZE
+        } else {
+            MAX_VOICE_FRAME_SIZE
+        };
+        if data.len() > max_frame_size {
             warn!(
                 "Voice conn from peer edge {}: frame too large ({} bytes), dropping",
                 peer_edge_id,
@@ -401,7 +423,7 @@ async fn handle_voice_connection(
         }
 
         match data[0] {
-            0x01 if data.len() >= 6 => {
+            VOICE_TCP_FRAME_DIRECT if data.len() >= 6 => {
                 // Direct delivery: [0x01][session_BE(4)][plaintext...]
                 let sender_session = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
                 let plaintext = &data[5..];
@@ -415,7 +437,7 @@ async fn handle_voice_connection(
                         .await;
                 }
             }
-            0x02 => {
+            VOICE_TCP_FRAME_RELAY => {
                 // Relay frame — not handled on the /voice channel (log and drop)
                 debug!(
                     "Voice conn from peer edge {}: relay frame dropped (len={})",
@@ -423,6 +445,27 @@ async fn handle_voice_connection(
                     data.len()
                 );
             }
+            VOICE_TCP_FRAME_SYNC_TARGET => match decode_voice_target_sync_frame(&data) {
+                Ok((client_session, target_id, config)) => {
+                    crate::voice_target::apply_voice_target_proto(
+                        &edge_state,
+                        client_session,
+                        target_id,
+                        config,
+                    )
+                    .await;
+                    debug!(
+                        "Voice TCP synced target {} for session {} from peer edge {}",
+                        target_id, client_session, peer_edge_id
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Voice conn from peer edge {}: invalid VoiceTarget sync frame: {}",
+                        peer_edge_id, e
+                    );
+                }
+            },
             _ => {
                 debug!(
                     "Voice conn from peer edge {}: unknown frame type 0x{:02X}",
@@ -436,6 +479,60 @@ async fn handle_voice_connection(
         "Voice TCP connection from peer edge {} ({}) closed",
         peer_edge_id, peer_addr
     );
+}
+
+fn encode_voice_target_sync_frame(
+    client_session: u32,
+    target_id: u32,
+    config: Option<&hubedge::VoiceTargetConfigProto>,
+) -> Vec<u8> {
+    let config_bytes = config.map_or_else(Vec::new, Message::encode_to_vec);
+    let mut frame = Vec::with_capacity(1 + 4 + 4 + config_bytes.len());
+    frame.push(VOICE_TCP_FRAME_SYNC_TARGET);
+    frame.extend_from_slice(&client_session.to_be_bytes());
+    frame.extend_from_slice(&target_id.to_be_bytes());
+    frame.extend_from_slice(&config_bytes);
+    frame
+}
+
+fn decode_voice_target_sync_frame(
+    data: &[u8],
+) -> anyhow::Result<(u32, u32, Option<hubedge::VoiceTargetConfigProto>)> {
+    if data.len() < 9 {
+        anyhow::bail!("frame too short: {}", data.len());
+    }
+
+    let client_session = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+    let target_id = u32::from_be_bytes([data[5], data[6], data[7], data[8]]);
+    let config = if data.len() == 9 {
+        None
+    } else {
+        Some(
+            hubedge::VoiceTargetConfigProto::decode(&data[9..])
+                .map_err(|e| anyhow::anyhow!("protobuf decode failed: {}", e))?,
+        )
+    };
+
+    Ok((client_session, target_id, config))
+}
+
+/// Best-effort peer fan-out for a VoiceTarget update over the existing `/voice` pools.
+///
+/// This supplements Hub broadcast with a direct Edge-to-Edge path so remote edges
+/// can refresh routing state even when the sender's Hub control path is degraded.
+pub fn fanout_voice_target_to_peers(
+    edge_state: &crate::state::EdgeState,
+    client_session: u32,
+    target_id: u32,
+    config: Option<hubedge::VoiceTargetConfigProto>,
+) -> usize {
+    let pools = edge_state.voice_tcp_conns.load();
+    if pools.is_empty() {
+        return 0;
+    }
+
+    let frame = encode_voice_target_sync_frame(client_session, target_id, config.as_ref());
+    pools.values().filter(|pool| pool.try_send(frame.clone())).count()
 }
 
 /// Keepalive ping interval for outbound peer voice TCP connections.
@@ -891,15 +988,11 @@ async fn run_relay_for_ws(
             })?;
     }
 
-    // Connect to Hub as a WebSocket client
-    const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
-    let hub_url = format!("ws://{}:{}", hub_host, hub_port);
-    let (hub_ws, _) = timeout(
-        HANDSHAKE_TIMEOUT,
-        tokio_tungstenite::connect_async(&hub_url),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("WebSocket connect to Hub timed out ({})", hub_url))??;
+    // Use the shared control-plane transport policy so relay upstream links and
+    // direct Hub slots fail over under the same connect/write conditions.
+    let hub_url = crate::control_ws::build_hub_url(&hub_host, hub_port, false);
+    let connect_label = format!("relay upstream Hub WebSocket {} for peer {}", hub_url, peer_addr);
+    let hub_ws = crate::control_ws::connect(&hub_url, &connect_label).await?;
     debug!(
         "Control relay: connected to Hub at {} for peer {}",
         hub_url, peer_addr
@@ -956,21 +1049,22 @@ where
 
         match msg {
             Ok(WsMessage::Binary(data)) => {
-                dst.send(WsMessage::Binary(data)).await?;
+                crate::control_ws::send_with_timeout(dst, WsMessage::Binary(data), label).await?;
             }
             Ok(WsMessage::Text(text)) => {
-                dst.send(WsMessage::Text(text)).await?;
+                crate::control_ws::send_with_timeout(dst, WsMessage::Text(text), label).await?;
             }
             Ok(WsMessage::Close(frame)) => {
                 debug!(
                     "Relay {}: received Close frame, forwarding and stopping",
                     label
                 );
-                let _ = dst.send(WsMessage::Close(frame)).await;
+                let _ = crate::control_ws::send_with_timeout(dst, WsMessage::Close(frame), label)
+                    .await;
                 break;
             }
             Ok(WsMessage::Ping(data)) => {
-                dst.send(WsMessage::Pong(data)).await?;
+                crate::control_ws::send_with_timeout(dst, WsMessage::Pong(data), label).await?;
             }
             Ok(WsMessage::Pong(_)) => {
                 // Ignore pong responses
@@ -986,6 +1080,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use munode_protocol::hubedge;
+
     /// Perform a full challenge-response handshake over an in-memory duplex pair.
     async fn run_handshake(secret: &str) -> (anyhow::Result<()>, anyhow::Result<()>) {
         let (server_stream, client_stream) = tokio::io::duplex(4096);
@@ -1052,5 +1148,35 @@ mod tests {
         };
         let (server_res, _client_res) = tokio::join!(server_fut, client_fut);
         assert!(server_res.is_err(), "server should reject wrong HMAC");
+    }
+
+    #[test]
+    fn voice_target_sync_frame_round_trips_config_payload() {
+        let config = hubedge::VoiceTargetConfigProto {
+            sessions: vec![hubedge::VoiceTargetSession { session: 42 }],
+            channels: vec![hubedge::VoiceTargetChannel {
+                channel_id: 7,
+                links: Some(true),
+                children: Some(false),
+                group: Some("all".to_string()),
+            }],
+        };
+
+        let frame = super::encode_voice_target_sync_frame(1001, 3, Some(&config));
+        let decoded = super::decode_voice_target_sync_frame(&frame).expect("decode frame");
+
+        assert_eq!(decoded.0, 1001);
+        assert_eq!(decoded.1, 3);
+        assert_eq!(decoded.2, Some(config));
+    }
+
+    #[test]
+    fn voice_target_sync_frame_round_trips_clear_payload() {
+        let frame = super::encode_voice_target_sync_frame(1002, 4, None);
+        let decoded = super::decode_voice_target_sync_frame(&frame).expect("decode frame");
+
+        assert_eq!(decoded.0, 1002);
+        assert_eq!(decoded.1, 4);
+        assert_eq!(decoded.2, None);
     }
 }

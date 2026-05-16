@@ -49,7 +49,10 @@ impl HubClient {
     }
 
     pub async fn request_full_sync(&self) {
-        match self.enqueue_runtime_full_sync_request("unspecified", true).await {
+        match self
+            .enqueue_runtime_full_sync_request("unspecified", true)
+            .await
+        {
             Ok(outcome) => {
                 info!(hub_seq = outcome.hub_seq, "Requested full-sync completed");
             }
@@ -339,6 +342,21 @@ impl HubClient {
         target_id: u32,
         config: Option<hubedge::VoiceTargetConfigProto>,
     ) -> Result<hubedge::EdgeSyncVoiceTargetResult> {
+        let peer_fanout = crate::relay_server::fanout_voice_target_to_peers(
+            &self.edge_state,
+            client_session,
+            target_id,
+            config.clone(),
+        );
+        if peer_fanout > 0 {
+            debug!(
+                client_session,
+                target_id,
+                peer_fanout,
+                "VoiceTarget broadcast to peer edges over /voice"
+            );
+        }
+
         let request_id = self.next_request_id();
         let edge_id = self.edge_id();
         let request = TypedRpcRequest {
