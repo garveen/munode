@@ -532,7 +532,10 @@ pub fn fanout_voice_target_to_peers(
     }
 
     let frame = encode_voice_target_sync_frame(client_session, target_id, config.as_ref());
-    pools.values().filter(|pool| pool.try_send(frame.clone())).count()
+    pools
+        .values()
+        .filter(|pool| pool.try_send(frame.clone()))
+        .count()
 }
 
 /// Keepalive ping interval for outbound peer voice TCP connections.
@@ -991,7 +994,10 @@ async fn run_relay_for_ws(
     // Use the shared control-plane transport policy so relay upstream links and
     // direct Hub slots fail over under the same connect/write conditions.
     let hub_url = crate::control_ws::build_hub_url(&hub_host, hub_port, false);
-    let connect_label = format!("relay upstream Hub WebSocket {} for peer {}", hub_url, peer_addr);
+    let connect_label = format!(
+        "relay upstream Hub WebSocket {} for peer {}",
+        hub_url, peer_addr
+    );
     let hub_ws = crate::control_ws::connect(&hub_url, &connect_label).await?;
     debug!(
         "Control relay: connected to Hub at {} for peer {}",
@@ -1059,8 +1065,8 @@ where
                     "Relay {}: received Close frame, forwarding and stopping",
                     label
                 );
-                let _ = crate::control_ws::send_with_timeout(dst, WsMessage::Close(frame), label)
-                    .await;
+                let _ =
+                    crate::control_ws::send_with_timeout(dst, WsMessage::Close(frame), label).await;
                 break;
             }
             Ok(WsMessage::Ping(data)) => {

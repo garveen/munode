@@ -351,9 +351,7 @@ impl HubClient {
         if peer_fanout > 0 {
             debug!(
                 client_session,
-                target_id,
-                peer_fanout,
-                "VoiceTarget broadcast to peer edges over /voice"
+                target_id, peer_fanout, "VoiceTarget broadcast to peer edges over /voice"
             );
         }
 

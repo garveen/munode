@@ -2170,7 +2170,10 @@ impl HubClient {
 
         let mut upload_count = 0;
         for (session_id, target_id, config) in snapshot {
-            if let Err(e) = self.sync_voice_target(session_id, target_id, Some(config)).await {
+            if let Err(e) = self
+                .sync_voice_target(session_id, target_id, Some(config))
+                .await
+            {
                 warn!(
                     "Failed to re-upload VoiceTarget session={} target={} to Hub: {}",
                     session_id, target_id, e
