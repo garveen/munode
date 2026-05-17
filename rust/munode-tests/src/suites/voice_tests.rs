@@ -195,7 +195,10 @@ async fn assert_cross_edge_direct_whisper_to_specific_user(
     let mut non_target_received = false;
 
     while tokio::time::Instant::now() < deadline && !target_received {
-        sender.voice().send(4, voice_target_id as u8, 1, &audio).await?;
+        sender
+            .voice()
+            .send(4, voice_target_id as u8, 1, &audio)
+            .await?;
 
         if !target_received {
             target_received =
@@ -212,7 +215,10 @@ async fn assert_cross_edge_direct_whisper_to_specific_user(
         }
     }
 
-    assert!(target_received, "{context}: direct whisper target should receive voice");
+    assert!(
+        target_received,
+        "{context}: direct whisper target should receive voice"
+    );
     assert!(
         !non_target_received,
         "{context}: direct whisper should not leak to non-target users"
@@ -1142,14 +1148,12 @@ async fn test_cross_edge_udp_channel_whisper_arrives_as_shout_context() -> Resul
 }
 
 #[tokio::test]
-async fn test_cross_edge_whisper_prefers_shout_when_direct_and_channel_targets_overlap() -> Result<()> {
+async fn test_cross_edge_whisper_prefers_shout_when_direct_and_channel_targets_overlap()
+-> Result<()> {
     let env = standard_env().await?;
     let clients = create_clients(
         &env,
-        &[
-            ClientConfig::new("user1", 1),
-            ClientConfig::new("user2", 2),
-        ],
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 2)],
     )
     .await?;
     let (sender, target) = (&clients[0], &clients[1]);

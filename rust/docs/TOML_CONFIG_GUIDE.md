@@ -192,7 +192,7 @@ Rust 版本有意简化配置选项，主要原因：
 
 以下功能已在 Rust 版本中实现（但与 TypeScript 实现方式不同）：
 
-- **Web API** - 已实现 `/api/status`、`/api/edges`、`/api/stats`、`/api/topology`、`/api/health` 端点
+- **Web API** - 已实现 `/api/status`、`/api/stats`、`/api/sessions`、`/api/peers`、`/api/topology`、`/api/topology/matrix`、`/api/diagnostics/peer-quality`、`/api/health` 端点
 - **Blob 存储** - 已实现，直接内嵌于 SQLite 数据库（使用 SHA-256 内容寻址）
 
 ## 配置最佳实践
@@ -289,11 +289,13 @@ host = "0.0.0.0"                 # 监听地址
 port = 8080                      # 监听端口
 # 启用后可访问：
 # GET /api/health  — 健康探针
-# GET /api/status  — Hub 状态
-# GET /api/stats   — Hub 统计数据
-# GET /api/edges   — Edge 列表
-# GET /api/topology — 网络拓扑
-# GET /metrics     — Prometheus metrics（文本格式）
+# GET /api/status  — Edge 运行状态和身份信息
+# GET /api/stats   — 本地客户端/频道/路由统计
+# GET /api/sessions — 本地和远端会话统一视图
+# GET /api/peers   — 已知对端 Edge 与路由/质量摘要
+# GET /api/topology — 本地拓扑图（节点和链路）
+# GET /api/topology/matrix — 本地拓扑矩阵视图
+# GET /api/diagnostics/peer-quality — 原始本地 UDP 探测质量快照
 
 log_level = "info"
 ```

@@ -46,11 +46,7 @@ fn local_session_can_receive(session_id: u32) -> Option<&'static crate::hot_slot
 }
 
 #[inline]
-fn remote_user_can_receive(
-    remote_user: &RemoteUser,
-    sender_session: u32,
-    my_edge_id: u32,
-) -> bool {
+fn remote_user_can_receive(remote_user: &RemoteUser, sender_session: u32, my_edge_id: u32) -> bool {
     remote_user.session_id != sender_session
         && remote_user.edge_id != 0
         && remote_user.edge_id != my_edge_id
@@ -283,21 +279,23 @@ pub async fn compute_voice_targets(
                 sender_session,
                 my_edge_id,
                 |remote_user| {
-                    vt.resolved_channels.iter().any(|(&channel_id, group_filter)| {
-                        let in_target = remote_user.channel_id == channel_id
-                            || remote_user.listening_channels.contains(&channel_id);
-                        if !in_target {
-                            return false;
-                        }
+                    vt.resolved_channels
+                        .iter()
+                        .any(|(&channel_id, group_filter)| {
+                            let in_target = remote_user.channel_id == channel_id
+                                || remote_user.listening_channels.contains(&channel_id);
+                            if !in_target {
+                                return false;
+                            }
 
-                        match group_filter {
-                            None => true,
-                            Some(groups) => remote_user
-                                .groups
-                                .iter()
-                                .any(|group| groups.contains(group)),
-                        }
-                    })
+                            match group_filter {
+                                None => true,
+                                Some(groups) => remote_user
+                                    .groups
+                                    .iter()
+                                    .any(|group| groups.contains(group)),
+                            }
+                        })
                 },
             ));
         }
@@ -451,4 +449,3 @@ pub async fn compute_voice_targets(
         })
     }
 }
-

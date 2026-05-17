@@ -24,12 +24,7 @@ pub(crate) async fn connect(
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
     let (ws_stream, _) = time::timeout(CONNECT_TIMEOUT, connect_async(url))
         .await
-        .with_context(|| {
-            format!(
-                "{} timed out after {:?}",
-                connection_label, CONNECT_TIMEOUT
-            )
-        })?
+        .with_context(|| format!("{} timed out after {:?}", connection_label, CONNECT_TIMEOUT))?
         .with_context(|| format!("{} failed", connection_label))?;
     Ok(ws_stream)
 }

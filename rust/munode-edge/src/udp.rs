@@ -1,6 +1,5 @@
 use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 #[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
@@ -19,7 +18,7 @@ use munode_protocol::transport::EDGE_MAGIC;
 
 use crate::hot_slot::get_hot_slot;
 use crate::hub_client::HubClient;
-use crate::state::EdgeState;
+use crate::state::{EdgeState, PeerQualityState};
 
 // ── Edge-to-Edge packet type bytes (1-byte prefix on the dedicated edge socket) ─────────────────
 //
@@ -90,21 +89,6 @@ const PROBE_REPORT_INTERVAL_SECS: u64 = 30;
 /// Maximum number of RTT samples kept per peer for the rolling average.
 const MAX_RTT_SAMPLES: usize = 10;
 
-/// Per-edge quality tracking state.
-#[derive(Default)]
-struct PeerQualityState {
-    /// Pending ping sequences: seq → sent_ms
-    pending_pings: HashMap<u32, u64>,
-    /// Recent RTT samples (milliseconds); capped at MAX_RTT_SAMPLES
-    rtt_samples: VecDeque<f32>,
-    /// Total probes sent in current window
-    probes_sent: u32,
-    /// Pongs received in current window
-    pongs_received: u32,
-    /// Next sequence number to use
-    next_seq: u32,
-}
-
 /// UDP server for Mumble voice data with OCB2-AES128 encryption.
 ///
 /// Workflow:
@@ -170,6 +154,7 @@ impl UdpServer {
 
         let (client_tx, client_rx) = async_channel::bounded(65536);
         let (relay_tx, relay_rx) = async_channel::bounded(4096);
+        let peer_quality = Arc::clone(&edge_state.peer_quality);
 
         Ok(Self {
             socket,
@@ -178,7 +163,7 @@ impl UdpServer {
             session_to_addr: Arc::clone(&edge_state.udp_session_to_addr),
             edge_state,
             hub_client,
-            peer_quality: Arc::new(Mutex::new(HashMap::new())),
+            peer_quality,
             client_tx,
             client_rx,
             relay_tx,
@@ -242,6 +227,7 @@ impl UdpServer {
                                     entry.next_seq = entry.next_seq.wrapping_add(1);
                                     let s = entry.next_seq;
                                     entry.pending_pings.insert(s, now_ms);
+                                    entry.last_probe_sent_ms = Some(now_ms);
                                     s
                                 };
                                 let mut pkt = Vec::with_capacity(1 + 1 + 4 + 8);
@@ -256,6 +242,7 @@ impl UdpServer {
                             let my_edge_id = probe_state.get_edge_id();
                             if my_edge_id == 0 { continue; }
                             let entries: Vec<(u32, f32, f32)> = {
+                                let report_now_ms = probe_current_millis();
                                 let mut pq = probe_quality.lock().await;
                                 let result = pq.iter().map(|(&eid, pqs)| {
                                     let rtt = if pqs.rtt_samples.is_empty() { 0.0 } else {
@@ -267,6 +254,10 @@ impl UdpServer {
                                     (eid, rtt, loss.clamp(0.0, 1.0))
                                 }).collect();
                                 for pqs in pq.values_mut() {
+                                    pqs.last_report_ms = Some(report_now_ms);
+                                    pqs.last_report_average_rtt_ms = pqs.average_rtt_ms();
+                                    pqs.last_report_packet_loss = pqs.packet_loss();
+                                    pqs.last_report_jitter_ms = pqs.jitter_ms();
                                     pqs.probes_sent = 0;
                                     pqs.pongs_received = 0;
                                     pqs.pending_pings.clear();
@@ -1365,6 +1356,7 @@ impl UdpServer {
                         entry.rtt_samples.pop_front();
                     }
                     entry.pongs_received += 1;
+                    entry.last_pong_received_ms = Some(now_ms);
                 }
                 drop(pq);
                 // Successful pong resets consecutive failure counter for this peer

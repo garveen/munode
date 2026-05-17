@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
 use tokio::net::UdpSocket;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 
 use munode_protocol::hubedge::ServerLimitsConfig;
 
@@ -26,6 +26,115 @@ pub struct RemoteUserStateDelta {
     pub priority_speaker: Option<bool>,
     pub recording: Option<bool>,
     pub actor_session: Option<u32>,
+}
+
+/// Per-peer local quality tracking state used by UDP probe reporting.
+#[derive(Debug, Clone, Default)]
+pub struct PeerQualityState {
+    /// Pending ping sequences: seq → sent_ms.
+    pub pending_pings: HashMap<u32, u64>,
+    /// Recent RTT samples in milliseconds.
+    pub rtt_samples: VecDeque<f32>,
+    /// Probes sent since the current reporting window started.
+    pub probes_sent: u32,
+    /// Pongs received since the current reporting window started.
+    pub pongs_received: u32,
+    /// Next probe sequence number.
+    pub next_seq: u32,
+    /// Last time a probe was sent to this peer.
+    pub last_probe_sent_ms: Option<u64>,
+    /// Last time a pong was received from this peer.
+    pub last_pong_received_ms: Option<u64>,
+    /// Last time a quality report for this peer was flushed upstream.
+    pub last_report_ms: Option<u64>,
+    /// Most recent reported average RTT.
+    pub last_report_average_rtt_ms: Option<f32>,
+    /// Most recent reported packet loss.
+    pub last_report_packet_loss: Option<f32>,
+    /// Most recent reported jitter.
+    pub last_report_jitter_ms: Option<f32>,
+}
+
+impl PeerQualityState {
+    pub fn average_rtt_ms(&self) -> Option<f32> {
+        if self.rtt_samples.is_empty() {
+            None
+        } else {
+            Some(self.rtt_samples.iter().sum::<f32>() / self.rtt_samples.len() as f32)
+        }
+    }
+
+    pub fn packet_loss(&self) -> Option<f32> {
+        if self.probes_sent == 0 {
+            None
+        } else {
+            Some((1.0 - (self.pongs_received as f32 / self.probes_sent as f32)).clamp(0.0, 1.0))
+        }
+    }
+
+    pub fn jitter_ms(&self) -> Option<f32> {
+        if self.rtt_samples.len() < 2 {
+            return None;
+        }
+
+        let mut diffs = 0.0;
+        let mut count = 0usize;
+        let mut iter = self.rtt_samples.iter().copied();
+        let mut previous = match iter.next() {
+            Some(value) => value,
+            None => return None,
+        };
+
+        for current in iter {
+            diffs += (current - previous).abs();
+            count += 1;
+            previous = current;
+        }
+
+        (count > 0).then_some(diffs / count as f32)
+    }
+
+    pub fn snapshot(&self, edge_id: u32) -> PeerQualitySnapshot {
+        PeerQualitySnapshot {
+            edge_id,
+            average_rtt_ms: self.average_rtt_ms(),
+            packet_loss: self.packet_loss(),
+            jitter_ms: self.jitter_ms(),
+            rtt_samples_ms: self.rtt_samples.iter().copied().collect(),
+            sample_count: self.rtt_samples.len(),
+            probes_sent: self.probes_sent,
+            pongs_received: self.pongs_received,
+            pending_ping_count: self.pending_pings.len(),
+            next_seq: self.next_seq,
+            last_probe_sent_ms: self.last_probe_sent_ms,
+            last_pong_received_ms: self.last_pong_received_ms,
+            last_report_ms: self.last_report_ms,
+            last_report_average_rtt_ms: self.last_report_average_rtt_ms,
+            last_report_packet_loss: self.last_report_packet_loss,
+            last_report_jitter_ms: self.last_report_jitter_ms,
+        }
+    }
+}
+
+/// Public snapshot of the locally held peer quality state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PeerQualitySnapshot {
+    pub edge_id: u32,
+    pub average_rtt_ms: Option<f32>,
+    pub packet_loss: Option<f32>,
+    pub jitter_ms: Option<f32>,
+    pub rtt_samples_ms: Vec<f32>,
+    pub sample_count: usize,
+    pub probes_sent: u32,
+    pub pongs_received: u32,
+    pub pending_ping_count: usize,
+    pub next_seq: u32,
+    pub last_probe_sent_ms: Option<u64>,
+    pub last_pong_received_ms: Option<u64>,
+    pub last_report_ms: Option<u64>,
+    pub last_report_average_rtt_ms: Option<f32>,
+    pub last_report_packet_loss: Option<f32>,
+    pub last_report_jitter_ms: Option<f32>,
 }
 
 /// Events broadcast within the Edge server.
@@ -231,6 +340,9 @@ pub struct EdgeState {
     /// Percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
     /// Zero in production; set by `test-utils` feature tests to simulate link degradation.
     pub test_udp_drop_rate: AtomicU32,
+    /// Locally held UDP probe quality state keyed by peer edge ID.
+    /// Shared between `udp.rs` and the Web API for local observability.
+    pub peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
     /// Whether this Edge is currently accepting new Mumble client connections.
     /// Set to `false` when Hub becomes unreachable for too long; restored to `true`
     /// when Hub reconnects and registration completes.
@@ -335,6 +447,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            peer_quality: Arc::new(Mutex::new(HashMap::new())),
             accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
             used_session_ids: RwLock::new(HashSet::new()),
@@ -384,6 +497,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            peer_quality: Arc::new(Mutex::new(HashMap::new())),
             accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
             used_session_ids: RwLock::new(HashSet::new()),
@@ -439,6 +553,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            peer_quality: Arc::new(Mutex::new(HashMap::new())),
             accepting_connections: AtomicBool::new(true),
             edge_crypto,
             used_session_ids: RwLock::new(HashSet::new()),
@@ -483,6 +598,17 @@ impl EdgeState {
     /// Publish the client-facing UDP socket for shared local voice delivery.
     pub fn set_client_udp_socket(&self, socket: Arc<UdpSocket>) {
         self.client_udp_socket.store(Arc::new(Some(socket)));
+    }
+
+    /// Snapshot the locally held UDP probe quality state for Web API consumers.
+    pub async fn peer_quality_snapshots(&self) -> Vec<PeerQualitySnapshot> {
+        let quality = self.peer_quality.lock().await;
+        let mut snapshots: Vec<_> = quality
+            .iter()
+            .map(|(&edge_id, state)| state.snapshot(edge_id))
+            .collect();
+        snapshots.sort_by_key(|snapshot| snapshot.edge_id);
+        snapshots
     }
 
     /// Get a receiver for edge events.

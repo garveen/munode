@@ -228,11 +228,13 @@ impl EdgeServer {
             let web_api_port = self.config.web_api.port;
             let web_api_token = self.config.web_api.api_token.clone();
             let web_api_state = edge_state.clone();
+            let web_api_metadata = crate::web_api::WebApiMetadata::from_config(&self.config);
             tokio::spawn(async move {
                 if let Err(e) = crate::web_api::run_web_api(
                     &web_api_host,
                     web_api_port,
                     web_api_state,
+                    web_api_metadata,
                     web_api_token,
                 )
                 .await
