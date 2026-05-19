@@ -14,6 +14,7 @@ const PACKET_LOSS_PENALTY_MS: f64 = 500.0;
 /// This keeps freshly-joined clusters routable before the probe loop populates
 /// directional RTT/loss data.
 const DEFAULT_CONNECTED_PEER_COST_MS: f64 = 100.0;
+const DEFAULT_DIRECT_TCP_COST_MS: f32 = 200.0;
 
 /// Info about a connected Edge in the cluster topology.
 #[derive(Debug, Clone)]
@@ -439,6 +440,7 @@ impl TopologyManager {
             // (can happen when a relay chain is too long and falls back to HubTcp
             // inside the match arm below).
             let mut hub_tcp_emitted = false;
+            let direct_tcp_cost = self.direct_tcp_cost(for_edge_id, target_id, config);
 
             match path.len() {
                 0 | 1 => {
@@ -459,11 +461,9 @@ impl TopologyManager {
                     let relay_chain: Vec<u32> = path[1..path.len() - 1].to_vec();
                     let hop_count = relay_chain.len();
                     if hop_count > config.max_relay_hops {
-                        // Too many hops — fall back to Hub TCP.
-                        // Use a fixed representative cost (Hub round-trip ≈ 150ms) rather than
-                        // the relay path cost, which would be misleadingly high for long chains.
-                        const HUB_TCP_REPRESENTATIVE_COST: f32 = 150.0;
-                        result.push((target_id, 2, vec![], HUB_TCP_REPRESENTATIVE_COST));
+                        // Too many hops — fall back to Hub TCP. Model Hub relay as a
+                        // last-resort path that is always more expensive than DirectTcp.
+                        result.push((target_id, 2, vec![], self.hub_tcp_cost(direct_tcp_cost, config)));
                         hub_tcp_emitted = true;
                     } else {
                         let cost = self.path_cost(&path, config) as f32;
@@ -473,21 +473,31 @@ impl TopologyManager {
             }
 
             // DirectTcp candidate: always add so the Edge can choose TCP when UDP is degraded.
-            let tcp_cost = self
-                .link_quality
-                .get(&(for_edge_id, target_id))
-                .map(|q| (q.rtt_ms * 1.5 + config.edge_tcp_penalty_ms) as f32)
-                .unwrap_or(200.0);
-            result.push((target_id, 3, vec![], tcp_cost));
+            result.push((target_id, 3, vec![], direct_tcp_cost));
 
             // HubTcp fallback: always present as last resort — but only if not already emitted
             // above (which happens when a relay chain exceeds max_relay_hops).
             if !hub_tcp_emitted {
-                const HUB_TCP_COST: f32 = 150.0;
-                result.push((target_id, 2, vec![], HUB_TCP_COST));
+                result.push((target_id, 2, vec![], self.hub_tcp_cost(direct_tcp_cost, config)));
             }
         }
         result
+    }
+
+    fn direct_tcp_cost(
+        &self,
+        for_edge_id: u32,
+        target_id: u32,
+        config: &HubVoiceRoutingConfig,
+    ) -> f32 {
+        self.link_quality
+            .get(&(for_edge_id, target_id))
+            .map(|q| (q.rtt_ms * 1.5 + config.edge_tcp_penalty_ms) as f32)
+            .unwrap_or(DEFAULT_DIRECT_TCP_COST_MS)
+    }
+
+    fn hub_tcp_cost(&self, direct_tcp_cost: f32, config: &HubVoiceRoutingConfig) -> f32 {
+        direct_tcp_cost + config.hub_tcp_penalty_ms as f32
     }
 
     /// Compute the source-rooted dissemination plan for one Edge.

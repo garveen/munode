@@ -582,7 +582,7 @@ impl HubClient {
                             name, peer_edge_id, host, voice_port
                         );
                         if !host.is_empty() && voice_port > 0 {
-                            if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
+                            if let Some(udp_addr) = super::resolve_peer_udp_addr(host, voice_port).await {
                                 // Detect address change for an already-managed peer.
                                 // If the peer restarted at a new host/port while the Hub was down,
                                 // the running slot loops still hold the stale address — we must
@@ -638,6 +638,13 @@ impl HubClient {
                                 info!(
                                     "Registered direct UDP route to peer edge {} at {}",
                                     peer_edge_id, udp_addr
+                                );
+                            } else {
+                                warn!(
+                                    peer_edge_id,
+                                    host = %host,
+                                    voice_port,
+                                    "Skipping direct UDP registration for peerJoined: address resolution failed"
                                 );
                             }
                             // Connect TCP voice pool to the new peer, but only if a pool

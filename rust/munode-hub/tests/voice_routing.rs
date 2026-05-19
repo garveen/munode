@@ -372,6 +372,35 @@ fn route_table_always_includes_direct_tcp_candidate() {
     );
 }
 
+/// HubTcp must remain more expensive than DirectTcp for the same target so the
+/// Edge only prefers hub relay as a last resort after sorting by cost.
+#[test]
+fn hub_tcp_cost_sorts_after_direct_tcp() {
+    let mut topo = TopologyManager::new();
+    topo.add_edge(make_edge(1));
+    topo.add_edge(make_edge(2));
+    topo.report_quality(1, 2, make_quality(100.0, 0.0));
+
+    let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
+    let direct_tcp_cost = routes
+        .iter()
+        .find_map(|(target, route_type, _, cost)| {
+            (*target == 2 && *route_type == 3).then_some(*cost)
+        })
+        .expect("missing DirectTcp candidate");
+    let hub_tcp_cost = routes
+        .iter()
+        .find_map(|(target, route_type, _, cost)| {
+            (*target == 2 && *route_type == 2).then_some(*cost)
+        })
+        .expect("missing HubTcp candidate");
+
+    assert!(
+        hub_tcp_cost > direct_tcp_cost,
+        "HubTcp must stay behind DirectTcp in cost ordering; got direct_tcp={direct_tcp_cost}, hub_tcp={hub_tcp_cost}, routes={routes:?}"
+    );
+}
+
 /// When a direct link is available with acceptable quality, the table must contain
 /// a `DirectUdp` candidate (type 0) for that target.
 #[test]

@@ -624,6 +624,11 @@ pub struct HubVoiceRoutingConfig {
     /// Penalty (ms) for using Edge-to-Edge TCP vs UDP (accounts for connection overhead).
     #[serde(default = "default_edge_tcp_penalty_ms")]
     pub edge_tcp_penalty_ms: f64,
+    /// Extra penalty (ms) for using HubTcp instead of DirectTcp.
+    /// Hub relay is the last-resort path, so it should sort behind DirectTcp for
+    /// the same destination even when route candidates are ordered purely by cost.
+    #[serde(default = "default_hub_tcp_penalty_ms")]
+    pub hub_tcp_penalty_ms: f64,
     /// Cluster-wide TTL cap for relay packets pushed to every Edge in `routeTableUpdate`.
     /// Edges clamp relay-packet TTL to this value.  Default 4.
     #[serde(default = "default_max_ttl")]
@@ -648,6 +653,7 @@ impl Default for HubVoiceRoutingConfig {
             relay_hop_penalty_ms: default_relay_hop_penalty_ms(),
             max_relay_hops: default_max_relay_hops(),
             edge_tcp_penalty_ms: default_edge_tcp_penalty_ms(),
+            hub_tcp_penalty_ms: default_hub_tcp_penalty_ms(),
             max_ttl: default_max_ttl(),
         }
     }
@@ -1128,6 +1134,9 @@ fn default_max_relay_hops() -> usize {
 }
 fn default_edge_tcp_penalty_ms() -> f64 {
     20.0
+}
+fn default_hub_tcp_penalty_ms() -> f64 {
+    50.0
 }
 fn default_max_ttl() -> u32 {
     4

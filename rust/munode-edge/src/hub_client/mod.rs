@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -109,6 +110,27 @@ const NOTIFICATION_GAP_TIMEOUT: Duration = Duration::from_secs(10);
 /// are considered truly gone and `HubReconcileDisappeared` is emitted.
 const HUB_RESTART_GRACE_SECS: u64 = 10;
 const HUB_RESTART_GRACE_DURATION: Duration = Duration::from_secs(HUB_RESTART_GRACE_SECS);
+
+pub(super) async fn resolve_peer_udp_addr(host: &str, voice_port: u16) -> Option<SocketAddr> {
+    if host.is_empty() || voice_port == 0 {
+        return None;
+    }
+
+    match tokio::net::lookup_host((host, voice_port)).await {
+        Ok(addrs) => {
+            let resolved: Vec<SocketAddr> = addrs.collect();
+            resolved
+                .iter()
+                .copied()
+                .find(SocketAddr::is_ipv4)
+                .or_else(|| resolved.first().copied())
+        }
+        Err(error) => {
+            warn!(host, voice_port, %error, "Failed to resolve peer UDP address");
+            None
+        }
+    }
+}
 
 /// Maximum size of the [`HubClient::pending_notifications`] FIFO queue.
 ///
@@ -2011,7 +2033,9 @@ impl HubClient {
             );
             // Register each existing peer's UDP address
             if !peer.host.is_empty() && peer.voice_port > 0 {
-                if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
+                if let Some(udp_addr) =
+                    resolve_peer_udp_addr(&peer.host, peer.voice_port as u16).await
+                {
                     {
                         let current = self.edge_state.peer_registry.load_full();
                         let mut new_reg = (*current).clone();
@@ -2028,6 +2052,13 @@ impl HubClient {
                     info!(
                         "Registered direct UDP route to existing peer edge {} at {}",
                         peer.id, udp_addr
+                    );
+                } else {
+                    warn!(
+                        peer_edge_id = peer.id,
+                        host = %peer.host,
+                        voice_port = peer.voice_port,
+                        "Skipping direct UDP registration for existing peer: address resolution failed"
                     );
                 }
                 // Connect TCP voice pool to the existing peer, dedup via voice_tcp_peers.
@@ -2271,5 +2302,17 @@ impl HubClient {
             }
             debug!("Heartbeat sent (seq={})", sequence);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn resolve_peer_udp_addr_accepts_hostname() {
+        let addr = super::resolve_peer_udp_addr("localhost", 64739)
+            .await
+            .expect("localhost should resolve");
+
+        assert_eq!(addr.port(), 64739);
     }
 }
