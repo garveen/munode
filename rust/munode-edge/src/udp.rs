@@ -45,14 +45,17 @@ use crate::state::{EdgeState, PeerQualityState};
 //   delivers locally, then forwards according to the Hub-pushed per-source slice.
 //
 //   Quality probe (ping / pong):
-//     [0x03][subtype(1B): 0=ping 1=pong][seq BE(4B)][sent_ms BE(8B)]
-//     Total: 14 bytes
+//     [0x03][subtype(1B): 0=ping 1=pong][seq BE(4B)][sent_ms BE(8B)][padding...]
+//     Minimum: 14 bytes
 //
 //   Encrypted base logical voice frame (ChaCha20-Poly1305, requires hmac_secret):
 //     [0x11][counter:be64][ChaCha20enc(logical_voice_frame) + Poly1305tag(16B)]
 //
 //   Encrypted extended logical voice frame:
 //     [0x12][counter:be64][ChaCha20enc(logical_voice_frame) + Poly1305tag(16B)]
+
+//   Encrypted quality probe:
+//     [0x13][counter:be64][ChaCha20enc(probe_payload) + Poly1305tag(16B)]
 //
 //   The sender edge ID is inferred from the ingress peer address and reused as the
 //   AEAD nonce prefix (`sender_edge_id ++ counter`), so the physical UDP packet no
@@ -73,8 +76,12 @@ const EDGE_PKT_PROBE: u8 = 0x03;
 const EDGE_PKT_ENC_VOICE: u8 = 0x11;
 /// Packet type: encrypted relay-forward voice (routing headers in plaintext).
 const EDGE_PKT_ENC_RELAY: u8 = 0x12;
+/// Packet type: encrypted quality probe (ChaCha20-Poly1305).
+const EDGE_PKT_ENC_PROBE: u8 = 0x13;
 /// Overhead of the Poly1305 authentication tag appended to every encrypted payload.
 const AEAD_TAG_LEN: usize = 16;
+/// Probe payload padding so link probes exercise a packet size closer to real voice traffic.
+const MEDIA_LIKE_PROBE_PADDING_BYTES: usize = 160;
 
 /// UDP server for Mumble voice data with OCB2-AES128 encryption.
 ///
@@ -214,14 +221,26 @@ impl UdpServer {
                             let sample_window_size = probe_state.peer_quality_sample_window_size();
                             {
                                 let mut pq = probe_quality.lock().await;
-                                for state in pq.values_mut() {
-                                    state.expire_stale_pings(now_ms, timeout_ms, sample_window_size);
+                                for (&peer_id, state) in pq.iter_mut() {
+                                    let expired = state.expire_stale_pings(
+                                        now_ms,
+                                        timeout_ms,
+                                        sample_window_size,
+                                    );
+                                    if expired > 0 {
+                                        increment_hop_failure_by(
+                                            &probe_state.next_hop_failures,
+                                            peer_id,
+                                            expired as u32,
+                                        );
+                                    }
                                 }
                             }
 
                             let peers = {
                                 probe_state.peer_registry.load().all_udp_peers()
                             };
+                            let padding = [0u8; MEDIA_LIKE_PROBE_PADDING_BYTES];
                             for (peer_id, peer_addr) in peers {
                                 let seq = {
                                     let mut pq = probe_quality.lock().await;
@@ -232,12 +251,16 @@ impl UdpServer {
                                     entry.last_probe_sent_ms = Some(now_ms);
                                     s
                                 };
-                                let mut pkt = Vec::with_capacity(1 + 1 + 4 + 8);
-                                pkt.push(EDGE_PKT_PROBE);
-                                pkt.push(0); // subtype=ping
-                                pkt.extend_from_slice(&seq.to_be_bytes());
-                                pkt.extend_from_slice(&now_ms.to_be_bytes());
-                                let _ = probe_udp.send_to(&pkt, peer_addr).await;
+                                if let Some(pkt) = build_probe_datagram(
+                                    &probe_state,
+                                    0,
+                                    seq,
+                                    now_ms,
+                                    &padding,
+                                    probe_state.edge_crypto.is_some(),
+                                ) {
+                                    let _ = probe_udp.send_to(&pkt, peer_addr).await;
+                                }
                             }
                         }
                         _ = report_interval.tick() => {
@@ -248,19 +271,49 @@ impl UdpServer {
                                 let timeout_ms = probe_state.peer_quality_probe_timeout_ms();
                                 let sample_window_size = probe_state.peer_quality_sample_window_size();
                                 let mut pq = probe_quality.lock().await;
-                                let result = pq.iter_mut().map(|(&eid, pqs)| {
-                                    pqs.expire_stale_pings(report_now_ms, timeout_ms, sample_window_size);
+                                let result = pq.iter_mut().filter_map(|(&eid, pqs)| {
+                                    let expired = pqs.expire_stale_pings(
+                                        report_now_ms,
+                                        timeout_ms,
+                                        sample_window_size,
+                                    );
+                                    if expired > 0 {
+                                        increment_hop_failure_by(
+                                            &probe_state.next_hop_failures,
+                                            eid,
+                                            expired as u32,
+                                        );
+                                    }
+
+                                    let average_rtt_ms = pqs
+                                        .average_rtt_ms()
+                                        .or(pqs.last_report_average_rtt_ms);
+                                    let packet_loss = pqs
+                                        .packet_loss()
+                                        .or(pqs.last_report_packet_loss);
+                                    let jitter_ms = pqs
+                                        .jitter_ms()
+                                        .or(pqs.last_report_jitter_ms)
+                                        .or(Some(0.0));
+
+                                    let (average_rtt_ms, packet_loss) =
+                                        match (average_rtt_ms, packet_loss) {
+                                            (Some(rtt), Some(loss)) => (rtt, loss),
+                                            _ => return None,
+                                        };
+
                                     pqs.last_report_ms = Some(report_now_ms);
-                                    pqs.last_report_average_rtt_ms = pqs.average_rtt_ms();
-                                    pqs.last_report_packet_loss = pqs.packet_loss();
-                                    pqs.last_report_jitter_ms = pqs.jitter_ms();
-                                    (
+                                    pqs.last_report_average_rtt_ms = Some(average_rtt_ms);
+                                    pqs.last_report_packet_loss = Some(packet_loss);
+                                    pqs.last_report_jitter_ms = jitter_ms;
+
+                                    Some((
                                         eid,
-                                        pqs.average_rtt_ms().unwrap_or(0.0),
-                                        pqs.packet_loss().unwrap_or(0.0),
-                                        pqs.jitter_ms().unwrap_or(0.0),
+                                        average_rtt_ms,
+                                        packet_loss,
+                                        jitter_ms.unwrap_or(0.0),
                                         pqs.sample_count() as u32,
-                                    )
+                                    ))
                                 }).collect();
                                 result
                             };
@@ -334,16 +387,19 @@ impl UdpServer {
                             EDGE_PKT_RELAY if len >= 6 => {
                                 let _ = self.relay_tx.send((EDGE_PKT_RELAY, data.slice(1..), peer_addr)).await;
                             }
-                            // Quality probe: [0x03][subtype(1)][seq_BE(4)][ts_BE(8)]
-                            // Probes are tiny and latency-sensitive; handle inline in recv loop.
+                            // Quality probe: [0x03][subtype(1)][seq_BE(4)][ts_BE(8)][padding...]
+                            // Probes are latency-sensitive; handle inline in recv loop.
                             EDGE_PKT_PROBE if len >= 14 => {
-                                self.handle_probe_packet(&data[1..], peer_addr).await;
+                                self.handle_probe_packet(&data[1..], peer_addr, false).await;
                             }
                             EDGE_PKT_ENC_VOICE if len >= 29 => {
                                 let _ = self.relay_tx.send((EDGE_PKT_ENC_VOICE, data.slice(1..), peer_addr)).await;
                             }
                             EDGE_PKT_ENC_RELAY if len >= 30 => {
                                 let _ = self.relay_tx.send((EDGE_PKT_ENC_RELAY, data.slice(1..), peer_addr)).await;
+                            }
+                            EDGE_PKT_ENC_PROBE if len >= 38 => {
+                                self.handle_encrypted_probe_packet(&data[1..], peer_addr).await;
                             }
                             _ => {
                                 debug!("Unknown edge packet type 0x{:02X} from {} ({} bytes)",
@@ -490,13 +546,17 @@ impl UdpServer {
                     self.handle_relay_packet(&data[3..], peer_addr).await
                 }
                 EDGE_PKT_PROBE if data.len() >= 16 => {
-                    self.handle_probe_packet(&data[3..], peer_addr).await
+                    self.handle_probe_packet(&data[3..], peer_addr, false).await
                 }
                 EDGE_PKT_ENC_VOICE if data.len() >= 31 => {
                     self.handle_enc_voice_packet(&data[3..], peer_addr).await
                 }
                 EDGE_PKT_ENC_RELAY if data.len() >= 32 => {
                     self.handle_enc_relay_packet(&data[3..], peer_addr).await
+                }
+                EDGE_PKT_ENC_PROBE if data.len() >= 40 => {
+                    self.handle_encrypted_probe_packet(&data[3..], peer_addr)
+                        .await
                 }
                 _ => debug!(
                     "Unknown shared-socket edge packet type 0x{:02X} from {} ({} bytes)",
@@ -874,6 +934,40 @@ impl UdpServer {
         self.handle_encrypted_logical_frame(data, peer_addr).await;
     }
 
+    async fn handle_encrypted_probe_packet(&self, data: &[u8], peer_addr: SocketAddr) {
+        let crypto = match &self.edge_state.edge_crypto {
+            Some(crypto) => crypto,
+            None => {
+                debug!("Received encrypted cluster probe but no edge_crypto configured");
+                return;
+            }
+        };
+        if data.len() < 8 + 13 + AEAD_TAG_LEN {
+            return;
+        }
+
+        let Some(sender_edge_id) = self.edge_state.peer_registry.load().find_by_addr(peer_addr)
+        else {
+            debug!("Encrypted cluster probe from unknown peer {}", peer_addr);
+            return;
+        };
+
+        let counter = u64::from_be_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ]);
+        let ciphertext = &data[8..];
+        match crypto.decrypt(sender_edge_id, counter, ciphertext, &[]) {
+            Some(plain) => {
+                self.handle_probe_packet(plain.as_ref(), peer_addr, true)
+                    .await;
+            }
+            None => debug!(
+                "Encrypted cluster probe: AEAD authentication failed from edge {}",
+                sender_edge_id
+            ),
+        }
+    }
+
     async fn handle_relay_packet(&self, data: &[u8], peer_addr: SocketAddr) {
         self.handle_plain_logical_frame(data, peer_addr).await;
     }
@@ -939,8 +1033,9 @@ impl UdpServer {
     }
 
     /// Handle a UDP quality probe packet (ping or pong).
-    /// Probe format after stripping type byte: [subtype(1B): 0=ping 1=pong][seq_BE(4B)][sent_ms_BE(8B)]
-    async fn handle_probe_packet(&self, data: &[u8], from_addr: SocketAddr) {
+    /// Probe format after stripping type byte:
+    /// [subtype(1B): 0=ping 1=pong][seq_BE(4B)][sent_ms_BE(8B)][padding...]
+    async fn handle_probe_packet(&self, data: &[u8], from_addr: SocketAddr, encrypted: bool) {
         if data.len() < 13 {
             return;
         }
@@ -951,13 +1046,11 @@ impl UdpServer {
         ]);
 
         if ptype == 0 {
-            // Ping — echo back as pong using the new format
-            let mut pkt = Vec::with_capacity(1 + 1 + 4 + 8);
-            pkt.push(EDGE_PKT_PROBE);
-            pkt.push(1); // subtype=pong
-            pkt.extend_from_slice(&seq.to_be_bytes());
-            pkt.extend_from_slice(&sent_ms.to_be_bytes());
-            let _ = self.edge_socket.send_to(&pkt, from_addr).await;
+            if let Some(pkt) =
+                build_probe_datagram(&self.edge_state, 1, seq, sent_ms, &data[13..], encrypted)
+            {
+                let _ = self.edge_socket.send_to(&pkt, from_addr).await;
+            }
         } else if ptype == 1 {
             // Pong — update quality measurement
             let now_ms = probe_current_millis();
@@ -978,6 +1071,56 @@ impl UdpServer {
                 }
             }
         }
+    }
+}
+
+fn edge_packets_need_magic_prefix(state: &Arc<EdgeState>) -> bool {
+    let edge_socket = state.edge_udp_socket.load();
+    let client_socket = state.client_udp_socket.load();
+    match (&**edge_socket, &**client_socket) {
+        (Some(edge), Some(client)) => edge.local_addr().ok() == client.local_addr().ok(),
+        _ => false,
+    }
+}
+
+fn build_probe_datagram(
+    state: &Arc<EdgeState>,
+    subtype: u8,
+    seq: u32,
+    sent_ms: u64,
+    padding: &[u8],
+    encrypted: bool,
+) -> Option<Vec<u8>> {
+    let needs_magic_prefix = edge_packets_need_magic_prefix(state);
+    let mut payload = Vec::with_capacity(1 + 4 + 8 + padding.len());
+    payload.push(subtype);
+    payload.extend_from_slice(&seq.to_be_bytes());
+    payload.extend_from_slice(&sent_ms.to_be_bytes());
+    payload.extend_from_slice(padding);
+
+    if encrypted {
+        let crypto = state.edge_crypto.as_ref()?;
+        let (counter, ciphertext) = crypto.encrypt_owned(payload, state.get_edge_id(), &[]);
+        let mut packet = Vec::with_capacity(
+            EDGE_MAGIC.len() * usize::from(needs_magic_prefix) + 1 + 8 + ciphertext.len(),
+        );
+        if needs_magic_prefix {
+            packet.extend_from_slice(&EDGE_MAGIC);
+        }
+        packet.push(EDGE_PKT_ENC_PROBE);
+        packet.extend_from_slice(&counter.to_be_bytes());
+        packet.extend_from_slice(&ciphertext);
+        Some(packet)
+    } else {
+        let mut packet = Vec::with_capacity(
+            EDGE_MAGIC.len() * usize::from(needs_magic_prefix) + 1 + payload.len(),
+        );
+        if needs_magic_prefix {
+            packet.extend_from_slice(&EDGE_MAGIC);
+        }
+        packet.push(EDGE_PKT_PROBE);
+        packet.extend_from_slice(&payload);
+        Some(packet)
     }
 }
 
@@ -1155,12 +1298,23 @@ fn increment_hop_failure(
     failures: &std::sync::RwLock<std::collections::HashMap<u32, std::sync::atomic::AtomicU32>>,
     edge_id: u32,
 ) {
+    increment_hop_failure_by(failures, edge_id, 1);
+}
+
+fn increment_hop_failure_by(
+    failures: &std::sync::RwLock<std::collections::HashMap<u32, std::sync::atomic::AtomicU32>>,
+    edge_id: u32,
+    amount: u32,
+) {
     use std::sync::atomic::Ordering;
+    if amount == 0 {
+        return;
+    }
     // Fast path: key exists — just increment.
     {
         if let Ok(map) = failures.read() {
             if let Some(counter) = map.get(&edge_id) {
-                counter.fetch_add(1, Ordering::Relaxed);
+                counter.fetch_add(amount, Ordering::Relaxed);
                 return;
             }
         }
@@ -1169,7 +1323,7 @@ fn increment_hop_failure(
     if let Ok(mut map) = failures.write() {
         map.entry(edge_id)
             .or_insert_with(|| std::sync::atomic::AtomicU32::new(0))
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(amount, Ordering::Relaxed);
     }
 }
 

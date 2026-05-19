@@ -126,6 +126,8 @@ pub struct PeerQualityState {
     pub pending_pings: HashMap<u32, u64>,
     /// Completed rolling quality observations.
     pub samples: VecDeque<PeerQualitySample>,
+    /// Rolling RTT samples sourced only from successful probe pongs.
+    pub probe_rtt_samples: VecDeque<f32>,
     /// Next probe sequence number.
     pub next_seq: u32,
     /// Last accepted transport sequence from the direct peer voice stream.
@@ -156,7 +158,19 @@ impl PeerQualityState {
         }
     }
 
-    pub fn expire_stale_pings(&mut self, now_ms: u64, timeout_ms: u64, sample_window_size: usize) {
+    fn push_probe_rtt_sample(&mut self, rtt_ms: f32, sample_window_size: usize) {
+        self.probe_rtt_samples.push_back(rtt_ms);
+        while self.probe_rtt_samples.len() > sample_window_size.max(1) {
+            self.probe_rtt_samples.pop_front();
+        }
+    }
+
+    pub fn expire_stale_pings(
+        &mut self,
+        now_ms: u64,
+        timeout_ms: u64,
+        sample_window_size: usize,
+    ) -> usize {
         let stale: Vec<u32> = self
             .pending_pings
             .iter()
@@ -167,6 +181,8 @@ impl PeerQualityState {
                     .then_some(seq)
             })
             .collect();
+
+        let expired_count = stale.len();
 
         for seq in stale {
             self.pending_pings.remove(&seq);
@@ -180,6 +196,8 @@ impl PeerQualityState {
                 sample_window_size,
             );
         }
+
+        expired_count
     }
 
     pub fn record_probe_success(
@@ -202,6 +220,7 @@ impl PeerQualityState {
             },
             sample_window_size,
         );
+        self.push_probe_rtt_sample(rtt_ms, sample_window_size);
         self.last_pong_received_ms = Some(now_ms);
         true
     }
@@ -284,17 +303,11 @@ impl PeerQualityState {
     }
 
     pub fn rtt_sample_count(&self) -> usize {
-        self.samples
-            .iter()
-            .filter(|sample| sample.rtt_ms.is_some())
-            .count()
+        self.probe_rtt_samples.len()
     }
 
     pub fn rtt_samples_ms(&self) -> Vec<f32> {
-        self.samples
-            .iter()
-            .filter_map(|sample| sample.rtt_ms)
-            .collect()
+        self.probe_rtt_samples.iter().copied().collect()
     }
 
     pub fn average_rtt_ms(&self) -> Option<f32> {
@@ -1118,16 +1131,10 @@ impl EdgeState {
 
     /// Snapshot the locally held UDP probe quality state for Web API consumers.
     pub async fn peer_quality_snapshots(&self) -> Vec<PeerQualitySnapshot> {
-        let now_ms = peer_quality_current_millis();
-        let timeout_ms = self.peer_quality_probe_timeout_ms();
-        let sample_window_size = self.peer_quality_sample_window_size();
         let mut quality = self.peer_quality.lock().await;
         let mut snapshots: Vec<_> = quality
             .iter_mut()
-            .map(|(&edge_id, state)| {
-                state.expire_stale_pings(now_ms, timeout_ms, sample_window_size);
-                state.snapshot(edge_id)
-            })
+            .map(|(&edge_id, state)| state.snapshot(edge_id))
             .collect();
         snapshots.sort_by_key(|snapshot| snapshot.edge_id);
         snapshots
@@ -1268,13 +1275,6 @@ impl EdgeState {
     pub async fn session_id_count(&self) -> usize {
         self.used_session_ids.read().await.len()
     }
-}
-
-fn peer_quality_current_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 #[cfg(test)]
@@ -1422,6 +1422,22 @@ mod tests {
             .packet_loss()
             .expect("direct voice loss should be computed");
         assert!((loss - 0.4).abs() < 0.0001);
+    }
+
+    #[test]
+    fn peer_quality_state_keeps_probe_rtt_under_direct_voice_load() {
+        let mut quality = PeerQualityState::default();
+
+        quality.pending_pings.insert(1, 100);
+        assert!(quality.record_probe_success(1, 150, 30));
+
+        for seq in 200..240 {
+            quality.record_direct_voice_packet(seq, 30);
+        }
+
+        assert_eq!(quality.rtt_sample_count(), 1);
+        assert_eq!(quality.average_rtt_ms(), Some(50.0));
+        assert!(quality.direct_voice_sample_count() >= 30);
     }
 
     #[tokio::test]

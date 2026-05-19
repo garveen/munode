@@ -268,6 +268,36 @@ fn dispatch_udp_batch(state: &Arc<EdgeState>, next_hops: &[u32], frame: &Bytes) 
     unsent
 }
 
+fn split_locally_failed_next_hops(
+    state: &Arc<EdgeState>,
+    next_hops: &[u32],
+) -> (Vec<u32>, Vec<u32>) {
+    let threshold = state.consecutive_failure_threshold;
+    if threshold == 0 || next_hops.is_empty() {
+        return (next_hops.to_vec(), Vec::new());
+    }
+
+    let Ok(failures) = state.next_hop_failures.read() else {
+        return (next_hops.to_vec(), Vec::new());
+    };
+
+    let mut healthy = Vec::with_capacity(next_hops.len());
+    let mut locally_failed = Vec::new();
+    for &next_hop in next_hops {
+        let failure_count = failures
+            .get(&next_hop)
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .unwrap_or(0);
+        if failure_count >= threshold {
+            locally_failed.push(next_hop);
+        } else {
+            healthy.push(next_hop);
+        }
+    }
+
+    (healthy, locally_failed)
+}
+
 fn dispatch_peer_tcp(state: &Arc<EdgeState>, next_hop: u32, frame: &Bytes) -> bool {
     if state.test_network_faults.blocks_voice_tcp_to(next_hop) {
         return false;
@@ -360,9 +390,12 @@ async fn forward_logical_frame(
         .filter(|edge_id| Some(*edge_id) != ingress_peer)
         .collect();
 
-    let mut unresolved = dispatch_udp_batch(state, &next_hops, &frame);
+    let (healthy_next_hops, mut unresolved) = split_locally_failed_next_hops(state, &next_hops);
+    unresolved.extend(dispatch_udp_batch(state, &healthy_next_hops, &frame));
     if !duplicate_next_hops.is_empty() {
-        let _ = dispatch_udp_batch(state, &duplicate_next_hops, &frame);
+        let (healthy_duplicate_next_hops, _) =
+            split_locally_failed_next_hops(state, &duplicate_next_hops);
+        let _ = dispatch_udp_batch(state, &healthy_duplicate_next_hops, &frame);
     }
     let mut need_emergency_flood = false;
 
@@ -376,9 +409,18 @@ async fn forward_logical_frame(
                     .copied()
                     .filter(|edge_id| Some(*edge_id) != ingress_peer)
                     .collect();
-                !backup_next_hops.is_empty()
-                    && dispatch_udp_batch(state, &backup_next_hops, &frame).len()
-                        < backup_next_hops.len()
+                if backup_next_hops.is_empty() {
+                    return false;
+                }
+
+                let (healthy_backup_next_hops, mut backup_unresolved) =
+                    split_locally_failed_next_hops(state, &backup_next_hops);
+                backup_unresolved.extend(dispatch_udp_batch(
+                    state,
+                    &healthy_backup_next_hops,
+                    &frame,
+                ));
+                backup_unresolved.len() < backup_next_hops.len()
             })
             .unwrap_or(false);
         if backup_recovered {
@@ -459,7 +501,10 @@ async fn forward_emergency_flood(
         return;
     }
 
-    for next_hop in dispatch_udp_batch(state, &next_hops, &flood_frame) {
+    let (healthy_next_hops, mut unresolved) = split_locally_failed_next_hops(state, &next_hops);
+    unresolved.extend(dispatch_udp_batch(state, &healthy_next_hops, &flood_frame));
+
+    for next_hop in unresolved {
         if dispatch_peer_tcp(state, next_hop, &flood_frame) {
             continue;
         }
@@ -475,9 +520,12 @@ async fn forward_emergency_flood(
 mod tests {
     use super::{
         control_hop_budget, encode_base_logical_frame, encode_extended_logical_frame,
-        make_emergency_control, parse_logical_frame,
+        make_emergency_control, parse_logical_frame, split_locally_failed_next_hops,
     };
     use bytes::Bytes;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use crate::{channel_manager::ChannelManager, client::ClientManager, state::EdgeState};
 
     #[test]
     fn logical_voice_frame_roundtrips() {
@@ -500,6 +548,33 @@ mod tests {
         assert_eq!(
             &extended[parsed_extended.payload_offset..],
             payload.as_ref()
+        );
+    }
+
+    #[test]
+    fn prefilters_locally_failed_next_hops() {
+        let state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        {
+            let mut failures = state.next_hop_failures.write().unwrap();
+            failures.insert(7, AtomicU32::new(state.consecutive_failure_threshold));
+            failures.insert(
+                9,
+                AtomicU32::new(state.consecutive_failure_threshold.saturating_sub(1)),
+            );
+        }
+
+        let (healthy, failed) = split_locally_failed_next_hops(&state, &[5, 7, 9]);
+
+        assert_eq!(healthy, vec![5, 9]);
+        assert_eq!(failed, vec![7]);
+        assert_eq!(
+            state
+                .next_hop_failures
+                .read()
+                .unwrap()
+                .get(&7)
+                .map(|counter| counter.load(Ordering::Relaxed)),
+            Some(state.consecutive_failure_threshold)
         );
     }
 }
