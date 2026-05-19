@@ -1,6 +1,7 @@
 //! Edge Web API — HTTP REST endpoints for observing the local Edge runtime.
 //!
 //! Endpoints:
+//!   GET /api/endpoints            — List Edge Web API endpoints
 //!   GET /api/status               — Local Edge runtime status and identity
 //!   GET /api/stats                — Local client/channel/route statistics
 //!   GET /api/sessions             — Unified local + remote session view
@@ -76,6 +77,7 @@ impl WebApiMetadata {
 struct WebApiContext {
     edge_state: Arc<EdgeState>,
     metadata: WebApiMetadata,
+    api_token_required: bool,
     started_at: Instant,
 }
 
@@ -528,6 +530,149 @@ pub struct PeerQualityDiagnosticsResponse {
     pub timestamp: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApiAccessKind {
+    Public,
+    RequiresBearerToken,
+}
+
+impl ApiAccessKind {
+    fn describe(self, api_token_required: bool) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::RequiresBearerToken => {
+                if api_token_required {
+                    "bearer_token"
+                } else {
+                    "public"
+                }
+            }
+        }
+    }
+}
+
+macro_rules! for_each_edge_data_route {
+    ($apply:ident, $target:ident) => {{
+        $apply!(
+            $target,
+            "GET",
+            "/api/endpoints",
+            "List Edge Web API endpoints",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_endpoints)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/status",
+            "Local Edge runtime status and identity",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_status)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/stats",
+            "Local client, channel, and route statistics",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_stats)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/sessions",
+            "Unified local and remote session view",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_sessions)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/peers",
+            "Known peer Edges with route and quality summary",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_peers)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/topology",
+            "Local topology graph with inline quality summary",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_topology)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/topology/matrix",
+            "Matrix view of the local topology graph",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_topology_matrix)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/dissemination",
+            "Local source-rooted dissemination view",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_dissemination)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/voice_targets",
+            "Local cached voice-target configs and route cache",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_voice_targets)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/voice_targets/session/:id",
+            "Voice targets for one speaking session",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_voice_targets_by_session)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/diagnostics/peer-quality",
+            "Raw local UDP probe quality snapshots",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_peer_quality_diagnostics)
+        );
+    }};
+}
+
+macro_rules! for_each_edge_public_route {
+    ($apply:ident, $target:ident) => {{
+        $apply!(
+            $target,
+            "GET",
+            "/api/health",
+            "Liveness probe",
+            ApiAccessKind::Public,
+            get(handle_health)
+        );
+    }};
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApiEndpointInfo {
+    pub method: &'static str,
+    pub path: &'static str,
+    pub summary: &'static str,
+    pub access: &'static str,
+}
+
+#[derive(Serialize)]
+pub struct ApiEndpointListResponse {
+    pub service: &'static str,
+    pub total: usize,
+    pub endpoints: Vec<ApiEndpointInfo>,
+    pub timestamp: u64,
+}
+
 #[derive(Serialize)]
 pub struct HealthResponse {
     pub ok: bool,
@@ -548,6 +693,25 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn edge_api_endpoints(api_token_required: bool) -> Vec<ApiEndpointInfo> {
+    let mut endpoints = Vec::new();
+
+    macro_rules! push_endpoint {
+        ($endpoints:ident, $method:literal, $path:literal, $summary:literal, $access:expr, $handler:expr) => {
+            $endpoints.push(ApiEndpointInfo {
+                method: $method,
+                path: $path,
+                summary: $summary,
+                access: $access.describe(api_token_required),
+            });
+        };
+    }
+
+    for_each_edge_data_route!(push_endpoint, endpoints);
+    for_each_edge_public_route!(push_endpoint, endpoints);
+    endpoints
 }
 
 fn edge_route_kind(decision: &RouteDecision) -> EdgeRouteKind {
@@ -1194,6 +1358,17 @@ async fn handle_health() -> Json<HealthResponse> {
     })
 }
 
+async fn handle_endpoints(State(context): State<AppState>) -> Json<ApiEndpointListResponse> {
+    let endpoints = edge_api_endpoints(context.api_token_required);
+
+    Json(ApiEndpointListResponse {
+        service: "edge",
+        total: endpoints.len(),
+        endpoints,
+        timestamp: now_secs(),
+    })
+}
+
 async fn handle_sessions(State(context): State<AppState>) -> Json<SessionListResponse> {
     let local_all = context.edge_state.client_manager.get_all_clients().await;
     let remote_all = context
@@ -1401,23 +1576,29 @@ async fn handle_peer_quality_diagnostics(
 }
 
 fn data_routes() -> Router<AppState> {
-    Router::new()
-        .route("/api/status", get(handle_status))
-        .route("/api/stats", get(handle_stats))
-        .route("/api/sessions", get(handle_sessions))
-        .route("/api/peers", get(handle_peers))
-        .route("/api/topology", get(handle_topology))
-        .route("/api/topology/matrix", get(handle_topology_matrix))
-        .route("/api/dissemination", get(handle_dissemination))
-        .route("/api/voice_targets", get(handle_voice_targets))
-        .route(
-            "/api/voice_targets/session/:id",
-            get(handle_voice_targets_by_session),
-        )
-        .route(
-            "/api/diagnostics/peer-quality",
-            get(handle_peer_quality_diagnostics),
-        )
+    let mut router: Router<AppState> = Router::new();
+
+    macro_rules! add_route {
+        ($router:ident, $method:literal, $path:literal, $summary:literal, $access:expr, $handler:expr) => {
+            $router = $router.route($path, $handler);
+        };
+    }
+
+    for_each_edge_data_route!(add_route, router);
+    router
+}
+
+fn public_routes() -> Router<AppState> {
+    let mut router: Router<AppState> = Router::new();
+
+    macro_rules! add_route {
+        ($router:ident, $method:literal, $path:literal, $summary:literal, $access:expr, $handler:expr) => {
+            $router = $router.route($path, $handler);
+        };
+    }
+
+    for_each_edge_public_route!(add_route, router);
+    router
 }
 
 /// Build the axum router for the Edge Web API.
@@ -1429,9 +1610,10 @@ pub fn build_router(
     let app_state = Arc::new(WebApiContext {
         edge_state: state,
         metadata,
+        api_token_required: api_token.is_some(),
         started_at: Instant::now(),
     });
-    let router = data_routes().route("/api/health", get(handle_health));
+    let router = data_routes().merge(public_routes());
 
     if let Some(token) = api_token {
         let auth_state = Arc::new(token);
@@ -1441,7 +1623,7 @@ pub fn build_router(
                 require_bearer_token,
             ))
             .with_state(app_state.clone());
-        let public = Router::new().route("/api/health", get(handle_health));
+        let public = public_routes().with_state(app_state);
         return public.merge(protected);
     }
 
@@ -1522,7 +1704,7 @@ mod tests {
         ConnectivityState, DisseminationBranchBackupEntry, EdgeLinkType, EdgeRouteCandidateEntry,
         EdgeRouteKind, VoiceTargetChannelEntry, VoiceTargetResolvedChannelEntry,
         build_dissemination_entries, build_known_edge_entries, build_route_stats,
-        build_topology_matrix, build_voice_target_entries, edge_link_type,
+        build_topology_matrix, build_voice_target_entries, edge_api_endpoints, edge_link_type,
     };
     use crate::peer_registry::PeerEdgeInfo;
     use crate::state::{DisseminationSourceState, HopTransport, RouteCandidate, RouteDecision};
@@ -1840,5 +2022,28 @@ mod tests {
         assert_eq!(cached_route.direct_sessions, vec![4, 9]);
         assert_eq!(cached_route.channel_sessions, vec![11, 12]);
         assert_eq!(cached_route.relay_edge_ids, vec![6, 8]);
+    }
+
+    #[test]
+    fn edge_api_endpoints_toggle_access_with_token() {
+        let public = edge_api_endpoints(false);
+        let public_status = public
+            .iter()
+            .find(|endpoint| endpoint.method == "GET" && endpoint.path == "/api/status")
+            .expect("missing GET /api/status");
+        assert_eq!(public_status.access, "public");
+
+        let protected = edge_api_endpoints(true);
+        let protected_status = protected
+            .iter()
+            .find(|endpoint| endpoint.method == "GET" && endpoint.path == "/api/status")
+            .expect("missing GET /api/status");
+        assert_eq!(protected_status.access, "bearer_token");
+
+        let health = protected
+            .iter()
+            .find(|endpoint| endpoint.method == "GET" && endpoint.path == "/api/health")
+            .expect("missing GET /api/health");
+        assert_eq!(health.access, "public");
     }
 }

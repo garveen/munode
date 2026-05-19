@@ -463,7 +463,12 @@ impl TopologyManager {
                     if hop_count > config.max_relay_hops {
                         // Too many hops — fall back to Hub TCP. Model Hub relay as a
                         // last-resort path that is always more expensive than DirectTcp.
-                        result.push((target_id, 2, vec![], self.hub_tcp_cost(direct_tcp_cost, config)));
+                        result.push((
+                            target_id,
+                            2,
+                            vec![],
+                            self.hub_tcp_cost(direct_tcp_cost, config),
+                        ));
                         hub_tcp_emitted = true;
                     } else {
                         let cost = self.path_cost(&path, config) as f32;
@@ -478,7 +483,12 @@ impl TopologyManager {
             // HubTcp fallback: always present as last resort — but only if not already emitted
             // above (which happens when a relay chain exceeds max_relay_hops).
             if !hub_tcp_emitted {
-                result.push((target_id, 2, vec![], self.hub_tcp_cost(direct_tcp_cost, config)));
+                result.push((
+                    target_id,
+                    2,
+                    vec![],
+                    self.hub_tcp_cost(direct_tcp_cost, config),
+                ));
             }
         }
         result

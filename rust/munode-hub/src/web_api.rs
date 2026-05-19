@@ -1,6 +1,7 @@
 //! Hub Web API — HTTP REST endpoints for monitoring and management.
 //!
 //! Endpoints:
+//!   GET /api/endpoints                      — List Hub Web API endpoints
 //!   GET /api/status                         — Hub server status (uptime, version, …)
 //!   GET /api/edges                          — Connected Edge list with health summary
 //!   GET /api/edges/:id                      — Specific Edge details
@@ -272,6 +273,170 @@ pub struct HealthResponse {
     pub ok: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApiAccessKind {
+    Public,
+    RequiresApiKey,
+}
+
+impl ApiAccessKind {
+    fn describe(self, api_key_configured: bool) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::RequiresApiKey => {
+                if api_key_configured {
+                    "bearer_api_key"
+                } else {
+                    "disabled_without_api_key"
+                }
+            }
+        }
+    }
+}
+
+macro_rules! for_each_hub_route {
+    ($apply:ident, $target:ident) => {{
+        $apply!(
+            $target,
+            "GET",
+            "/api/endpoints",
+            "List Hub Web API endpoints",
+            ApiAccessKind::Public,
+            get(handle_endpoints)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/status",
+            "Hub server status",
+            ApiAccessKind::Public,
+            get(handle_status)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/edges",
+            "Connected Edge list with health summary",
+            ApiAccessKind::Public,
+            get(handle_edges)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/edges/:id",
+            "Specific Edge details",
+            ApiAccessKind::Public,
+            get(handle_edge_detail)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/stats",
+            "Hub statistics",
+            ApiAccessKind::Public,
+            get(handle_stats)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/topology",
+            "Network topology",
+            ApiAccessKind::Public,
+            get(handle_topology)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/dissemination",
+            "Authoritative per-Edge dissemination views",
+            ApiAccessKind::Public,
+            get(handle_dissemination)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/dissemination/edge/:id",
+            "Dissemination view for a specific Edge",
+            ApiAccessKind::Public,
+            get(handle_dissemination_by_edge)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/health",
+            "Liveness probe",
+            ApiAccessKind::Public,
+            get(handle_health)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/clients",
+            "All active client sessions",
+            ApiAccessKind::Public,
+            get(handle_clients)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/bans",
+            "List active ban records",
+            ApiAccessKind::Public,
+            get(handle_bans)
+        );
+        $apply!(
+            $target,
+            "DELETE",
+            "/api/bans/:id",
+            "Remove a ban record",
+            ApiAccessKind::RequiresApiKey,
+            delete(handle_unban)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/voice_targets",
+            "All voice targets in the cluster",
+            ApiAccessKind::Public,
+            get(handle_voice_targets)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/voice_targets/session/:id",
+            "Voice targets for a specific client session",
+            ApiAccessKind::Public,
+            get(handle_voice_targets_by_session)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/metrics",
+            "Prometheus metrics endpoint",
+            ApiAccessKind::Public,
+            get(handle_metrics)
+        );
+    }};
+}
+
+/// A single Hub Web API endpoint descriptor.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApiEndpointInfo {
+    pub method: &'static str,
+    pub path: &'static str,
+    pub summary: &'static str,
+    pub access: &'static str,
+}
+
+/// Response for the endpoint discovery endpoint.
+#[derive(Serialize)]
+pub struct ApiEndpointListResponse {
+    pub service: &'static str,
+    pub total: usize,
+    pub endpoints: Vec<ApiEndpointInfo>,
+    pub timestamp: u64,
+}
+
 /// A single ban record as returned by the Web API.
 #[derive(Serialize)]
 pub struct BanEntry {
@@ -309,6 +474,24 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn hub_api_endpoints(api_key_configured: bool) -> Vec<ApiEndpointInfo> {
+    let mut endpoints = Vec::new();
+
+    macro_rules! push_endpoint {
+        ($endpoints:ident, $method:literal, $path:literal, $summary:literal, $access:expr, $handler:expr) => {
+            $endpoints.push(ApiEndpointInfo {
+                method: $method,
+                path: $path,
+                summary: $summary,
+                access: $access.describe(api_key_configured),
+            });
+        };
+    }
+
+    for_each_hub_route!(push_endpoint, endpoints);
+    endpoints
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -542,6 +725,24 @@ async fn handle_dissemination_by_edge(
 
 async fn handle_health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
+}
+
+async fn handle_endpoints(State(state): State<AppState>) -> Json<ApiEndpointListResponse> {
+    let endpoints = hub_api_endpoints(
+        state
+            .config
+            .web_api
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.is_empty()),
+    );
+
+    Json(ApiEndpointListResponse {
+        service: "hub",
+        total: endpoints.len(),
+        endpoints,
+        timestamp: now_secs(),
+    })
 }
 
 /// `GET /api/clients` — return all active client sessions across all Edges.
@@ -887,27 +1088,17 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
 
 /// Build the axum router for the Web API.
 pub fn build_router(state: Arc<HubState>) -> Router {
-    Router::new()
-        .route("/api/status", get(handle_status))
-        .route("/api/edges", get(handle_edges))
-        .route("/api/edges/:id", get(handle_edge_detail))
-        .route("/api/stats", get(handle_stats))
-        .route("/api/topology", get(handle_topology))
-        .route("/api/dissemination", get(handle_dissemination))
-        .route(
-            "/api/dissemination/edge/:id",
-            get(handle_dissemination_by_edge),
-        )
-        .route("/api/health", get(handle_health))
-        .route("/api/clients", get(handle_clients))
-        .route("/api/bans", get(handle_bans))
-        .route("/api/bans/:id", delete(handle_unban))
-        .route("/api/voice_targets", get(handle_voice_targets))
-        .route(
-            "/api/voice_targets/session/:id",
-            get(handle_voice_targets_by_session),
-        )
-        .route("/metrics", get(handle_metrics))
+    let mut router = Router::new();
+
+    macro_rules! add_route {
+        ($router:ident, $method:literal, $path:literal, $summary:literal, $access:expr, $handler:expr) => {
+            $router = $router.route($path, $handler);
+        };
+    }
+
+    for_each_hub_route!(add_route, router);
+
+    router
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api_key_middleware,
@@ -932,4 +1123,42 @@ pub async fn run_web_api(host: &str, port: u16, state: Arc<HubState>) -> anyhow:
     axum::serve(listener, router)
         .await
         .map_err(|e| anyhow::anyhow!("Web API server error: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hub_api_endpoints;
+
+    #[test]
+    fn hub_api_endpoints_include_discovery_and_metrics_routes() {
+        let endpoints = hub_api_endpoints(false);
+
+        assert!(endpoints.iter().any(|endpoint| {
+            endpoint.method == "GET"
+                && endpoint.path == "/api/endpoints"
+                && endpoint.access == "public"
+        }));
+        assert!(endpoints.iter().any(|endpoint| {
+            endpoint.method == "GET"
+                && endpoint.path == "/metrics"
+                && endpoint.summary == "Prometheus metrics endpoint"
+        }));
+    }
+
+    #[test]
+    fn hub_api_endpoints_reflect_write_auth_mode() {
+        let protected = hub_api_endpoints(true);
+        let protected_delete = protected
+            .iter()
+            .find(|endpoint| endpoint.method == "DELETE" && endpoint.path == "/api/bans/:id")
+            .expect("missing DELETE /api/bans/:id");
+        assert_eq!(protected_delete.access, "bearer_api_key");
+
+        let disabled = hub_api_endpoints(false);
+        let disabled_delete = disabled
+            .iter()
+            .find(|endpoint| endpoint.method == "DELETE" && endpoint.path == "/api/bans/:id")
+            .expect("missing DELETE /api/bans/:id");
+        assert_eq!(disabled_delete.access, "disabled_without_api_key");
+    }
 }
