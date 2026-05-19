@@ -2381,6 +2381,33 @@ pub struct HubRouteTableUpdateParams {
     #[prost(uint32, optional, tag = "2")]
     pub max_ttl: ::core::option::Option<u32>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubDisseminationBackupProto {
+    #[prost(uint32, required, tag = "1")]
+    pub primary_child_edge_id: u32,
+    #[prost(uint32, repeated, packed = "false", tag = "2")]
+    pub backup_next_hops: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubSourceDisseminationProto {
+    #[prost(uint32, required, tag = "1")]
+    pub source_edge_id: u32,
+    #[prost(uint32, repeated, packed = "false", tag = "2")]
+    pub active_children: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, packed = "false", tag = "3")]
+    pub duplicate_children: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, repeated, tag = "4")]
+    pub branch_backups: ::prost::alloc::vec::Vec<HubDisseminationBackupProto>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubDisseminationUpdateParams {
+    #[prost(message, repeated, tag = "1")]
+    pub sources: ::prost::alloc::vec::Vec<HubSourceDisseminationProto>,
+    #[prost(uint64, optional, tag = "2")]
+    pub route_epoch: ::core::option::Option<u64>,
+    #[prost(uint32, optional, tag = "3")]
+    pub max_ttl: ::core::option::Option<u32>,
+}
 /// *
 /// TypedRPCNotification - 类型安全的 RPC 通知
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2450,6 +2477,8 @@ pub struct TypedRpcNotification {
     /// Hub → Edge: 热重载后将最新服务器限制配置推送给所有 Edge
     #[prost(message, optional, tag = "38")]
     pub server_config_update: ::core::option::Option<ServerLimitsConfig>,
+    #[prost(message, optional, tag = "39")]
+    pub dissemination_update: ::core::option::Option<HubDisseminationUpdateParams>,
     /// hub.contextAction — forward a Mumble ContextAction from an Edge
     #[prost(message, optional, tag = "35")]
     pub context_action: ::core::option::Option<EdgeContextActionParams>,

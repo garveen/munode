@@ -14,6 +14,83 @@ use crate::edge_crypto::EdgeCrypto;
 use crate::peer_registry::{PeerRegistry, PeerVoiceTcpPool};
 use crate::voice_target::{SessionWhisperRouteCache, VoiceTargetConfig, WhisperRouteCacheEntry};
 
+const TEST_EDGE_UDP_DROP_RATE_ENV: &str = "MUNODE_TEST_EDGE_UDP_DROP_RATE";
+const TEST_EDGE_UDP_BLOCK_PEERS_ENV: &str = "MUNODE_TEST_EDGE_UDP_BLOCK_PEERS";
+const TEST_EDGE_VOICE_TCP_BLOCK_PEERS_ENV: &str = "MUNODE_TEST_EDGE_VOICE_TCP_BLOCK_PEERS";
+
+#[derive(Debug, Clone, Default)]
+pub struct TestNetworkFaults {
+    udp_drop_rate: u32,
+    udp_block_peers: HashSet<u32>,
+    voice_tcp_block_peers: HashSet<u32>,
+}
+
+impl TestNetworkFaults {
+    pub fn from_env() -> Self {
+        Self {
+            udp_drop_rate: std::env::var(TEST_EDGE_UDP_DROP_RATE_ENV)
+                .ok()
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .unwrap_or(0)
+                .min(100),
+            udp_block_peers: parse_test_peer_set_env(TEST_EDGE_UDP_BLOCK_PEERS_ENV),
+            voice_tcp_block_peers: parse_test_peer_set_env(TEST_EDGE_VOICE_TCP_BLOCK_PEERS_ENV),
+        }
+    }
+
+    pub fn udp_drop_rate(&self) -> u32 {
+        self.udp_drop_rate
+    }
+
+    pub fn blocks_udp_to(&self, peer_edge_id: u32) -> bool {
+        self.udp_block_peers.contains(&peer_edge_id)
+    }
+
+    pub fn blocks_voice_tcp_to(&self, peer_edge_id: u32) -> bool {
+        self.voice_tcp_block_peers.contains(&peer_edge_id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.udp_drop_rate == 0
+            && self.udp_block_peers.is_empty()
+            && self.voice_tcp_block_peers.is_empty()
+    }
+
+    pub fn udp_block_peers(&self) -> Vec<u32> {
+        let mut peers: Vec<u32> = self.udp_block_peers.iter().copied().collect();
+        peers.sort_unstable();
+        peers
+    }
+
+    pub fn voice_tcp_block_peers(&self) -> Vec<u32> {
+        let mut peers: Vec<u32> = self.voice_tcp_block_peers.iter().copied().collect();
+        peers.sort_unstable();
+        peers
+    }
+}
+
+fn parse_test_peer_set_env(key: &str) -> HashSet<u32> {
+    std::env::var(key)
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+                .into_iter()
+        })
+        .filter_map(|token| {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                trimmed.parse::<u32>().ok().filter(|edge_id| *edge_id != 0)
+            }
+        })
+        .collect()
+}
+
 /// Delta of boolean state fields for a remote user state change.
 /// Only fields that actually changed carry `Some(value)`; unchanged fields are `None`.
 #[derive(Debug, Clone, Default)]
@@ -257,6 +334,138 @@ pub struct RouteCandidate {
     pub cost: f32,
 }
 
+/// Per-source dissemination view for the local Edge.
+#[derive(Debug, Clone, Default)]
+pub struct DisseminationSourceState {
+    /// Steady-state downstream children for this source.
+    pub active_children: Vec<u32>,
+    /// Children whose primary branch should also emit duplicate traffic through
+    /// one of the configured backups.
+    pub duplicate_children: Vec<u32>,
+    /// primary_child_edge_id -> backup next-hop edge IDs.
+    pub branch_backups: HashMap<u32, Vec<u32>>,
+}
+
+/// Default packet width of the per-source rolling dedupe window.
+pub const DEFAULT_DISSEMINATION_DEDUPE_WINDOW: u16 = 4096;
+
+/// Fixed-size rolling dedupe window keyed by a wrapping 16-bit sequence space.
+#[derive(Debug, Clone)]
+pub struct RollingDedupeWindow {
+    seq_hi: u16,
+    bits: Box<[u64]>,
+    window_size: u16,
+    initialized: bool,
+}
+
+impl RollingDedupeWindow {
+    pub fn new(window_size: u16) -> Self {
+        let words = ((window_size as usize) + 63) / 64;
+        Self {
+            seq_hi: 0,
+            bits: vec![0u64; words.max(1)].into_boxed_slice(),
+            window_size: window_size.max(64),
+            initialized: false,
+        }
+    }
+
+    #[inline]
+    fn mark_seen(&mut self, offset: u16) {
+        let idx = offset as usize;
+        let word = idx / 64;
+        let bit = idx % 64;
+        if let Some(slot) = self.bits.get_mut(word) {
+            *slot |= 1u64 << bit;
+        }
+    }
+
+    #[inline]
+    fn was_seen(&self, offset: u16) -> bool {
+        let idx = offset as usize;
+        let word = idx / 64;
+        let bit = idx % 64;
+        self.bits
+            .get(word)
+            .map(|slot| (slot & (1u64 << bit)) != 0)
+            .unwrap_or(false)
+    }
+
+    fn shift_left(&mut self, shift: usize) {
+        if shift == 0 {
+            return;
+        }
+        if shift >= self.window_size as usize {
+            for word in self.bits.iter_mut() {
+                *word = 0;
+            }
+            return;
+        }
+
+        let word_shift = shift / 64;
+        let bit_shift = shift % 64;
+        let len = self.bits.len();
+
+        if word_shift > 0 {
+            for i in (0..len).rev() {
+                self.bits[i] = if i >= word_shift {
+                    self.bits[i - word_shift]
+                } else {
+                    0
+                };
+            }
+        }
+
+        if bit_shift > 0 {
+            for i in (0..len).rev() {
+                let upper = self.bits[i] << bit_shift;
+                let carry = if i > 0 {
+                    self.bits[i - 1] >> (64 - bit_shift)
+                } else {
+                    0
+                };
+                self.bits[i] = upper | carry;
+            }
+        }
+
+        let total_bits = self.window_size as usize;
+        let spare = len * 64 - total_bits;
+        if spare > 0 {
+            let keep_mask = u64::MAX >> spare;
+            if let Some(last) = self.bits.last_mut() {
+                *last &= keep_mask;
+            }
+        }
+    }
+
+    /// Returns true only for the first accepted packet in the window.
+    pub fn accept(&mut self, seq: u16) -> bool {
+        if !self.initialized {
+            self.initialized = true;
+            self.seq_hi = seq;
+            self.mark_seen(0);
+            return true;
+        }
+
+        let ahead = seq.wrapping_sub(self.seq_hi);
+        if ahead != 0 && ahead < 0x8000 {
+            self.shift_left(ahead as usize);
+            self.seq_hi = seq;
+            self.mark_seen(0);
+            return true;
+        }
+
+        let behind = self.seq_hi.wrapping_sub(seq);
+        if behind >= self.window_size {
+            return false;
+        }
+        if self.was_seen(behind) {
+            return false;
+        }
+        self.mark_seen(behind);
+        true
+    }
+}
+
 /// Shared state accessible by all components of the Edge server.
 pub struct EdgeState {
     /// Our assigned edge ID (from Hub registration).
@@ -315,6 +524,15 @@ pub struct EdgeState {
     /// Route table from Hub. Maps target_edge_id → ordered list of route candidates (best first).
     /// Lock-free reads via ArcSwap; written atomically after full rebuild on routeTableUpdate.
     pub route_table: ArcSwap<std::collections::HashMap<u32, Vec<RouteCandidate>>>,
+    /// Per-source source-rooted dissemination view pushed by Hub.
+    /// Key = source_edge_id.
+    pub dissemination_routes: ArcSwap<std::collections::HashMap<u32, DisseminationSourceState>>,
+    /// Hub-pushed dissemination route epoch.
+    pub dissemination_route_epoch: AtomicU64,
+    /// Edge-global transport sequence allocator used by local source packets.
+    pub transport_packet_seq: AtomicU32,
+    /// Per-source rolling dedupe windows for source-rooted dissemination.
+    pub dissemination_dedupe: std::sync::Mutex<HashMap<u32, RollingDedupeWindow>>,
     /// Outbound TCP voice connection pools to peer Edges.
     /// Maps peer_edge_id → connection pool (N independent WebSocket connections).
     /// Populated on peerJoined; lock-free reads via ArcSwap.
@@ -340,6 +558,8 @@ pub struct EdgeState {
     /// Percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
     /// Zero in production; set by `test-utils` feature tests to simulate link degradation.
     pub test_udp_drop_rate: AtomicU32,
+    /// Cross-process fault injection loaded from environment variables at Edge startup.
+    pub test_network_faults: TestNetworkFaults,
     /// Locally held UDP probe quality state keyed by peer edge ID.
     /// Shared between `udp.rs` and the Web API for local observability.
     pub peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
@@ -412,6 +632,8 @@ pub struct EdgeState {
     /// so hot paths outside `udp.rs` can still honor the same UDP-first send
     /// semantics when forwarding voice to local clients.
     pub client_udp_socket: ArcSwap<Option<Arc<UdpSocket>>>,
+    /// Shared edge-to-edge UDP socket used for source-rooted dissemination.
+    pub edge_udp_socket: ArcSwap<Option<Arc<UdpSocket>>>,
 }
 
 impl EdgeState {
@@ -421,6 +643,7 @@ impl EdgeState {
         enable_hub_tcp_fallback: bool,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(4096);
+        let test_network_faults = TestNetworkFaults::from_env();
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -440,6 +663,10 @@ impl EdgeState {
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            dissemination_routes: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            dissemination_route_epoch: AtomicU64::new(0),
+            transport_packet_seq: AtomicU32::new(0),
+            dissemination_dedupe: std::sync::Mutex::new(HashMap::new()),
             voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: 2,
@@ -447,6 +674,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            test_network_faults,
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
             accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
@@ -459,6 +687,7 @@ impl EdgeState {
             whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
             client_udp_socket: ArcSwap::new(Arc::new(None)),
+            edge_udp_socket: ArcSwap::new(Arc::new(None)),
         })
     }
 
@@ -471,6 +700,7 @@ impl EdgeState {
         listeners_per_channel: u32,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(4096);
+        let test_network_faults = TestNetworkFaults::from_env();
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -490,6 +720,10 @@ impl EdgeState {
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            dissemination_routes: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            dissemination_route_epoch: AtomicU64::new(0),
+            transport_packet_seq: AtomicU32::new(0),
+            dissemination_dedupe: std::sync::Mutex::new(HashMap::new()),
             voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: 2,
@@ -497,6 +731,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            test_network_faults,
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
             accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
@@ -509,6 +744,7 @@ impl EdgeState {
             whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
             client_udp_socket: ArcSwap::new(Arc::new(None)),
+            edge_udp_socket: ArcSwap::new(Arc::new(None)),
         })
     }
 
@@ -527,6 +763,7 @@ impl EdgeState {
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(4096);
         let edge_crypto = hmac_secret.and_then(EdgeCrypto::from_secret).map(Arc::new);
+        let test_network_faults = TestNetworkFaults::from_env();
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -546,6 +783,10 @@ impl EdgeState {
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            dissemination_routes: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            dissemination_route_epoch: AtomicU64::new(0),
+            transport_packet_seq: AtomicU32::new(0),
+            dissemination_dedupe: std::sync::Mutex::new(HashMap::new()),
             voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: peer_voice_tcp_pool_size.max(1),
@@ -553,6 +794,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            test_network_faults,
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
             accepting_connections: AtomicBool::new(true),
             edge_crypto,
@@ -565,6 +807,7 @@ impl EdgeState {
             whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
             client_udp_socket: ArcSwap::new(Arc::new(None)),
+            edge_udp_socket: ArcSwap::new(Arc::new(None)),
         })
     }
 
@@ -598,6 +841,28 @@ impl EdgeState {
     /// Publish the client-facing UDP socket for shared local voice delivery.
     pub fn set_client_udp_socket(&self, socket: Arc<UdpSocket>) {
         self.client_udp_socket.store(Arc::new(Some(socket)));
+    }
+
+    /// Publish the edge-to-edge UDP socket for source-rooted dissemination.
+    pub fn set_edge_udp_socket(&self, socket: Arc<UdpSocket>) {
+        self.edge_udp_socket.store(Arc::new(Some(socket)));
+    }
+
+    /// Allocate the next edge-global transport sequence number.
+    #[inline]
+    pub fn next_transport_packet_seq(&self) -> u16 {
+        self.transport_packet_seq.fetch_add(1, Ordering::Relaxed) as u16
+    }
+
+    /// Apply rolling duplicate suppression for one `(source_edge_id, seq)` pair.
+    pub fn accept_disseminated_packet(&self, source_edge_id: u32, seq: u16) -> bool {
+        match self.dissemination_dedupe.lock() {
+            Ok(mut windows) => windows
+                .entry(source_edge_id)
+                .or_insert_with(|| RollingDedupeWindow::new(DEFAULT_DISSEMINATION_DEDUPE_WINDOW))
+                .accept(seq),
+            Err(_) => true,
+        }
     }
 
     /// Snapshot the locally held UDP probe quality state for Web API consumers.
@@ -750,7 +1015,7 @@ impl EdgeState {
 
 #[cfg(test)]
 mod tests {
-    use super::EdgeState;
+    use super::{EdgeState, RollingDedupeWindow};
     use crate::channel_manager::{ChannelData, ChannelManager};
     use crate::client::ClientManager;
     use crate::hot_slot::get_hot_slot;
@@ -842,6 +1107,21 @@ mod tests {
 
         assert!(state.get_cached_whisper_route(10_001, 1, 4).is_none());
         assert!(state.get_cached_whisper_route(10_002, 2, 5).is_none());
+    }
+
+    #[test]
+    fn rolling_dedupe_window_accepts_new_packets_and_rejects_duplicates() {
+        let mut window = RollingDedupeWindow::new(64);
+
+        assert!(window.accept(10));
+        assert!(!window.accept(10));
+        assert!(window.accept(11));
+        assert!(window.accept(9));
+        assert!(!window.accept(9));
+
+        assert!(window.accept(u16::MAX));
+        assert!(window.accept(0));
+        assert!(!window.accept(0));
     }
 
     #[tokio::test]

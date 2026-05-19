@@ -2,6 +2,7 @@
 //!
 //! Mirrors `tests/integration/setup.ts` `setupTestEnvironment`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,86 @@ fn ensure_crypto_provider() {
 
 pub(crate) const HMAC_SECRET: &str = "test-hmac-secret-key-for-integration-tests";
 
+const EDGE_TEST_UDP_DROP_RATE_ENV: &str = "MUNODE_TEST_EDGE_UDP_DROP_RATE";
+const EDGE_TEST_UDP_BLOCK_PEERS_ENV: &str = "MUNODE_TEST_EDGE_UDP_BLOCK_PEERS";
+const EDGE_TEST_VOICE_TCP_BLOCK_PEERS_ENV: &str = "MUNODE_TEST_EDGE_VOICE_TCP_BLOCK_PEERS";
+
+#[derive(Debug, Clone, Default)]
+pub struct EdgeNetworkFaults {
+    udp_drop_rate: Option<u32>,
+    udp_block_peers: Vec<u32>,
+    voice_tcp_block_peers: Vec<u32>,
+}
+
+impl EdgeNetworkFaults {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn udp_drop_rate(mut self, rate_percent: u32) -> Self {
+        self.udp_drop_rate = Some(rate_percent.min(100));
+        self
+    }
+
+    pub fn block_udp_to(mut self, peer_edge_id: u32) -> Self {
+        if peer_edge_id != 0 && !self.udp_block_peers.contains(&peer_edge_id) {
+            self.udp_block_peers.push(peer_edge_id);
+        }
+        self
+    }
+
+    pub fn block_voice_tcp_to(mut self, peer_edge_id: u32) -> Self {
+        if peer_edge_id != 0 && !self.voice_tcp_block_peers.contains(&peer_edge_id) {
+            self.voice_tcp_block_peers.push(peer_edge_id);
+        }
+        self
+    }
+
+    fn env_overrides(&self) -> HashMap<String, String> {
+        let mut envs = HashMap::new();
+
+        if let Some(rate_percent) = self.udp_drop_rate {
+            envs.insert(
+                EDGE_TEST_UDP_DROP_RATE_ENV.to_string(),
+                rate_percent.to_string(),
+            );
+        }
+
+        if !self.udp_block_peers.is_empty() {
+            envs.insert(
+                EDGE_TEST_UDP_BLOCK_PEERS_ENV.to_string(),
+                join_peer_edge_ids(&self.udp_block_peers),
+            );
+        }
+
+        if !self.voice_tcp_block_peers.is_empty() {
+            envs.insert(
+                EDGE_TEST_VOICE_TCP_BLOCK_PEERS_ENV.to_string(),
+                join_peer_edge_ids(&self.voice_tcp_block_peers),
+            );
+        }
+
+        envs
+    }
+}
+
+fn join_peer_edge_ids(peer_edge_ids: &[u32]) -> String {
+    let mut deduped = peer_edge_ids.to_vec();
+    deduped.sort_unstable();
+    deduped.dedup();
+    deduped
+        .into_iter()
+        .map(|edge_id| edge_id.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn apply_env_overrides(command: &mut Command, env_overrides: &HashMap<String, String>) {
+    for (key, value) in env_overrides {
+        command.env(key, value);
+    }
+}
+
 /// Path to the test TLS certificates directory (relative to the workspace root).
 pub fn certs_dir() -> PathBuf {
     workspace_root().join("tests/integration/certs")
@@ -52,7 +133,7 @@ pub fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Locate a Rust binary: prefers release, falls back to debug.
+/// Locate a Rust binary: prefers debug, falls back to release.
 pub fn find_binary(name: &str) -> Result<PathBuf> {
     // Allow explicit override via environment variable
     let env_key = format!("MUNODE_{}_BIN", name.to_uppercase().replace('-', "_"));
@@ -64,16 +145,16 @@ pub fn find_binary(name: &str) -> Result<PathBuf> {
     let release = rust_dir.join("target/release").join(name);
     let debug = rust_dir.join("target/debug").join(name);
 
-    if release.exists() {
-        Ok(release)
-    } else if debug.exists() {
+    if debug.exists() {
         Ok(debug)
+    } else if release.exists() {
+        Ok(release)
     } else {
         bail!(
             "Binary '{}' not found. Run `cargo build` in rust/.\n  Checked: {}\n  Checked: {}",
             name,
-            release.display(),
-            debug.display()
+            debug.display(),
+            release.display()
         )
     }
 }
@@ -518,6 +599,7 @@ pub struct TestEnvironment {
     verbose: bool,
     edge_bin: std::path::PathBuf,
     edge_cfg_paths: Vec<std::path::PathBuf>,
+    edge_env_overrides: Vec<HashMap<String, String>>,
 }
 
 impl TestEnvironment {
@@ -583,8 +665,10 @@ impl TestEnvironment {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let proc = Command::new(&self.edge_bin)
-            .arg(&self.edge_cfg_paths[i])
+        let mut command = Command::new(&self.edge_bin);
+        command.arg(&self.edge_cfg_paths[i]);
+        apply_env_overrides(&mut command, &self.edge_env_overrides[i]);
+        let proc = command
             .stdout(if self.verbose {
                 Stdio::inherit()
             } else {
@@ -620,6 +704,8 @@ pub struct TestEnvBuilder {
     /// If set, every top-level key in this object is deep-merged into each
     /// Edge config (shallow merge of nested objects when both are objects).
     edge_config_patch: Option<Value>,
+    /// Per-edge integration fault injection applied via environment variables.
+    edge_faults: HashMap<usize, EdgeNetworkFaults>,
 }
 
 impl TestEnvBuilder {
@@ -631,6 +717,7 @@ impl TestEnvBuilder {
             hub_auth_override: None,
             hub_config_patch: None,
             edge_config_patch: None,
+            edge_faults: HashMap::new(),
         }
     }
 
@@ -659,6 +746,12 @@ impl TestEnvBuilder {
         self
     }
 
+    /// Apply transport fault injection to a single Edge process (1-based index).
+    pub fn edge_faults(mut self, edge_index: usize, faults: EdgeNetworkFaults) -> Self {
+        self.edge_faults.insert(edge_index, faults);
+        self
+    }
+
     pub fn port_base(mut self, base: u16) -> Self {
         self.port_base = base;
         self
@@ -675,6 +768,19 @@ impl TestEnvBuilder {
         let verbose = self.verbose || std::env::var("MUNODE_TEST_LOG").is_ok();
         let tmp = tempfile::TempDir::new()?;
         let tmp_path = tmp.path().to_path_buf();
+
+        if let Some(invalid_index) = self
+            .edge_faults
+            .keys()
+            .copied()
+            .find(|edge_index| *edge_index == 0 || *edge_index > self.edge_count)
+        {
+            bail!(
+                "edge fault target {} out of range 1..={}",
+                invalid_index,
+                self.edge_count
+            );
+        }
 
         // Reserve a unique port block across all concurrently running test
         // binaries, then allocate ports strictly within that block.
@@ -750,6 +856,7 @@ impl TestEnvBuilder {
         let mut edge_ports = Vec::new();
         let mut edge_processes = Vec::new();
         let mut edge_cfg_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut edge_env_overrides = Vec::new();
         let edge_bin = find_binary("munode-edge")?;
 
         for i in 0..self.edge_count {
@@ -786,8 +893,18 @@ impl TestEnvBuilder {
             fs::write(&edge_cfg_path, serde_json::to_string_pretty(&edge_cfg)?)?;
             edge_cfg_paths.push(edge_cfg_path.clone());
 
-            let edge_proc = Command::new(&edge_bin)
-                .arg(&edge_cfg_path)
+            let edge_env = self
+                .edge_faults
+                .get(&(i + 1))
+                .cloned()
+                .unwrap_or_default()
+                .env_overrides();
+            edge_env_overrides.push(edge_env.clone());
+
+            let mut edge_command = Command::new(&edge_bin);
+            edge_command.arg(&edge_cfg_path);
+            apply_env_overrides(&mut edge_command, &edge_env);
+            let edge_proc = edge_command
                 .stdout(if verbose {
                     Stdio::inherit()
                 } else {
@@ -833,6 +950,7 @@ impl TestEnvBuilder {
             verbose,
             edge_bin,
             edge_cfg_paths,
+            edge_env_overrides,
         })
     }
 }

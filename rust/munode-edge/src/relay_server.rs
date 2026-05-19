@@ -330,8 +330,8 @@ const MAX_VOICE_TARGET_SYNC_FRAME_SIZE: usize = 64 * 1024;
 /// Protocol:
 /// 1. First binary message = peer's `edge_id` (4 bytes BE).
 /// 2. Subsequent binary messages:
-///    - `[0x01][session_BE(4)][plaintext...]` → deliver locally via `RelayedVoice`.
-///    - `[0x02][ttl(1)][target_BE(4)][session_BE(4)][plaintext...]` → relay (dropped for now).
+///    - `[0x01][logical_voice_frame...]` → dedupe, local delivery, and source-rooted forward.
+///    - `[0x02][logical_voice_frame...]` → reserved extended logical frame (currently dropped).
 ///    - `[0x03][session_BE(4)][target_BE(4)][VoiceTargetConfigProto?]` → sync VoiceTarget.
 ///      Empty protobuf payload clears the target on the receiving edge.
 async fn handle_voice_connection(
@@ -423,19 +423,14 @@ async fn handle_voice_connection(
         }
 
         match data[0] {
-            VOICE_TCP_FRAME_DIRECT if data.len() >= 6 => {
-                // Direct delivery: [0x01][session_BE(4)][plaintext...]
-                let sender_session = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-                let plaintext = &data[5..];
-                let voice_packet = crate::voice::inject_session_into_voice(
-                    plaintext,
-                    sender_session,
-                    plaintext.first().copied().unwrap_or(0) & 0x1f,
-                );
-                if !voice_packet.is_empty() {
-                    crate::voice::deliver_relayed_voice(voice_packet, &edge_state, &hub_client)
-                        .await;
-                }
+            VOICE_TCP_FRAME_DIRECT if data.len() >= 5 => {
+                crate::cluster_voice::handle_incoming_logical_frame(
+                    bytes::Bytes::copy_from_slice(&data[1..]),
+                    Some(peer_edge_id),
+                    &edge_state,
+                    &hub_client,
+                )
+                .await;
             }
             VOICE_TCP_FRAME_RELAY => {
                 // Relay frame — not handled on the /voice channel (log and drop)
@@ -581,6 +576,17 @@ pub async fn connect_peer_voice_tcp(
     edge_state: Arc<EdgeState>,
     hmac_secret: Option<String>,
 ) {
+    if edge_state
+        .test_network_faults
+        .blocks_voice_tcp_to(peer_edge_id)
+    {
+        info!(
+            peer_edge_id,
+            "Voice TCP: outbound /voice pool blocked by test fault injection"
+        );
+        return;
+    }
+
     let pool_size = edge_state.peer_voice_tcp_pool_size;
     info!(
         "Voice TCP: establishing {}-slot pool to peer edge {} at {}:{}",

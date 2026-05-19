@@ -196,6 +196,8 @@ impl RpcHandler {
             params.server_id, params.connected_peers
         );
 
+        self.push_route_tables_to_all().await;
+
         Ok(
             self.make_response_packet(request_id, "edge.joinComplete", |r| {
                 r.edge_join_complete = Some(EdgeJoinCompleteResult {

@@ -4,6 +4,10 @@
 > 日期: 2026-03-12
 > 覆盖范围: `munode-edge` / `munode-hub` Rust 实现
 
+> 注意
+> 本文保留了 2026-03 的设计背景和演进说明，其中部分路由结构、配置项和 whisper 跨 Edge 描述已经落后于当前实现。
+> 当前跨 Edge 语音传输与到达率保障，请优先参考 `rust/docs/edge-voice-packet-delivery.md`。
+
 ---
 
 ## 概述
@@ -231,7 +235,7 @@ EdgeRelayVoiceViaTcpParams { from_edge_id, target_edge_id, voice_packet }
 **Whisper（target 1-30）：**
 - 从 `voice_targets` 缓存查 VoiceTarget 配置
 - 支持 session 目标 + 频道目标（含 links/children 递归）
-- 跨 Edge：使用 Hub TCP relay（whisper 跨 Edge 不走 UDP relay）
+- 跨 Edge：同样会生成 `relay_edge_ids`，再由发送层按 `DirectUdp / RelayChain / DirectTcp / HubTcp` 候选路径发送；当前实现已覆盖 UDP whisper 跨 Edge
 
 **Loopback（target=31）：**
 - 注入 session 后直接回发给发送者
@@ -425,14 +429,14 @@ static_peers = [
 ### 已知限制
 
 1. **relay 健康检查**：控制信道 relay 链路没有独立的超时/健康检查（留待后续实现）
-2. **whisper 跨 Edge**：Whisper（target 1-30）的跨 Edge 路由仅支持 Hub TCP relay，不支持直连 UDP 和三跳 relay
+2. **多跳 relay transport 仍偏保守**：协议模型已支持 `relay_transports`，但 Hub 当前下发的 relay chain 仍全部标记为 UDP，TCP 只用于 `DirectTcp` 和 `HubTcp`
 3. **路由表更新延迟**：质量数据 30s 上报一次，加上 Dijkstra 计算时间，路由表更新有 30-60s 延迟
 4. **无数据时的默认路由**：当没有质量数据时（新节点），Hub 给出 `cost=9999` 的 direct 路由；Edge 仍会尝试直连 UDP，失败后回退 Hub TCP
 
 ### 后续工作
 
 - [ ] relay 链路健康检查（`relay_server.rs`）
-- [ ] whisper 跨 Edge 的 UDP 三跳 relay 路径
+- [ ] relay chain 按 hop 使用 TCP/UDP 混合 transport，而不只是全 UDP
 - [ ] 缩短质量上报间隔（可配置化 `PROBE_REPORT_INTERVAL_SECS`）
 - [ ] 路由表 TTL — 过期时自动降级为 Direct 直连兜底
 - [ ] 控制信道失败率追踪 → 动态调整 `RELAY_FALLBACK_THRESHOLD`

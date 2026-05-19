@@ -1,6 +1,7 @@
 pub mod bandwidth;
 pub mod channel_manager;
 pub mod client;
+pub mod cluster_voice;
 pub(crate) mod control_ws;
 pub mod crypto;
 pub mod edge_crypto;

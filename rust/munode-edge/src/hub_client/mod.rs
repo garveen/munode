@@ -370,7 +370,7 @@ pub struct HubClient {
     /// processor or the broadcast channel, preventing high-frequency voice
     /// frames from causing `Lagged` errors on the event bus.
     /// Bounded at 512: best-effort delivery, drop on overflow (voice is lossy).
-    voice_relay_tx: mpsc::Sender<bytes::Bytes>,
+    voice_relay_tx: mpsc::Sender<(u32, bytes::Bytes)>,
 }
 
 impl HubClient {
@@ -386,7 +386,7 @@ impl HubClient {
             .iter()
             .map(|p| (p.host.clone(), p.relay_port))
             .collect();
-        let (voice_relay_tx, voice_relay_rx) = mpsc::channel::<bytes::Bytes>(512);
+        let (voice_relay_tx, voice_relay_rx) = mpsc::channel::<(u32, bytes::Bytes)>(512);
         let hub = Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
@@ -418,8 +418,14 @@ impl HubClient {
         let vr_hub = hub.clone();
         tokio::spawn(async move {
             let mut rx = voice_relay_rx;
-            while let Some(pkt) = rx.recv().await {
-                crate::voice::deliver_relayed_voice(pkt, &vr_state, &vr_hub).await;
+            while let Some((from_edge_id, pkt)) = rx.recv().await {
+                crate::cluster_voice::handle_incoming_logical_frame(
+                    pkt,
+                    Some(from_edge_id),
+                    &vr_state,
+                    &vr_hub,
+                )
+                .await;
             }
         });
 
@@ -1572,7 +1578,9 @@ impl HubClient {
                             // try_send: drop the packet if the worker is behind.
                             // Voice is best-effort; dropping the occasional packet is
                             // far better than blocking the Hub WS reader.
-                            let _ = self.voice_relay_tx.try_send(params.voice_packet.into());
+                            let _ = self
+                                .voice_relay_tx
+                                .try_send((params.from_edge_id, params.voice_packet.into()));
                         }
                         return Ok(());
                     }
@@ -2069,6 +2077,32 @@ impl HubClient {
         };
         let _ = self.rpc_call(complete_request).await;
 
+        Ok(())
+    }
+
+    async fn report_connected_peers(&self) -> Result<()> {
+        let connected_peers: Vec<u32> = self
+            .edge_state
+            .peer_registry
+            .load()
+            .all_udp_peers()
+            .into_iter()
+            .map(|(edge_id, _)| edge_id)
+            .collect();
+
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id(),
+            method: "edge.joinComplete".to_string(),
+            timeout_ms: Some(10000),
+            edge_join_complete: Some(EdgeJoinCompleteParams {
+                server_id: self.server_id,
+                token: String::new(),
+                connected_peers,
+            }),
+            ..Default::default()
+        };
+
+        let _ = self.rpc_call(request).await?;
         Ok(())
     }
 

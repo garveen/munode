@@ -1132,6 +1132,24 @@ message HubRouteTableUpdateParams {
   optional uint32 max_ttl = 2;  // cluster-wide TTL cap for relay packets
 }
 
+message HubDisseminationBackupProto {
+  required uint32 primary_child_edge_id = 1;
+  repeated uint32 backup_next_hops = 2;
+}
+
+message HubSourceDisseminationProto {
+  required uint32 source_edge_id = 1;
+  repeated uint32 active_children = 2;
+  repeated uint32 duplicate_children = 3;
+  repeated HubDisseminationBackupProto branch_backups = 4;
+}
+
+message HubDisseminationUpdateParams {
+  repeated HubSourceDisseminationProto sources = 1;
+  optional uint64 route_epoch = 2;
+  optional uint32 max_ttl = 3;
+}
+
 /**
  * TypedRPCNotification - 类型安全的 RPC 通知
  */
@@ -1169,6 +1187,7 @@ message TypedRPCNotification {
   optional HubRouteTableUpdateParams route_table_update = 36;
   // Hub → Edge: 热重载后将最新服务器限制配置推送给所有 Edge
   optional ServerLimitsConfig server_config_update = 38;
+  optional HubDisseminationUpdateParams dissemination_update = 39;
   // hub.contextAction — forward a Mumble ContextAction from an Edge
   optional EdgeContextActionParams context_action = 35;
   // hub.contextActionModify — Hub pushes ContextActionModify to targeted clients

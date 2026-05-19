@@ -10,6 +10,11 @@ use munode_common::config::HubVoiceRoutingConfig;
 /// A value of 500.0 means 100% packet loss is penalised as 500ms extra RTT.
 const PACKET_LOSS_PENALTY_MS: f64 = 500.0;
 
+/// Fallback cost for a confirmed peer edge when no quality sample exists yet.
+/// This keeps freshly-joined clusters routable before the probe loop populates
+/// directional RTT/loss data.
+const DEFAULT_CONNECTED_PEER_COST_MS: f64 = 100.0;
+
 /// Info about a connected Edge in the cluster topology.
 #[derive(Debug, Clone)]
 pub struct TopologyEdge {
@@ -44,6 +49,15 @@ impl Default for LinkQuality {
             last_update: Instant::now(),
         }
     }
+}
+
+/// Hub-computed source-rooted dissemination view for one Edge.
+#[derive(Debug, Clone, Default)]
+pub struct SourceDisseminationPlan {
+    pub source_edge_id: u32,
+    pub active_children: Vec<u32>,
+    pub duplicate_children: Vec<u32>,
+    pub branch_backups: Vec<(u32, Vec<u32>)>,
 }
 
 /// The result of disconnect arbitration.
@@ -183,16 +197,7 @@ impl TopologyManager {
                 continue;
             }
 
-            for (&(a, b), quality) in &self.link_quality {
-                let neighbor = if a == u {
-                    b
-                } else if b == u {
-                    a
-                } else {
-                    continue;
-                };
-
-                let link_weight = quality.rtt_ms + quality.packet_loss * PACKET_LOSS_PENALTY_MS;
+            self.for_each_outgoing_edge(u, None, None, |neighbor, link_weight| {
                 let next_cost = cost + link_weight;
 
                 if next_cost < *dist.get(&neighbor).unwrap_or(&f64::INFINITY) {
@@ -200,7 +205,7 @@ impl TopologyManager {
                     prev.insert(neighbor, u);
                     heap.push(Reverse((next_cost.to_bits(), neighbor)));
                 }
-            }
+            });
         }
 
         // Reconstruct path
@@ -485,6 +490,69 @@ impl TopologyManager {
         result
     }
 
+    /// Compute the source-rooted dissemination plan for one Edge.
+    pub fn compute_dissemination_plan(
+        &self,
+        for_edge_id: u32,
+        config: &HubVoiceRoutingConfig,
+    ) -> Vec<SourceDisseminationPlan> {
+        let mut source_ids: Vec<u32> = self.edges.keys().copied().collect();
+        source_ids.sort_unstable();
+
+        let mut node_ids: Vec<u32> = self.edges.keys().copied().collect();
+        node_ids.sort_unstable();
+
+        let mut plans = Vec::with_capacity(source_ids.len());
+
+        for source_edge_id in source_ids {
+            let (_, prev) = self.directed_dijkstra(source_edge_id, config, None);
+            let mut active_children = Vec::new();
+
+            for &node_id in &node_ids {
+                if node_id == source_edge_id {
+                    continue;
+                }
+                if prev.get(&node_id).copied() == Some(for_edge_id) {
+                    active_children.push(node_id);
+                }
+            }
+
+            let mut duplicate_children = Vec::new();
+            let mut branch_backups = Vec::new();
+
+            for &primary_child in &active_children {
+                let backup_next_hops =
+                    self.compute_branch_backups(for_edge_id, primary_child, config);
+                if backup_next_hops.is_empty() {
+                    continue;
+                }
+
+                let degraded = self
+                    .link_quality
+                    .get(&(for_edge_id, primary_child))
+                    .map(|quality| {
+                        quality.packet_loss > config.degraded_packet_loss
+                            || quality.rtt_ms > config.degraded_rtt_ms
+                    })
+                    .unwrap_or(false);
+                if degraded {
+                    duplicate_children.push(primary_child);
+                }
+
+                branch_backups.push((primary_child, backup_next_hops));
+            }
+
+            plans.push(SourceDisseminationPlan {
+                source_edge_id,
+                active_children,
+                duplicate_children,
+                branch_backups,
+            });
+        }
+
+        plans
+    }
+
     /// Find the best forwarding path with quality thresholds applied.
     fn find_best_path_with_config(
         &self,
@@ -492,10 +560,33 @@ impl TopologyManager {
         to: u32,
         config: &HubVoiceRoutingConfig,
     ) -> Vec<u32> {
-        if from == to {
-            return vec![from];
-        }
+        let (_, prev) = self.directed_dijkstra(from, config, None);
+        Self::reconstruct_path(&prev, from, to).unwrap_or_else(|| vec![from, to])
+    }
 
+    fn path_cost(&self, path: &[u32], config: &HubVoiceRoutingConfig) -> f64 {
+        let mut total = 0.0f64;
+        for i in 0..path.len().saturating_sub(1) {
+            let a = path[i];
+            let b = path[i + 1];
+            let cost = self
+                .link_quality
+                .get(&(a, b))
+                .map(|q| {
+                    q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS + config.relay_hop_penalty_ms
+                })
+                .unwrap_or(100.0);
+            total += cost;
+        }
+        total
+    }
+
+    fn directed_dijkstra(
+        &self,
+        from: u32,
+        config: &HubVoiceRoutingConfig,
+        excluded_edge: Option<(u32, u32)>,
+    ) -> (HashMap<u32, f64>, HashMap<u32, u32>) {
         let mut dist: HashMap<u32, f64> =
             self.edges.keys().map(|&id| (id, f64::INFINITY)).collect();
         let mut prev: HashMap<u32, u32> = HashMap::new();
@@ -510,68 +601,175 @@ impl TopologyManager {
                 continue;
             }
 
-            for (&(a, b), quality) in &self.link_quality {
-                let neighbor = if a == u {
-                    b
-                } else if b == u {
-                    a
-                } else {
-                    continue;
-                };
+            self.for_each_outgoing_edge(u, Some(config), excluded_edge, |b, link_weight| {
+                let next_cost = cost + link_weight;
 
-                // Skip failed links
+                if next_cost < *dist.get(&b).unwrap_or(&f64::INFINITY) {
+                    dist.insert(b, next_cost);
+                    prev.insert(b, u);
+                    heap.push(Reverse((next_cost.to_bits(), b)));
+                }
+            });
+        }
+
+        (dist, prev)
+    }
+
+    fn for_each_outgoing_edge<F>(
+        &self,
+        from: u32,
+        config: Option<&HubVoiceRoutingConfig>,
+        excluded_edge: Option<(u32, u32)>,
+        mut visit: F,
+    ) where
+        F: FnMut(u32, f64),
+    {
+        let mut seen = HashSet::new();
+
+        for (&(a, b), quality) in &self.link_quality {
+            if a != from || excluded_edge == Some((a, b)) {
+                continue;
+            }
+
+            if let Some(config) = config {
                 if quality.packet_loss > config.failed_packet_loss
                     || quality.rtt_ms > config.failed_rtt_ms
                 {
                     continue;
                 }
-
-                let link_weight = quality.rtt_ms
-                    + quality.packet_loss * PACKET_LOSS_PENALTY_MS
-                    + config.relay_hop_penalty_ms;
-                let next_cost = cost + link_weight;
-
-                if next_cost < *dist.get(&neighbor).unwrap_or(&f64::INFINITY) {
-                    dist.insert(neighbor, next_cost);
-                    prev.insert(neighbor, u);
-                    heap.push(Reverse((next_cost.to_bits(), neighbor)));
-                }
             }
+
+            let penalty = config.map(|cfg| cfg.relay_hop_penalty_ms).unwrap_or(0.0);
+            let link_weight =
+                quality.rtt_ms + quality.packet_loss * PACKET_LOSS_PENALTY_MS + penalty;
+            seen.insert(b);
+            visit(b, link_weight);
         }
 
-        // Reconstruct path
+        let Some(edge) = self.edges.get(&from) else {
+            return;
+        };
+
+        let penalty = config.map(|cfg| cfg.relay_hop_penalty_ms).unwrap_or(0.0);
+        for &peer_id in &edge.connected_peers {
+            if excluded_edge == Some((from, peer_id))
+                || seen.contains(&peer_id)
+                || !self.edges.contains_key(&peer_id)
+            {
+                continue;
+            }
+
+            visit(peer_id, DEFAULT_CONNECTED_PEER_COST_MS + penalty);
+        }
+    }
+
+    fn reconstruct_path(prev: &HashMap<u32, u32>, from: u32, to: u32) -> Option<Vec<u32>> {
+        if from == to {
+            return Some(vec![from]);
+        }
+
         let mut path = vec![to];
         let mut cur = to;
         loop {
-            if let Some(&p) = prev.get(&cur) {
-                path.push(p);
-                cur = p;
-                if cur == from {
-                    break;
-                }
-            } else {
-                return vec![from, to];
+            let parent = prev.get(&cur).copied()?;
+            path.push(parent);
+            cur = parent;
+            if cur == from {
+                break;
             }
         }
         path.reverse();
-        path
+        Some(path)
     }
 
-    fn path_cost(&self, path: &[u32], config: &HubVoiceRoutingConfig) -> f64 {
-        let mut total = 0.0f64;
-        for i in 0..path.len().saturating_sub(1) {
-            let a = path[i];
-            let b = path[i + 1];
-            let cost = self
-                .link_quality
-                .get(&(a, b))
-                .or_else(|| self.link_quality.get(&(b, a)))
-                .map(|q| {
-                    q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS + config.relay_hop_penalty_ms
-                })
-                .unwrap_or(100.0);
-            total += cost;
+    fn compute_branch_backups(
+        &self,
+        for_edge_id: u32,
+        primary_child: u32,
+        config: &HubVoiceRoutingConfig,
+    ) -> Vec<u32> {
+        let (_, prev) =
+            self.directed_dijkstra(for_edge_id, config, Some((for_edge_id, primary_child)));
+        let Some(path) = Self::reconstruct_path(&prev, for_edge_id, primary_child) else {
+            return Vec::new();
+        };
+        if path.len() < 2 {
+            return Vec::new();
         }
-        total
+
+        let first_hop = path[1];
+        if first_hop == primary_child || first_hop == for_edge_id {
+            return Vec::new();
+        }
+
+        vec![first_hop]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LinkQuality, TopologyEdge, TopologyManager};
+    use munode_common::config::HubVoiceRoutingConfig;
+    use std::collections::HashSet;
+    use std::time::Instant;
+
+    fn edge(edge_id: u32) -> TopologyEdge {
+        TopologyEdge {
+            edge_id,
+            name: format!("edge-{edge_id}"),
+            host: "127.0.0.1".into(),
+            port: 64_738 + edge_id,
+            voice_port: 65_738 + edge_id,
+            capacity: 128,
+            joined_at: Instant::now(),
+            connected_peers: HashSet::new(),
+        }
+    }
+
+    fn quality(rtt_ms: f64) -> LinkQuality {
+        LinkQuality {
+            rtt_ms,
+            packet_loss: 0.0,
+            jitter_ms: 0.0,
+            samples: 10,
+            last_update: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn dissemination_plans_follow_directed_edges() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(edge(1));
+        topo.add_edge(edge(2));
+        topo.add_edge(edge(3));
+
+        topo.report_quality(1, 2, quality(10.0));
+        topo.report_quality(2, 3, quality(10.0));
+
+        let config = HubVoiceRoutingConfig {
+            relay_hop_penalty_ms: 0.0,
+            ..HubVoiceRoutingConfig::default()
+        };
+
+        let edge1_source1 = topo
+            .compute_dissemination_plan(1, &config)
+            .into_iter()
+            .find(|plan| plan.source_edge_id == 1)
+            .expect("missing source=1 plan for edge 1");
+        assert_eq!(edge1_source1.active_children, vec![2]);
+
+        let edge2_source1 = topo
+            .compute_dissemination_plan(2, &config)
+            .into_iter()
+            .find(|plan| plan.source_edge_id == 1)
+            .expect("missing source=1 plan for edge 2");
+        assert_eq!(edge2_source1.active_children, vec![3]);
+
+        let edge3_source1 = topo
+            .compute_dissemination_plan(3, &config)
+            .into_iter()
+            .find(|plan| plan.source_edge_id == 1)
+            .expect("missing source=1 plan for edge 3");
+        assert!(edge3_source1.active_children.is_empty());
     }
 }

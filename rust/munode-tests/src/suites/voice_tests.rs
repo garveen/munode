@@ -10,8 +10,8 @@ use munode_client::ClientEvent;
 use munode_protocol::mumbleproto;
 
 use crate::harness::{
-    ClientConfig, TestEnvBuilder, cleanup_clients, create_clients, random_voice_data,
-    single_edge_env, sleep_ms, standard_env,
+    ClientConfig, EdgeNetworkFaults, TestEnvBuilder, cleanup_clients, create_clients,
+    random_voice_data, single_edge_env, sleep_ms, standard_env,
 };
 
 async fn wait_for_voice_from(
@@ -469,6 +469,105 @@ async fn test_cross_edge_voice_does_not_fallback_when_direct_path_is_unresolvabl
         false,
         false,
         "direct path unavailable and relay/fallback disabled",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn test_cross_edge_voice_falls_back_to_peer_tcp_when_udp_packets_are_dropped() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(2)
+        .hub_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_relay": false,
+            }
+        }))
+        .edge_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_fallback": false,
+            }
+        }))
+        .edge_faults(1, EdgeNetworkFaults::new().udp_drop_rate(100))
+        .start()
+        .await?;
+
+    assert_cross_edge_voice_delivery(
+        &env,
+        1,
+        2,
+        false,
+        true,
+        "peer TCP /voice fallback after outbound edge UDP packets are dropped",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn test_cross_edge_voice_falls_back_to_hub_relay_when_udp_is_dropped_and_peer_tcp_is_blocked()
+-> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(2)
+        .hub_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_relay": true,
+            }
+        }))
+        .edge_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_fallback": true,
+            }
+        }))
+        .edge_faults(
+            1,
+            EdgeNetworkFaults::new()
+                .udp_drop_rate(100)
+                .block_voice_tcp_to(2),
+        )
+        .start()
+        .await?;
+
+    assert_cross_edge_voice_delivery(
+        &env,
+        1,
+        2,
+        false,
+        true,
+        "Hub relay fallback after outbound edge UDP loss and peer TCP block",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn test_cross_edge_voice_does_not_arrive_when_udp_is_dropped_and_peer_tcp_is_blocked_without_hub_relay()
+-> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(2)
+        .hub_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_relay": false,
+            }
+        }))
+        .edge_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_fallback": false,
+            }
+        }))
+        .edge_faults(
+            1,
+            EdgeNetworkFaults::new()
+                .udp_drop_rate(100)
+                .block_voice_tcp_to(2),
+        )
+        .start()
+        .await?;
+
+    assert_cross_edge_voice_delivery(
+        &env,
+        1,
+        2,
+        false,
+        false,
+        "voice stays silent when outbound edge UDP is dropped, peer TCP is blocked, and Hub relay is disabled",
     )
     .await
 }

@@ -88,6 +88,15 @@ impl EdgeServer {
             self.config.voice_routing.peer_voice_tcp_pool_size as usize,
         );
 
+        if !edge_state.test_network_faults.is_empty() {
+            info!(
+                udp_drop_rate = edge_state.test_network_faults.udp_drop_rate(),
+                udp_block_peers = ?edge_state.test_network_faults.udp_block_peers(),
+                voice_tcp_block_peers = ?edge_state.test_network_faults.voice_tcp_block_peers(),
+                "Edge test fault injection active"
+            );
+        }
+
         // Set up TLS
         let tls_acceptor = create_tls_acceptor(&self.config.tls)?;
 

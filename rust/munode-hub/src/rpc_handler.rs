@@ -26,7 +26,9 @@ use crate::channel_store::ChannelRecord;
 use crate::lua_auth::LuaAuthRequest;
 use crate::server::HubState;
 use crate::session_manager::SessionInfo;
-use crate::topology_manager::{ArbitrationResult, LinkQuality, TopologyEdge};
+use crate::topology_manager::{
+    ArbitrationResult, LinkQuality, SourceDisseminationPlan, TopologyEdge,
+};
 
 mod admin;
 mod auth;
@@ -617,35 +619,71 @@ impl RpcHandler {
         // fine since this is a shared read lock — only topology writers are briefly
         // paused.  For typical cluster sizes (2–20 edges) the total computation time
         // is well under a millisecond.
-        let edge_data: Vec<(u32, Vec<(u32, u32, Vec<u32>, f32)>)> = {
+        let route_epoch = current_millis() as u64;
+        let edge_data: Vec<(
+            u32,
+            Vec<(u32, u32, Vec<u32>, f32)>,
+            Vec<SourceDisseminationPlan>,
+        )> = {
             let topo = self.state.topology.read().await;
             let config = &self.state.config.voice_routing;
             topo.get_all_edges()
                 .iter()
-                .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id, config)))
+                .map(|e| {
+                    (
+                        e.edge_id,
+                        topo.compute_route_table(e.edge_id, config),
+                        topo.compute_dissemination_plan(e.edge_id, config),
+                    )
+                })
                 .collect()
         }; // lock released here
 
-        for (edge_id, routes) in edge_data {
-            if routes.is_empty() {
-                continue;
-            }
+        for (edge_id, routes, dissemination_sources) in edge_data {
             let max_ttl_val = self.state.config.voice_routing.max_ttl;
-            self.send_notification_to_edge_unsequenced(edge_id, "hub.routeTableUpdate", |n| {
-                n.route_table_update = Some(HubRouteTableUpdateParams {
-                    routes: routes
+            if !routes.is_empty() {
+                self.send_notification_to_edge_unsequenced(edge_id, "hub.routeTableUpdate", |n| {
+                    n.route_table_update = Some(HubRouteTableUpdateParams {
+                        routes: routes
+                            .into_iter()
+                            .map(|(target, rtype, relay_chain, cost)| {
+                                let relay_transports = vec![0u32; relay_chain.len()];
+                                HubRouteEntryProto {
+                                    target_edge_id: target,
+                                    route_type: rtype,
+                                    relay_chain,
+                                    relay_transports,
+                                    cost,
+                                }
+                            })
+                            .collect(),
+                        max_ttl: Some(max_ttl_val),
+                    });
+                })
+                .await;
+            }
+
+            self.send_notification_to_edge_unsequenced(edge_id, "hub.disseminationUpdate", |n| {
+                n.dissemination_update = Some(HubDisseminationUpdateParams {
+                    sources: dissemination_sources
                         .into_iter()
-                        .map(|(target, rtype, relay_chain, cost)| {
-                            let relay_transports = vec![0u32; relay_chain.len()]; // all UDP for now
-                            HubRouteEntryProto {
-                                target_edge_id: target,
-                                route_type: rtype,
-                                relay_chain,
-                                relay_transports,
-                                cost,
-                            }
+                        .map(|source| HubSourceDisseminationProto {
+                            source_edge_id: source.source_edge_id,
+                            active_children: source.active_children,
+                            duplicate_children: source.duplicate_children,
+                            branch_backups: source
+                                .branch_backups
+                                .into_iter()
+                                .map(|(primary_child_edge_id, backup_next_hops)| {
+                                    HubDisseminationBackupProto {
+                                        primary_child_edge_id,
+                                        backup_next_hops,
+                                    }
+                                })
+                                .collect(),
                         })
                         .collect(),
+                    route_epoch: Some(route_epoch),
                     max_ttl: Some(max_ttl_val),
                 });
             })

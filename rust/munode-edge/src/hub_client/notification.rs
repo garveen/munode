@@ -5,7 +5,7 @@
 //! into `EdgeEvent`s on the in-process broadcast channel.
 
 use futures_util::stream::{self, StreamExt};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use tracing::{debug, info, trace, warn};
@@ -672,6 +672,12 @@ impl HubClient {
                         }
                     } // end else (not self)
                 }
+                if let Err(error) = self.report_connected_peers().await {
+                    warn!(
+                        "Failed to re-report connected peers after hub.peerJoined: {}",
+                        error
+                    );
+                }
                 // Invalidate BroadcastCaches: peer edge joined, relay targets changed.
                 self.edge_state
                     .topology_version
@@ -766,6 +772,57 @@ impl HubClient {
                     debug!(
                         "Route table updated: {} entries, max_ttl={}",
                         count, new_max_ttl
+                    );
+                }
+            }
+            "hub.disseminationUpdate" => {
+                if let Some(params) = &notification.dissemination_update {
+                    use crate::state::DisseminationSourceState;
+                    use std::sync::atomic::Ordering;
+
+                    let new_max_ttl = params.max_ttl.unwrap_or(4);
+                    self.edge_state
+                        .max_ttl
+                        .store(new_max_ttl, Ordering::Relaxed);
+
+                    let incoming_route_epoch = params.route_epoch.unwrap_or(0);
+                    let previous_route_epoch = self
+                        .edge_state
+                        .dissemination_route_epoch
+                        .swap(incoming_route_epoch, Ordering::Relaxed);
+                    if previous_route_epoch != incoming_route_epoch {
+                        if let Ok(mut windows) = self.edge_state.dissemination_dedupe.lock() {
+                            windows.clear();
+                        }
+                    }
+
+                    let mut new_routes: HashMap<u32, DisseminationSourceState> = HashMap::new();
+                    for source in &params.sources {
+                        let mut branch_backups = HashMap::new();
+                        for backup in &source.branch_backups {
+                            branch_backups.insert(
+                                backup.primary_child_edge_id,
+                                backup.backup_next_hops.clone(),
+                            );
+                        }
+
+                        new_routes.insert(
+                            source.source_edge_id,
+                            DisseminationSourceState {
+                                active_children: source.active_children.clone(),
+                                duplicate_children: source.duplicate_children.clone(),
+                                branch_backups,
+                            },
+                        );
+                    }
+
+                    let count = new_routes.len();
+                    self.edge_state
+                        .dissemination_routes
+                        .store(Arc::new(new_routes));
+                    debug!(
+                        "Dissemination updated: {} sources, route_epoch={}, max_ttl={}",
+                        count, incoming_route_epoch, new_max_ttl
                     );
                 }
             }

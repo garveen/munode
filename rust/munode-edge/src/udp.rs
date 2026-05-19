@@ -1,8 +1,6 @@
 use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-#[cfg(target_os = "linux")]
-use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,43 +23,44 @@ use crate::state::{EdgeState, PeerQualityState};
 // Because the `edge_socket` is bound to a **dedicated** `edge_port` separate from the
 // client-facing Mumble port, every datagram received on it is already known to be
 // Edge-to-Edge traffic.  A single type byte is therefore sufficient to distinguish the
-// three packet sub-types; no 2-byte magic prefix is needed.
+// packet families; no 2-byte magic prefix is needed on the dedicated edge socket.
 //
 // Wire formats on `edge_socket`:
 //
-//   Voice (direct, for this Edge):
-//     [0x01][sender_session BE(4B)][raw plaintext voice...]
-//     Overhead: 5 bytes total header (1 type + 4 session)
+//   Plain logical voice frame:
+//     [0x01][logical_voice_frame...]
 //
-//   Relay-forward (this Edge is the intermediary; forward to target Edge):
-//     [0x02][ttl(1B)][target_edge_id BE(4B)][sender_session BE(4B)][raw plaintext voice...]
-//     Overhead: 10 bytes total header (1 type + 1 ttl + 4 target + 4 session)
-//     The relay node reads ttl, drops if 0, delivers locally if target==self, or
-//     queries own route table and forwards with ttl-1 to next hop.
+//   Plain extended logical voice frame:
+//     [0x02][logical_voice_frame...]
+//
+//   Base logical voice frame:
+//     [source_edge_id:u8][transport_packet_seq:be16][voice_packet...]
+//
+//   Extended logical voice frame:
+//     [source_edge_id|0x80:u8][transport_packet_seq:be16][control:u8][voice_packet...]
+//
+//   The logical frame is shared across UDP, peer TCP `/voice`, and Hub relay. The
+//   receiving Edge performs rolling dedupe on `(source_edge_id, transport_packet_seq)`,
+//   delivers locally, then forwards according to the Hub-pushed per-source slice.
 //
 //   Quality probe (ping / pong):
 //     [0x03][subtype(1B): 0=ping 1=pong][seq BE(4B)][sent_ms BE(8B)]
 //     Total: 14 bytes
 //
-//   Encrypted direct voice (ChaCha20-Poly1305, requires hmac_secret):
-//     [0x11][sender_edge_id BE(4B)][counter BE(8B)][ChaCha20enc(session_id BE(4B) + voice) + Poly1305tag(16B)]
-//     Overhead: 13 bytes plain header + 20 bytes AEAD overhead (4 session + 16 tag)
-//     Nonce = [sender_edge_id BE(4)][counter BE(8)].  Empty AAD.
-//     Encrypt-once broadcast: same ciphertext sent to all direct UDP peers.
+//   Encrypted base logical voice frame (ChaCha20-Poly1305, requires hmac_secret):
+//     [0x11][counter:be64][ChaCha20enc(logical_voice_frame) + Poly1305tag(16B)]
 //
-//   Encrypted relay-forward (routing headers plaintext, payload AEAD-protected):
-//     [0x12][sender_edge_id BE(4B)][counter BE(8B)][ttl(1B)][target_edge_id BE(4B)]
-//            [ChaCha20enc(session_id BE(4B) + voice) + Poly1305tag(16B)]
-//     Overhead: 18 bytes plain header + 20 bytes AEAD overhead.
-//     Empty AAD (same as 0x11). Edges are cluster-internal trusted nodes so routing
-//     metadata authentication is unnecessary.  Same ciphertext can be reused across
-//     relay packets to different targets — only the plain header fields differ.
+//   Encrypted extended logical voice frame:
+//     [0x12][counter:be64][ChaCha20enc(logical_voice_frame) + Poly1305tag(16B)]
+//
+//   The sender edge ID is inferred from the ingress peer address and reused as the
+//   AEAD nonce prefix (`sender_edge_id ++ counter`), so the physical UDP packet no
+//   longer needs to carry target-edge or relay-chain metadata.
 //
 // Legacy / fallback (shared socket — no dedicated edge_port):
-//   When `edge_socket` is the same fd as `socket` (the Mumble client port), the old
-//   `EDGE_MAGIC=[0x00,0x00]` two-byte prefix is still used in `handle_client_datagram`
-//   so that edge packets can be disambiguated from encrypted OCB2 client datagrams.
-//   In that mode only direct-voice forwarding is supported; relay and probe are not.
+//   When `edge_socket` is the same fd as `socket` (the Mumble client port),
+//   `EDGE_MAGIC=[0x00,0x00]` is still prefixed so Edge packets can be disambiguated
+//   from encrypted OCB2 client datagrams on the shared socket.
 
 /// Packet type: direct voice for this Edge.
 const EDGE_PKT_VOICE: u8 = 0x01;
@@ -151,6 +150,7 @@ impl UdpServer {
         };
 
         edge_state.set_client_udp_socket(Arc::clone(&socket));
+        edge_state.set_edge_udp_socket(Arc::clone(&edge_socket));
 
         let (client_tx, client_rx) = async_channel::bounded(65536);
         let (relay_tx, relay_rx) = async_channel::bounded(4096);
@@ -287,9 +287,9 @@ impl UdpServer {
                                 Ok((pkt_type, data, peer_addr)) => {
                                     match pkt_type {
                                         EDGE_PKT_VOICE => worker_server.handle_edge_packet(data.as_ref(), peer_addr).await,
-                                        EDGE_PKT_RELAY => worker_server.handle_relay_packet(data.as_ref()).await,
+                                        EDGE_PKT_RELAY => worker_server.handle_relay_packet(data.as_ref(), peer_addr).await,
                                         EDGE_PKT_ENC_VOICE => worker_server.handle_enc_voice_packet(data.as_ref(), peer_addr).await,
-                                        EDGE_PKT_ENC_RELAY => worker_server.handle_enc_relay_packet(data.as_ref()).await,
+                                        EDGE_PKT_ENC_RELAY => worker_server.handle_enc_relay_packet(data.as_ref(), peer_addr).await,
                                         _ => {}
                                     }
                                 }
@@ -328,12 +328,10 @@ impl UdpServer {
                         }
                         let data = edge_data.freeze();
                         match data[0] {
-                            // Direct voice for this Edge: [0x01][session_BE(4)][voice...]
-                            EDGE_PKT_VOICE if len >= 6 => {
+                            EDGE_PKT_VOICE if len >= 5 => {
                                 let _ = self.relay_tx.send((EDGE_PKT_VOICE, data.slice(1..), peer_addr)).await;
                             }
-                            // Relay-forward: [0x02][target_BE(4)][session_BE(4)][voice...]
-                            EDGE_PKT_RELAY if len >= 10 => {
+                            EDGE_PKT_RELAY if len >= 6 => {
                                 let _ = self.relay_tx.send((EDGE_PKT_RELAY, data.slice(1..), peer_addr)).await;
                             }
                             // Quality probe: [0x03][subtype(1)][seq_BE(4)][ts_BE(8)]
@@ -341,12 +339,10 @@ impl UdpServer {
                             EDGE_PKT_PROBE if len >= 14 => {
                                 self.handle_probe_packet(&data[1..], peer_addr).await;
                             }
-                            // Encrypted direct voice: [0x11][sender_edge_id_BE(4)][counter_BE(8)][enc(session_BE(4)+voice)+tag(16)]
-                            EDGE_PKT_ENC_VOICE if len >= 33 => {
+                            EDGE_PKT_ENC_VOICE if len >= 29 => {
                                 let _ = self.relay_tx.send((EDGE_PKT_ENC_VOICE, data.slice(1..), peer_addr)).await;
                             }
-                            // Encrypted relay: [0x12][sender_edge_id_BE(4)][counter_BE(8)][ttl(1)][target_BE(4)][enc(session_BE(4)+voice)+tag(16)]
-                            EDGE_PKT_ENC_RELAY if len >= 38 => {
+                            EDGE_PKT_ENC_RELAY if len >= 30 => {
                                 let _ = self.relay_tx.send((EDGE_PKT_ENC_RELAY, data.slice(1..), peer_addr)).await;
                             }
                             _ => {
@@ -484,9 +480,31 @@ impl UdpServer {
             return;
         }
 
-        // Edge-to-Edge packet on client port (fallback when no dedicated edge port)
-        if data.len() >= 2 && data[0] == EDGE_MAGIC[0] && data[1] == EDGE_MAGIC[1] {
-            self.handle_edge_packet(&data[2..], peer_addr).await;
+        // Edge-to-Edge packet on the client port (fallback when no dedicated edge port).
+        if data.len() >= 3 && data[0] == EDGE_MAGIC[0] && data[1] == EDGE_MAGIC[1] {
+            match data[2] {
+                EDGE_PKT_VOICE if data.len() >= 7 => {
+                    self.handle_edge_packet(&data[3..], peer_addr).await
+                }
+                EDGE_PKT_RELAY if data.len() >= 8 => {
+                    self.handle_relay_packet(&data[3..], peer_addr).await
+                }
+                EDGE_PKT_PROBE if data.len() >= 16 => {
+                    self.handle_probe_packet(&data[3..], peer_addr).await
+                }
+                EDGE_PKT_ENC_VOICE if data.len() >= 31 => {
+                    self.handle_enc_voice_packet(&data[3..], peer_addr).await
+                }
+                EDGE_PKT_ENC_RELAY if data.len() >= 32 => {
+                    self.handle_enc_relay_packet(&data[3..], peer_addr).await
+                }
+                _ => debug!(
+                    "Unknown shared-socket edge packet type 0x{:02X} from {} ({} bytes)",
+                    data[2],
+                    peer_addr,
+                    data.len()
+                ),
+            }
             return;
         }
 
@@ -774,9 +792,6 @@ impl UdpServer {
             return;
         }
 
-        // Lock-free read of our own edge ID (AtomicU32).
-        let my_edge_id = self.edge_state.get_edge_id();
-
         // --- Shared routing: compute target sessions and relay edges ---
         // `compute_voice_targets` handles VoiceTarget lookup, channel expansion,
         // deaf/suppress filtering.  Returns None for loopback (31) → drop.
@@ -811,217 +826,15 @@ impl UdpServer {
             );
         }
 
-        // relay_payload preserves the original voice_target_id in low 5 bits so remote edges
-        // can look up their own VoiceTarget config and apply correct AudioContext per recipient.
-        let relay_payload =
-            crate::voice::inject_session_into_voice(plaintext, sender_session, voice_target as u8);
-        if targets.relay_edge_ids.is_empty() {
-            return;
-        }
-
-        // Pre-encrypt once if crypto is configured — same ciphertext goes to ALL peers
-        // (both direct and relay) because all Edges share the same key and are mutually
-        // trusted cluster-internal nodes.  The nonce encodes sender_edge_id + counter,
-        // so it is unique even when multiple Edges encrypt simultaneously.
-        // Plaintext: [session_id_BE(4)][voice_payload] — matches edge packet body.
-        let enc_direct: Option<(u64, Vec<u8>)> = if let Some(crypto) = &self.edge_state.edge_crypto
-        {
-            let mut plain = Vec::with_capacity(4 + plaintext.len());
-            plain.extend_from_slice(&sender_session.to_be_bytes());
-            plain.extend_from_slice(plaintext);
-            // Empty AAD: ciphertext is peer-independent (encrypt-once broadcast).
-            Some(crypto.encrypt_owned(plain, my_edge_id, &[]))
-        } else {
-            None
-        };
-
-        let threshold = self.edge_state.consecutive_failure_threshold;
-        let max_ttl = self
-            .edge_state
-            .max_ttl
-            .load(std::sync::atomic::Ordering::Relaxed);
-
-        use crate::state::RouteDecision;
-
-        // Phase A: decide routing for each target edge (sync, no await).
-        // UDP packets are collected for a single batch sendmmsg; TCP paths are
-        // collected separately and handled after the batch.
-        //
-        // Packet bytes and success-tracking metadata are stored in parallel Vecs so
-        // the sendmmsg call can borrow the original packet buffers directly.
-        let (edge_send_pkts, edge_meta, hub_tcp_targets) = {
-            let route_guard = self.edge_state.route_table.load();
-            let peer_guard = self.edge_state.peer_registry.load();
-            let voice_tcp_conns = self.edge_state.voice_tcp_conns.load();
-            let failures_guard = self.edge_state.next_hop_failures.read().ok();
-
-            let mut edge_send_pkts: Vec<(Vec<u8>, SocketAddr)> = Vec::new();
-            let mut edge_meta: Vec<(u32, u32)> = Vec::new();
-            let mut hub_tcp_targets: Vec<u32> = Vec::new();
-
-            for &target_edge_id in &targets.relay_edge_ids {
-                debug!(
-                    "edge={} UDP voice: routing from session {} to edge {}",
-                    my_edge_id, sender_session, target_edge_id
-                );
-
-                let decision = route_guard.get(&target_edge_id).and_then(|candidates| {
-                    candidates
-                        .iter()
-                        .find(|candidate| {
-                            let next_hop_id = match &candidate.decision {
-                                RouteDecision::DirectUdp => Some(target_edge_id),
-                                RouteDecision::RelayChain { hops, .. } => hops.first().copied(),
-                                _ => None,
-                            };
-                            let fail_count = next_hop_id
-                                .and_then(|id| {
-                                    failures_guard.as_ref().and_then(|failures| {
-                                        failures
-                                            .get(&id)
-                                            .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
-                                    })
-                                })
-                                .unwrap_or(0);
-                            threshold == 0 || fail_count < threshold
-                        })
-                        .or_else(|| candidates.first())
-                        .map(|candidate| &candidate.decision)
-                });
-
-                match decision {
-                    Some(RouteDecision::DirectUdp)
-                    | Some(RouteDecision::RelayChain { .. })
-                    | None => {
-                        let (next_hop, send_addr) = match decision {
-                            Some(RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
-                                (hops[0], peer_guard.get(hops[0]).map(|p| p.udp_addr))
-                            }
-                            _ => (
-                                target_edge_id,
-                                peer_guard.get(target_edge_id).map(|p| p.udp_addr),
-                            ),
-                        };
-                        let ttl_for_relay: Option<u8> = match decision {
-                            Some(RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
-                                Some(((hops.len() as u32 + 1).min(max_ttl).min(255)) as u8)
-                            }
-                            _ => None,
-                        };
-
-                        if let Some(addr) = send_addr {
-                            let pkt: Vec<u8> = if let Some((counter, ciphertext)) =
-                                enc_direct.as_ref()
-                            {
-                                if ttl_for_relay.is_some() {
-                                    let ttl = ttl_for_relay.unwrap();
-                                    let mut p =
-                                        Vec::with_capacity(1 + 4 + 8 + 1 + 4 + ciphertext.len());
-                                    p.push(EDGE_PKT_ENC_RELAY);
-                                    p.extend_from_slice(&my_edge_id.to_be_bytes());
-                                    p.extend_from_slice(&counter.to_be_bytes());
-                                    p.push(ttl);
-                                    p.extend_from_slice(&target_edge_id.to_be_bytes());
-                                    p.extend_from_slice(ciphertext);
-                                    p
-                                } else {
-                                    let mut p = Vec::with_capacity(1 + 4 + 8 + ciphertext.len());
-                                    p.push(EDGE_PKT_ENC_VOICE);
-                                    p.extend_from_slice(&my_edge_id.to_be_bytes());
-                                    p.extend_from_slice(&counter.to_be_bytes());
-                                    p.extend_from_slice(ciphertext);
-                                    p
-                                }
-                            } else if ttl_for_relay.is_some() {
-                                let ttl = ttl_for_relay.unwrap();
-                                let mut p = Vec::with_capacity(1 + 1 + 4 + 4 + plaintext.len());
-                                p.push(EDGE_PKT_RELAY);
-                                p.push(ttl);
-                                p.extend_from_slice(&target_edge_id.to_be_bytes());
-                                p.extend_from_slice(&sender_session.to_be_bytes());
-                                p.extend_from_slice(plaintext);
-                                p
-                            } else {
-                                let mut p = Vec::with_capacity(1 + 4 + plaintext.len());
-                                p.push(EDGE_PKT_VOICE);
-                                p.extend_from_slice(&sender_session.to_be_bytes());
-                                p.extend_from_slice(plaintext);
-                                p
-                            };
-                            edge_send_pkts.push((pkt, addr));
-                            edge_meta.push((target_edge_id, next_hop));
-                        } else if self.edge_state.enable_hub_tcp_fallback {
-                            hub_tcp_targets.push(target_edge_id);
-                        }
-                    }
-                    Some(RouteDecision::HubTcp) => {
-                        if self.edge_state.enable_hub_tcp_fallback {
-                            hub_tcp_targets.push(target_edge_id);
-                        }
-                    }
-                    Some(RouteDecision::DirectTcp) => {
-                        let sent = if let Some(pool) = voice_tcp_conns.get(&target_edge_id) {
-                            let mut frame = Vec::with_capacity(1 + 4 + plaintext.len());
-                            frame.push(EDGE_PKT_VOICE);
-                            frame.extend_from_slice(&sender_session.to_be_bytes());
-                            frame.extend_from_slice(plaintext);
-                            pool.try_send(frame)
-                        } else {
-                            false
-                        };
-                        if !sent && self.edge_state.enable_hub_tcp_fallback {
-                            hub_tcp_targets.push(target_edge_id);
-                        }
-                    }
-                }
-            }
-
-            (edge_send_pkts, edge_meta, hub_tcp_targets)
-        };
-
-        // Phase B: batch send all edge UDP packets — N edges → 1 sendmmsg syscall.
-        if !edge_send_pkts.is_empty() {
-            let sent_count;
-            #[cfg(target_os = "linux")]
-            {
-                sent_count = batch_sendmmsg(self.edge_socket.as_raw_fd(), &edge_send_pkts);
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                sent_count = batch_sendmmsg_fallback_seq(&self.edge_socket, &edge_send_pkts);
-            }
-
-            // Update hop-success counters for sent packets.
-            for (target_id, next_hop) in &edge_meta[..sent_count] {
-                reset_hop_failure(&self.edge_state.next_hop_failures, *next_hop, threshold);
-                debug!(
-                    "Voice dispatched to edge {} (via next-hop {})",
-                    target_id, next_hop
-                );
-            }
-            // Partial failure: fall back unsent packets to Hub TCP.
-            if sent_count < edge_meta.len() && self.edge_state.enable_hub_tcp_fallback {
-                warn!(
-                    "edge sendmmsg partial: sent {}/{}, falling back {} to Hub TCP",
-                    sent_count,
-                    edge_meta.len(),
-                    edge_meta.len() - sent_count
-                );
-                for (target_id, next_hop) in &edge_meta[sent_count..] {
-                    increment_hop_failure(&self.edge_state.next_hop_failures, *next_hop);
-                    self.hub_client
-                        .relay_voice_via_hub(*target_id, relay_payload.clone())
-                        .await;
-                }
-            }
-        }
-
-        // Phase C: Hub TCP relay targets (async).
-        for target_id in hub_tcp_targets {
-            self.hub_client
-                .relay_voice_via_hub(target_id, relay_payload.clone())
-                .await;
-        }
+        crate::cluster_voice::forward_source_voice_packet(
+            &self.edge_state,
+            &self.hub_client,
+            sender_session,
+            plaintext,
+            voice_target as u8,
+            targets.relay_edge_ids.as_slice(),
+        )
+        .await;
     }
 
     /// Send encrypted data to a specific session's UDP address.
@@ -1053,272 +866,75 @@ impl UdpServer {
         }
     }
 
-    /// Handle an encrypted direct-voice packet (type `0x11`).
-    ///
-    /// Wire format after stripping the type byte:
-    ///   `[sender_edge_id_BE(4)][nonce_counter_BE(8)][ChaCha20_enc(session_id_BE(4) + voice) + Poly1305_tag(16)]`
-    ///
-    /// On AEAD success the decrypted `[session_id_BE(4)][voice]` payload is fed into
-    /// `handle_edge_packet`, which delivers to local clients via OCB2-UDP or TCP tunnel.
     async fn handle_enc_voice_packet(&self, data: &[u8], peer_addr: SocketAddr) {
-        let crypto = match &self.edge_state.edge_crypto {
-            Some(c) => c,
-            None => {
-                debug!("Received encrypted edge voice but no edge_crypto configured");
-                return;
-            }
-        };
-        // Minimum after type byte: sender_edge_id(4) + counter(8) + session(4) + tag(16) = 32
-        if data.len() < 4 + 8 + 4 + AEAD_TAG_LEN {
-            return;
-        }
-        let sender_edge_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let counter = u64::from_be_bytes([
-            data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
-        ]);
-        let ciphertext = &data[12..];
-        match crypto.decrypt(sender_edge_id, counter, ciphertext, &[]) {
-            Some(plain) if plain.len() >= 4 => {
-                // plain = [session_id_BE(4)][voice_payload] — identical to unencrypted format
-                self.handle_edge_packet(&plain, peer_addr).await;
-            }
-            Some(_) => debug!(
-                "Encrypted edge voice: decrypted payload too short from edge {}",
-                sender_edge_id
-            ),
-            None => debug!(
-                "Encrypted edge voice: AEAD authentication failed from edge {}",
-                sender_edge_id
-            ),
-        }
+        self.handle_encrypted_logical_frame(data, peer_addr).await;
     }
 
-    /// Handle an encrypted relay-forward packet (type `0x12`).
-    ///
-    /// Wire format after stripping the type byte:
-    ///   `[sender_edge_id_BE(4)][nonce_counter_BE(8)][ttl(1)][target_edge_id_BE(4)]`
-    ///   `[ChaCha20_enc(session_id_BE(4) + voice) + Poly1305_tag(16)]`
-    ///
-    /// Empty AAD — Edges are cluster-internal trusted nodes; routing header integrity
-    /// is not verified by AEAD (same trust model as direct voice 0x11).
-    async fn handle_enc_relay_packet(&self, data: &[u8]) {
-        // Minimum: sender_edge_id(4) + counter(8) + ttl(1) + target(4) + session(4) + tag(16) = 37
-        if data.len() < 4 + 8 + 1 + 4 + 4 + AEAD_TAG_LEN {
-            return;
-        }
-        let sender_edge_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let counter = u64::from_be_bytes([
-            data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
-        ]);
-        let ttl = data[12];
-        let target_edge_id = u32::from_be_bytes([data[13], data[14], data[15], data[16]]);
-        let ciphertext = &data[17..];
-
-        let my_edge_id = self.edge_state.get_edge_id();
-
-        // Drop the packet if our edge_id is not yet known — we cannot verify it was meant for us.
-        if my_edge_id == 0 {
-            debug!("Encrypted relay dropped: local edge_id not yet initialized");
-            return;
-        }
-
-        if target_edge_id == my_edge_id {
-            // Destined for this Edge — decrypt and deliver locally.
-            let crypto = match &self.edge_state.edge_crypto {
-                Some(c) => c,
-                None => {
-                    debug!("Encrypted relay destined for us but no edge_crypto configured");
-                    return;
-                }
-            };
-            match crypto.decrypt(sender_edge_id, counter, ciphertext, &[]) {
-                Some(plain) if plain.len() >= 4 => {
-                    // plain = [session_id_BE(4)][voice_payload]
-                    let dummy_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
-                    self.handle_edge_packet(&plain, dummy_addr).await;
-                }
-                Some(_) => debug!(
-                    "Encrypted relay: decrypted payload too short from edge {}",
-                    sender_edge_id
-                ),
-                None => debug!(
-                    "Encrypted relay: AEAD authentication failed from edge {}",
-                    sender_edge_id
-                ),
-            }
-            return;
-        }
-
-        // Forward to next hop — relay intermediary path.
-        if ttl == 0 {
-            debug!("Encrypted relay dropped: TTL=0, target={}", target_edge_id);
-            return;
-        }
-        // Rebuild the packet with TTL decremented; ciphertext is forwarded unchanged.
-        // [0x12][sender_edge_id(4)][counter(8)][ttl-1(1)][target(4)][ciphertext]
-        let mut forward = Vec::with_capacity(1 + 4 + 8 + 1 + 4 + ciphertext.len());
-        forward.push(EDGE_PKT_ENC_RELAY);
-        forward.extend_from_slice(&sender_edge_id.to_be_bytes());
-        forward.extend_from_slice(&counter.to_be_bytes());
-        forward.push(ttl - 1);
-        forward.extend_from_slice(&target_edge_id.to_be_bytes());
-        forward.extend_from_slice(ciphertext);
-
-        let target_addr = {
-            // ArcSwap load: lock-free, no need for try_read.
-            let table = self.edge_state.route_table.load();
-            let reg = self.edge_state.peer_registry.load();
-            match table
-                .get(&target_edge_id)
-                .and_then(|cs| cs.first())
-                .map(|c| &c.decision)
-            {
-                Some(crate::state::RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
-                    reg.get(hops[0]).map(|p| p.udp_addr)
-                }
-                _ => reg.get(target_edge_id).map(|p| p.udp_addr),
-            }
-        };
-
-        if let Some(addr) = target_addr {
-            if let Err(e) = self.edge_socket.send_to(&forward, addr).await {
-                warn!(
-                    "Forward encrypted relay to edge {} failed: {}",
-                    target_edge_id, e
-                );
-            } else {
-                debug!(
-                    "Forwarded encrypted relay to edge {} (ttl={})",
-                    target_edge_id,
-                    ttl - 1
-                );
-            }
-        } else {
-            debug!(
-                "Encrypted relay target edge {} not in peer registry — dropping",
-                target_edge_id
-            );
-        }
+    async fn handle_enc_relay_packet(&self, data: &[u8], peer_addr: SocketAddr) {
+        self.handle_encrypted_logical_frame(data, peer_addr).await;
     }
 
-    /// Handle a relay-forward packet received on the edge socket.
-    ///
-    /// Format after stripping the type byte:
-    ///   [ttl(1B)][target_edge_id BE(4B)][sender_session BE(4B)][voice...]
-    ///
-    /// If TTL == 0: drop. If target == my_edge_id: deliver locally.
-    /// Otherwise: query own route table, decrement TTL, forward to next hop.
-    async fn handle_relay_packet(&self, data: &[u8]) {
-        // Minimum: 1 (ttl) + 4 (target_edge_id) + 4 (sender_session) + 1 (voice) = 10
-        if data.len() < 10 {
-            debug!("Relay packet too short ({} bytes)", data.len());
-            return;
-        }
-        let ttl = data[0];
-        if ttl == 0 {
-            debug!("Relay packet TTL expired — dropping");
-            return;
-        }
-        let target_edge_id = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-        let sender_session = u32::from_be_bytes([data[5], data[6], data[7], data[8]]);
-        let voice_data = &data[9..];
-
-        let my_edge_id = self.edge_state.get_edge_id();
-        // Drop relay packets until we have a registered edge_id.  Without this guard,
-        // a spoofed packet with target_edge_id=0 would be misdelivered locally because
-        // 0 == 0 before registration completes.
-        if my_edge_id == 0 {
-            debug!("Relay packet dropped: local edge_id not yet initialized");
-            return;
-        }
-        if target_edge_id == my_edge_id {
-            // Deliver locally — this Edge is the final destination.
-            self.deliver_voice_locally(sender_session, voice_data).await;
-            return;
-        }
-
-        // Forward to next hop with TTL decremented
-        let next_hop_addr = {
-            use crate::state::RouteDecision;
-            let table = self.edge_state.route_table.load();
-            let decision = table
-                .get(&target_edge_id)
-                .and_then(|cs| cs.first())
-                .map(|c| c.decision.clone());
-            let reg = self.edge_state.peer_registry.load();
-            match decision {
-                Some(RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
-                    reg.get(hops[0]).map(|p| p.udp_addr)
-                }
-                _ => reg.get(target_edge_id).map(|p| p.udp_addr),
-            }
-        };
-
-        if let Some(addr) = next_hop_addr {
-            let mut forward = Vec::with_capacity(1 + 1 + 4 + 4 + voice_data.len());
-            forward.push(EDGE_PKT_RELAY);
-            forward.push(ttl - 1);
-            forward.extend_from_slice(&target_edge_id.to_be_bytes());
-            forward.extend_from_slice(&sender_session.to_be_bytes());
-            forward.extend_from_slice(voice_data);
-            if let Err(e) = self.edge_socket.send_to(&forward, addr).await {
-                warn!(
-                    "Forward relay packet to edge {} at {} failed: {}",
-                    target_edge_id, addr, e
-                );
-            } else {
-                debug!(
-                    "Forwarded relay packet to edge {} at {} (ttl={})",
-                    target_edge_id,
-                    addr,
-                    ttl - 1
-                );
-            }
-        } else {
-            debug!(
-                "Relay target edge {} not in peer registry — dropping relay packet",
-                target_edge_id
-            );
-        }
+    async fn handle_relay_packet(&self, data: &[u8], peer_addr: SocketAddr) {
+        self.handle_plain_logical_frame(data, peer_addr).await;
     }
 
     /// Handle an Edge-to-Edge internal routing packet.
     async fn handle_edge_packet(&self, data: &[u8], peer_addr: SocketAddr) {
-        // Format: sender_session (4 bytes BE) + plaintext voice data
-        if data.len() < 5 {
-            debug!("Edge packet too short from {}", peer_addr);
-            return;
-        }
-        let sender_session = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let voice_data = &data[4..];
-        trace!(
-            "Relayed voice from edge {} (sender_session={}, {} bytes)",
-            peer_addr,
-            sender_session,
-            voice_data.len()
-        );
-        // Delegate to deliver_voice_locally, which emits RelayedVoice for unified routing.
-        self.deliver_voice_locally(sender_session, voice_data).await;
+        self.handle_plain_logical_frame(data, peer_addr).await;
     }
 
-    /// Deliver a relayed voice packet to local clients on this Edge.
-    async fn deliver_voice_locally(&self, sender_session: u32, voice_data: &[u8]) {
-        trace!(
-            "deliver_voice_locally: session={}, {} bytes",
-            sender_session,
-            voice_data.len()
-        );
-        // Build server-to-client format: [header][session_varint][seq][audio]
-        // Preserve the original voice_target_id in low-5 bits so routing can
-        // set the correct AudioContext per recipient.
-        let voice_packet = crate::voice::inject_session_into_voice(
-            voice_data,
-            sender_session,
-            voice_data.first().copied().unwrap_or(0) & 0x1f,
-        );
-        if !voice_packet.is_empty() {
-            crate::voice::deliver_relayed_voice(voice_packet, &self.edge_state, &self.hub_client)
+    async fn handle_plain_logical_frame(&self, data: &[u8], peer_addr: SocketAddr) {
+        if data.len() < 4 {
+            debug!("Cluster voice packet too short from {}", peer_addr);
+            return;
+        }
+
+        let ingress_peer = self.edge_state.peer_registry.load().find_by_addr(peer_addr);
+        crate::cluster_voice::handle_incoming_logical_frame(
+            Bytes::copy_from_slice(data),
+            ingress_peer,
+            &self.edge_state,
+            &self.hub_client,
+        )
+        .await;
+    }
+
+    async fn handle_encrypted_logical_frame(&self, data: &[u8], peer_addr: SocketAddr) {
+        let crypto = match &self.edge_state.edge_crypto {
+            Some(crypto) => crypto,
+            None => {
+                debug!("Received encrypted cluster voice but no edge_crypto configured");
+                return;
+            }
+        };
+        if data.len() < 8 + 4 + AEAD_TAG_LEN {
+            return;
+        }
+
+        let Some(sender_edge_id) = self.edge_state.peer_registry.load().find_by_addr(peer_addr)
+        else {
+            debug!("Encrypted cluster voice from unknown peer {}", peer_addr);
+            return;
+        };
+
+        let counter = u64::from_be_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ]);
+        let ciphertext = &data[8..];
+        match crypto.decrypt(sender_edge_id, counter, ciphertext, &[]) {
+            Some(plain) => {
+                crate::cluster_voice::handle_incoming_logical_frame(
+                    Bytes::from(plain),
+                    Some(sender_edge_id),
+                    &self.edge_state,
+                    &self.hub_client,
+                )
                 .await;
+            }
+            None => debug!(
+                "Encrypted cluster voice: AEAD authentication failed from edge {}",
+                sender_edge_id
+            ),
         }
     }
 
@@ -1539,6 +1155,7 @@ fn write_pb_varint(out: &mut Vec<u8>, mut value: u64) {
 /// a write lock only if the edge ID has never been seen before.  Both operations
 /// are synchronous (std::sync::RwLock, no await), so they can be called from the
 /// voice hot path without blocking the tokio scheduler.
+#[cfg_attr(not(feature = "test-utils"), allow(dead_code))]
 fn increment_hop_failure(
     failures: &std::sync::RwLock<std::collections::HashMap<u32, std::sync::atomic::AtomicU32>>,
     edge_id: u32,

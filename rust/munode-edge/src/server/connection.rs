@@ -1122,33 +1122,22 @@ pub(crate) async fn run_connection_inner(
                                     deliver_voice_tcp(group.sessions, &data);
                                 }
 
-                                // Relay to remote edges via Hub TCP fallback.
-                                // The relay payload preserves the original voice_target_id so
-                                // each receiving edge applies its own VoiceTarget config.
-                                // Spawned as an independent task so the TCP read loop continues
-                                // processing (Ping, UserState, etc.) without waiting for Hub RPC.
-                                if !targets.relay_edge_ids.is_empty()
-                                    && edge_state.enable_hub_tcp_fallback
-                                {
-                                    let relay_payload: bytes::Bytes = inject_session_into_voice(
-                                        &frame.payload,
+                                // Cross-edge forwarding now uses the source-rooted
+                                // dissemination slice instead of target-by-target relay.
+                                let forward_state = Arc::clone(&edge_state);
+                                let forward_hub = Arc::clone(&hub_client);
+                                let forward_payload = frame.payload.clone();
+                                tokio::spawn(async move {
+                                    crate::cluster_voice::forward_source_voice_packet(
+                                        &forward_state,
+                                        &forward_hub,
                                         sid,
+                                        &forward_payload,
                                         voice_target as u8,
+                                        targets.relay_edge_ids.as_slice(),
                                     )
-                                    .into();
-                                    let hub_relay = Arc::clone(&hub_client);
-                                    let relay_ids = targets.relay_edge_ids.clone();
-                                    tokio::spawn(async move {
-                                        for target_edge_id in relay_ids {
-                                            hub_relay
-                                                .relay_voice_via_hub(
-                                                    target_edge_id,
-                                                    relay_payload.clone(),
-                                                )
-                                                .await;
-                                        }
-                                    });
-                                }
+                                    .await;
+                                });
                             }
                         }
                     }
