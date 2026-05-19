@@ -274,6 +274,12 @@ port    = 8080                         # Default: 8080
 #
 # Available endpoints:
 #   GET  /api/health        – liveness probe
+#   GET  /api/status        – hub runtime status
+#   GET  /api/edges         – connected edge summary
+#   GET  /api/topology      – observed topology and link quality
+#   GET  /api/dissemination – authoritative per-edge dissemination views
+#   GET  /api/voice_targets – cluster-wide voice target snapshot
+#   GET  /api/clients       – active client sessions across the cluster
 #   GET  /metrics           – Prometheus metrics
 #   GET  /api/bans          – list active and expired bans
 #   DELETE /api/bans/:id    – remove a specific ban

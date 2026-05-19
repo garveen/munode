@@ -210,10 +210,13 @@ enabled            = true              # Default: true
 # Enable the HTTP Web API for local monitoring.
 # Common endpoints include /api/status, /api/stats, /api/sessions,
 # /api/peers, /api/topology, /api/topology/matrix,
-# /api/diagnostics/peer-quality, and /api/health.
-# These endpoints expose per-session metadata, peer topology, and local UDP
-# probe quality state. Always set `api_token` when binding to a non-loopback
-# host, otherwise any remote caller can read that data.
+# /api/dissemination, /api/voice_targets,
+# /api/voice_targets/session/:id, /api/diagnostics/peer-quality,
+# and /api/health.
+# These endpoints expose per-session metadata, peer topology, source-rooted
+# dissemination state, local voice-target cache, and local UDP probe quality
+# state. Always set `api_token` when binding to a non-loopback host, otherwise
+# any remote caller can read that data.
 # Docker requires 0.0.0.0 to expose outside the container.
 enabled = false                        # Default: false
 host    = "127.0.0.1"                  # Default: 0.0.0.0 — switch to 127.0.0.1 unless api_token is set
