@@ -285,35 +285,18 @@ impl UdpServer {
                                         );
                                     }
 
-                                    let average_rtt_ms = pqs
-                                        .average_rtt_ms()
-                                        .or(pqs.last_report_average_rtt_ms);
-                                    let packet_loss = pqs
-                                        .packet_loss()
-                                        .or(pqs.last_report_packet_loss);
-                                    let jitter_ms = pqs
-                                        .jitter_ms()
-                                        .or(pqs.last_report_jitter_ms)
-                                        .or(Some(0.0));
-
-                                    let (average_rtt_ms, packet_loss) =
-                                        match (average_rtt_ms, packet_loss) {
-                                            (Some(rtt), Some(loss)) => (rtt, loss),
-                                            _ => return None,
+                                    let (average_rtt_ms, packet_loss, jitter_ms, samples) =
+                                        match quality_report_metrics(pqs) {
+                                            Some(metrics) => metrics,
+                                            None => return None,
                                         };
 
                                     pqs.last_report_ms = Some(report_now_ms);
                                     pqs.last_report_average_rtt_ms = Some(average_rtt_ms);
                                     pqs.last_report_packet_loss = Some(packet_loss);
-                                    pqs.last_report_jitter_ms = jitter_ms;
+                                    pqs.last_report_jitter_ms = Some(jitter_ms);
 
-                                    Some((
-                                        eid,
-                                        average_rtt_ms,
-                                        packet_loss,
-                                        jitter_ms.unwrap_or(0.0),
-                                        pqs.sample_count() as u32,
-                                    ))
+                                    Some((eid, average_rtt_ms, packet_loss, jitter_ms, samples))
                                 }).collect();
                                 result
                             };
@@ -1124,6 +1107,25 @@ fn build_probe_datagram(
     }
 }
 
+fn quality_report_metrics(quality: &PeerQualityState) -> Option<(f32, f32, f32, u32)> {
+    let packet_loss = quality.packet_loss().or(quality.last_report_packet_loss)?;
+    let average_rtt_ms = quality
+        .average_rtt_ms()
+        .or(quality.last_report_average_rtt_ms)
+        .unwrap_or(0.0);
+    let jitter_ms = quality
+        .jitter_ms()
+        .or(quality.last_report_jitter_ms)
+        .unwrap_or(0.0);
+
+    Some((
+        average_rtt_ms,
+        packet_loss,
+        jitter_ms,
+        quality.sample_count() as u32,
+    ))
+}
+
 fn bind_session_addr(
     addr_to_session: &DashMap<SocketAddr, u32>,
     session_to_addr: &DashMap<u32, SocketAddr>,
@@ -1145,7 +1147,8 @@ fn bind_session_addr(
 
 #[cfg(test)]
 mod tests {
-    use super::bind_session_addr;
+    use super::{bind_session_addr, quality_report_metrics};
+    use crate::state::PeerQualityState;
     use dashmap::DashMap;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
@@ -1172,6 +1175,18 @@ mod tests {
             session_to_addr.get(&10_001).map(|entry| *entry.value()),
             Some(new_addr)
         );
+    }
+
+    #[test]
+    fn quality_report_metrics_keeps_full_loss_without_rtt_samples() {
+        let mut quality = PeerQualityState::default();
+
+        quality.pending_pings.insert(1, 100);
+        quality.expire_stale_pings(200, 50, 32);
+
+        assert_eq!(quality.rtt_sample_count(), 0);
+        assert_eq!(quality.packet_loss(), Some(1.0));
+        assert_eq!(quality_report_metrics(&quality), Some((0.0, 1.0, 0.0, 1)));
     }
 }
 

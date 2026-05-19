@@ -502,7 +502,10 @@ impl TopologyManager {
     ) -> f32 {
         self.link_quality
             .get(&(for_edge_id, target_id))
-            .map(|q| (q.rtt_ms * 1.5 + config.edge_tcp_penalty_ms) as f32)
+            .map(|q| {
+                ((q.rtt_ms * 1.5 + config.edge_tcp_penalty_ms) as f32)
+                    .max(DEFAULT_DIRECT_TCP_COST_MS)
+            })
             .unwrap_or(DEFAULT_DIRECT_TCP_COST_MS)
     }
 
@@ -728,7 +731,10 @@ impl TopologyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{LinkQuality, TopologyEdge, TopologyManager};
+    use super::{
+        DEFAULT_DIRECT_TCP_COST_MS, LinkQuality, PACKET_LOSS_PENALTY_MS, TopologyEdge,
+        TopologyManager,
+    };
     use munode_common::config::HubVoiceRoutingConfig;
     use std::collections::HashSet;
     use std::time::Instant;
@@ -791,5 +797,45 @@ mod tests {
             .find(|plan| plan.source_edge_id == 1)
             .expect("missing source=1 plan for edge 3");
         assert!(edge3_source1.active_children.is_empty());
+    }
+
+    #[test]
+    fn full_loss_report_penalizes_udp_without_making_tcp_artificially_free() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(edge(1));
+        topo.add_edge(edge(2));
+
+        topo.report_quality(
+            1,
+            2,
+            LinkQuality {
+                rtt_ms: 0.0,
+                packet_loss: 1.0,
+                jitter_ms: 0.0,
+                samples: 30,
+                last_update: Instant::now(),
+            },
+        );
+
+        let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
+        let mut direct_udp_cost = None;
+        let mut direct_tcp_cost = None;
+        let mut hub_tcp_cost = None;
+
+        for (target_id, route_type, _, cost) in routes {
+            if target_id != 2 {
+                continue;
+            }
+            match route_type {
+                0 => direct_udp_cost = Some(cost),
+                2 => hub_tcp_cost = Some(cost),
+                3 => direct_tcp_cost = Some(cost),
+                _ => {}
+            }
+        }
+
+        assert_eq!(direct_udp_cost, Some(PACKET_LOSS_PENALTY_MS as f32));
+        assert_eq!(direct_tcp_cost, Some(DEFAULT_DIRECT_TCP_COST_MS));
+        assert!(hub_tcp_cost.unwrap_or_default() > direct_tcp_cost.unwrap_or_default());
     }
 }
