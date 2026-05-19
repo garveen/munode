@@ -7,6 +7,9 @@
 //!   GET /api/peers                — Known peer Edges with route and quality summary
 //!   GET /api/topology             — Local topology graph with inline quality summary
 //!   GET /api/topology/matrix      — Matrix view of the local topology graph
+//!   GET /api/dissemination        — Local source-rooted dissemination view
+//!   GET /api/voice_targets        — Local cached voice-target configs and route cache
+//!   GET /api/voice_targets/session/:id — Voice targets for one speaking session
 //!   GET /api/diagnostics/peer-quality — Raw local UDP probe quality snapshots
 //!   GET /api/health               — Liveness probe (always 200 OK)
 
@@ -17,7 +20,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use axum::{
     Router,
     body::Body,
-    extract::State,
+    extract::{Path, State},
     http::{Request, StatusCode, header},
     middleware::{self, Next},
     response::{Json, Response},
@@ -28,7 +31,11 @@ use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::peer_registry::PeerEdgeInfo;
-use crate::state::{EdgeState, HopTransport, PeerQualitySnapshot, RouteCandidate, RouteDecision};
+use crate::state::{
+    DisseminationSourceState, EdgeState, HopTransport, PeerQualitySnapshot, RouteCandidate,
+    RouteDecision,
+};
+use crate::voice_target::{SessionWhisperRouteCache, VoiceTargetChannelConfig, VoiceTargetConfig};
 
 type AppState = Arc<WebApiContext>;
 
@@ -393,6 +400,87 @@ pub struct TopologyMatrixResponse {
     pub source_edge_id: u32,
     pub nodes: Vec<TopologyNode>,
     pub cells: Vec<TopologyMatrixCell>,
+    pub timestamp: u64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct DisseminationBranchBackupEntry {
+    pub primary_child_edge_id: u32,
+    pub backup_next_hops: Vec<u32>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct DisseminationSourceEntry {
+    pub source_edge_id: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub active_children: Vec<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub duplicate_children: Vec<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub branch_backups: Vec<DisseminationBranchBackupEntry>,
+}
+
+#[derive(Serialize)]
+pub struct DisseminationResponse {
+    pub edge_id: u32,
+    pub route_epoch: u64,
+    pub total_sources: usize,
+    pub sources: Vec<DisseminationSourceEntry>,
+    pub timestamp: u64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct VoiceTargetChannelEntry {
+    pub channel_id: u32,
+    pub children: bool,
+    pub links: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct VoiceTargetResolvedChannelEntry {
+    pub channel_id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct VoiceTargetConfigEntry {
+    pub sessions: Vec<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub channels: Vec<VoiceTargetChannelEntry>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub resolved_channels: Vec<VoiceTargetResolvedChannelEntry>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct VoiceTargetRouteCacheEntry {
+    pub topology_version: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub direct_sessions: Vec<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub channel_sessions: Vec<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub relay_edge_ids: Vec<u32>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct VoiceTargetEntry {
+    pub client_session: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_id: Option<u32>,
+    pub target_id: u32,
+    pub config: VoiceTargetConfigEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_route: Option<VoiceTargetRouteCacheEntry>,
+}
+
+#[derive(Serialize)]
+pub struct VoiceTargetListResponse {
+    pub source_edge_id: u32,
+    pub total: usize,
+    pub voice_targets: Vec<VoiceTargetEntry>,
     pub timestamp: u64,
 }
 
@@ -818,6 +906,185 @@ fn build_topology_matrix(
     matrix
 }
 
+fn dissemination_source_entry(
+    source_edge_id: u32,
+    state: &DisseminationSourceState,
+) -> DisseminationSourceEntry {
+    let mut active_children = state.active_children.clone();
+    active_children.sort_unstable();
+
+    let mut duplicate_children = state.duplicate_children.clone();
+    duplicate_children.sort_unstable();
+
+    let mut branch_backups: Vec<_> = state
+        .branch_backups
+        .iter()
+        .map(|(&primary_child_edge_id, backup_next_hops)| {
+            let mut backup_next_hops = backup_next_hops.clone();
+            backup_next_hops.sort_unstable();
+            DisseminationBranchBackupEntry {
+                primary_child_edge_id,
+                backup_next_hops,
+            }
+        })
+        .collect();
+    branch_backups.sort_by_key(|entry| entry.primary_child_edge_id);
+
+    DisseminationSourceEntry {
+        source_edge_id,
+        active_children,
+        duplicate_children,
+        branch_backups,
+    }
+}
+
+fn build_dissemination_entries(
+    routes: &HashMap<u32, DisseminationSourceState>,
+) -> Vec<DisseminationSourceEntry> {
+    let mut entries: Vec<_> = routes
+        .iter()
+        .map(|(&source_edge_id, state)| dissemination_source_entry(source_edge_id, state))
+        .collect();
+    entries.sort_by_key(|entry| entry.source_edge_id);
+    entries
+}
+
+fn voice_target_channel_entry(channel: &VoiceTargetChannelConfig) -> VoiceTargetChannelEntry {
+    VoiceTargetChannelEntry {
+        channel_id: channel.channel_id,
+        children: channel.children,
+        links: channel.links,
+        group: channel.group.clone(),
+    }
+}
+
+fn voice_target_config_entry(config: &VoiceTargetConfig) -> VoiceTargetConfigEntry {
+    let mut sessions = config.sessions.clone();
+    sessions.sort_unstable();
+
+    let mut channels: Vec<_> = config
+        .channels
+        .iter()
+        .map(voice_target_channel_entry)
+        .collect();
+    channels.sort_by(|left, right| {
+        (
+            left.channel_id,
+            left.children,
+            left.links,
+            left.group.as_deref(),
+        )
+            .cmp(&(
+                right.channel_id,
+                right.children,
+                right.links,
+                right.group.as_deref(),
+            ))
+    });
+
+    let mut resolved_channels: Vec<_> = config
+        .resolved_channels
+        .iter()
+        .map(|(&channel_id, groups)| {
+            let mut groups = groups.clone();
+            if let Some(items) = groups.as_mut() {
+                items.sort();
+            }
+            VoiceTargetResolvedChannelEntry { channel_id, groups }
+        })
+        .collect();
+    resolved_channels.sort_by_key(|entry| entry.channel_id);
+
+    VoiceTargetConfigEntry {
+        sessions,
+        channels,
+        resolved_channels,
+    }
+}
+
+fn voice_target_route_cache_entry(
+    topology_version: u64,
+    route: &crate::voice_target::WhisperRouteCacheEntry,
+) -> VoiceTargetRouteCacheEntry {
+    let mut direct_sessions: Vec<_> = route.direct_sessions.iter().copied().collect();
+    direct_sessions.sort_unstable();
+
+    let mut channel_sessions: Vec<_> = route.channel_sessions.iter().copied().collect();
+    channel_sessions.sort_unstable();
+
+    let mut relay_edge_ids: Vec<_> = route.relay_edge_ids.iter().copied().collect();
+    relay_edge_ids.sort_unstable();
+
+    VoiceTargetRouteCacheEntry {
+        topology_version,
+        direct_sessions,
+        channel_sessions,
+        relay_edge_ids,
+    }
+}
+
+fn build_voice_target_entries(
+    session_edge_ids: &HashMap<u32, u32>,
+    voice_targets: &HashMap<u32, HashMap<u32, VoiceTargetConfig>>,
+    whisper_route_cache: &HashMap<u32, SessionWhisperRouteCache>,
+) -> Vec<VoiceTargetEntry> {
+    let mut entries = Vec::new();
+
+    for (&client_session, targets) in voice_targets {
+        let cached_session = whisper_route_cache.get(&client_session);
+
+        for (&target_id, config) in targets {
+            let cached_route = cached_session.and_then(|session_cache| {
+                session_cache.targets.get(&target_id).map(|route| {
+                    voice_target_route_cache_entry(session_cache.topology_version, route)
+                })
+            });
+
+            entries.push(VoiceTargetEntry {
+                client_session,
+                edge_id: session_edge_ids.get(&client_session).copied(),
+                target_id,
+                config: voice_target_config_entry(config),
+                cached_route,
+            });
+        }
+    }
+
+    entries.sort_by_key(|entry| (entry.client_session, entry.target_id));
+    entries
+}
+
+async fn collect_voice_target_entries(context: &WebApiContext) -> Vec<VoiceTargetEntry> {
+    let source_edge_id = context.source_edge_id();
+
+    let local_clients = context.edge_state.client_manager.get_all_clients().await;
+    let remote_users = context
+        .edge_state
+        .channel_manager
+        .get_all_remote_users()
+        .await;
+
+    let mut session_edge_ids = HashMap::new();
+    for client in local_clients {
+        session_edge_ids.insert(client.session, source_edge_id);
+    }
+    for user in remote_users {
+        if user.edge_id != 0 {
+            session_edge_ids.insert(user.session_id, user.edge_id);
+        }
+    }
+
+    let voice_targets = context.edge_state.voice_targets.read().await.clone();
+    let whisper_route_cache = context
+        .edge_state
+        .whisper_route_cache
+        .read()
+        .unwrap()
+        .clone();
+
+    build_voice_target_entries(&session_edge_ids, &voice_targets, &whisper_route_cache)
+}
+
 async fn collect_overview(context: &WebApiContext) -> EdgeOverview {
     let source_edge_id = context.source_edge_id();
     let local_client_count = context
@@ -1061,6 +1328,50 @@ async fn handle_topology_matrix(State(context): State<AppState>) -> Json<Topolog
     })
 }
 
+async fn handle_dissemination(State(context): State<AppState>) -> Json<DisseminationResponse> {
+    let routes = context.edge_state.dissemination_routes.load_full();
+    let sources = build_dissemination_entries(&routes);
+
+    Json(DisseminationResponse {
+        edge_id: context.source_edge_id(),
+        route_epoch: context
+            .edge_state
+            .dissemination_route_epoch
+            .load(Ordering::Relaxed),
+        total_sources: sources.len(),
+        sources,
+        timestamp: now_secs(),
+    })
+}
+
+async fn handle_voice_targets(State(context): State<AppState>) -> Json<VoiceTargetListResponse> {
+    let voice_targets = collect_voice_target_entries(context.as_ref()).await;
+    let total = voice_targets.len();
+
+    Json(VoiceTargetListResponse {
+        source_edge_id: context.source_edge_id(),
+        total,
+        voice_targets,
+        timestamp: now_secs(),
+    })
+}
+
+async fn handle_voice_targets_by_session(
+    State(context): State<AppState>,
+    Path(session_id): Path<u32>,
+) -> Json<VoiceTargetListResponse> {
+    let mut voice_targets = collect_voice_target_entries(context.as_ref()).await;
+    voice_targets.retain(|entry| entry.client_session == session_id);
+    let total = voice_targets.len();
+
+    Json(VoiceTargetListResponse {
+        source_edge_id: context.source_edge_id(),
+        total,
+        voice_targets,
+        timestamp: now_secs(),
+    })
+}
+
 async fn handle_peer_quality_diagnostics(
     State(context): State<AppState>,
 ) -> Json<PeerQualityDiagnosticsResponse> {
@@ -1097,6 +1408,12 @@ fn data_routes() -> Router<AppState> {
         .route("/api/peers", get(handle_peers))
         .route("/api/topology", get(handle_topology))
         .route("/api/topology/matrix", get(handle_topology_matrix))
+        .route("/api/dissemination", get(handle_dissemination))
+        .route("/api/voice_targets", get(handle_voice_targets))
+        .route(
+            "/api/voice_targets/session/:id",
+            get(handle_voice_targets_by_session),
+        )
         .route(
             "/api/diagnostics/peer-quality",
             get(handle_peer_quality_diagnostics),
@@ -1202,11 +1519,18 @@ pub async fn run_web_api(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectivityState, EdgeLinkType, EdgeRouteCandidateEntry, EdgeRouteKind,
-        build_known_edge_entries, build_route_stats, build_topology_matrix, edge_link_type,
+        ConnectivityState, DisseminationBranchBackupEntry, EdgeLinkType, EdgeRouteCandidateEntry,
+        EdgeRouteKind, VoiceTargetChannelEntry, VoiceTargetResolvedChannelEntry,
+        build_dissemination_entries, build_known_edge_entries, build_route_stats,
+        build_topology_matrix, build_voice_target_entries, edge_link_type,
     };
     use crate::peer_registry::PeerEdgeInfo;
-    use crate::state::{HopTransport, RouteCandidate, RouteDecision};
+    use crate::state::{DisseminationSourceState, HopTransport, RouteCandidate, RouteDecision};
+    use crate::voice_target::{
+        SessionWhisperRouteCache, VoiceTargetChannelConfig, VoiceTargetConfig,
+        WhisperRouteCacheEntry,
+    };
+    use smallvec::smallvec;
     use std::collections::HashMap;
 
     fn known_edge(
@@ -1386,5 +1710,135 @@ mod tests {
         assert!(!unobserved.observed);
         assert_eq!(unobserved.state, ConnectivityState::Unknown);
         assert_eq!(unobserved.route, None);
+    }
+
+    #[test]
+    fn build_dissemination_entries_sorts_sources_children_and_backups() {
+        let routes = HashMap::from([
+            (
+                3,
+                DisseminationSourceState {
+                    active_children: vec![5, 2],
+                    duplicate_children: vec![5, 4],
+                    branch_backups: HashMap::from([(5, vec![9, 7]), (2, vec![6])]),
+                },
+            ),
+            (1, DisseminationSourceState::default()),
+        ]);
+
+        let entries = build_dissemination_entries(&routes);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].source_edge_id, 1);
+        assert_eq!(entries[1].source_edge_id, 3);
+        assert_eq!(entries[1].active_children, vec![2, 5]);
+        assert_eq!(entries[1].duplicate_children, vec![4, 5]);
+        assert_eq!(
+            entries[1].branch_backups,
+            vec![
+                DisseminationBranchBackupEntry {
+                    primary_child_edge_id: 2,
+                    backup_next_hops: vec![6],
+                },
+                DisseminationBranchBackupEntry {
+                    primary_child_edge_id: 5,
+                    backup_next_hops: vec![7, 9],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn build_voice_target_entries_includes_sorted_config_and_cached_route() {
+        let session_edge_ids = HashMap::from([(10_001, 4)]);
+        let voice_targets = HashMap::from([(
+            10_001,
+            HashMap::from([(
+                7,
+                VoiceTargetConfig {
+                    sessions: vec![9, 4],
+                    channels: vec![
+                        VoiceTargetChannelConfig {
+                            channel_id: 3,
+                            links: false,
+                            children: true,
+                            group: Some("admins".into()),
+                        },
+                        VoiceTargetChannelConfig {
+                            channel_id: 1,
+                            links: true,
+                            children: false,
+                            group: None,
+                        },
+                    ],
+                    resolved_channels: HashMap::from([
+                        (5, Some(vec!["beta".into(), "alpha".into()])),
+                        (2, None),
+                    ]),
+                },
+            )]),
+        )]);
+        let whisper_route_cache = HashMap::from([(
+            10_001,
+            SessionWhisperRouteCache {
+                topology_version: 42,
+                targets: HashMap::from([(
+                    7,
+                    WhisperRouteCacheEntry {
+                        direct_sessions: smallvec![9, 4],
+                        channel_sessions: smallvec![12, 11],
+                        relay_edge_ids: smallvec![8, 6],
+                    },
+                )]),
+            },
+        )]);
+
+        let entries =
+            build_voice_target_entries(&session_edge_ids, &voice_targets, &whisper_route_cache);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].client_session, 10_001);
+        assert_eq!(entries[0].edge_id, Some(4));
+        assert_eq!(entries[0].target_id, 7);
+        assert_eq!(entries[0].config.sessions, vec![4, 9]);
+        assert_eq!(
+            entries[0].config.channels,
+            vec![
+                VoiceTargetChannelEntry {
+                    channel_id: 1,
+                    children: false,
+                    links: true,
+                    group: None,
+                },
+                VoiceTargetChannelEntry {
+                    channel_id: 3,
+                    children: true,
+                    links: false,
+                    group: Some("admins".into()),
+                },
+            ]
+        );
+        assert_eq!(
+            entries[0].config.resolved_channels,
+            vec![
+                VoiceTargetResolvedChannelEntry {
+                    channel_id: 2,
+                    groups: None,
+                },
+                VoiceTargetResolvedChannelEntry {
+                    channel_id: 5,
+                    groups: Some(vec!["alpha".into(), "beta".into()]),
+                },
+            ]
+        );
+
+        let cached_route = entries[0]
+            .cached_route
+            .as_ref()
+            .expect("missing cached route");
+        assert_eq!(cached_route.topology_version, 42);
+        assert_eq!(cached_route.direct_sessions, vec![4, 9]);
+        assert_eq!(cached_route.channel_sessions, vec![11, 12]);
+        assert_eq!(cached_route.relay_edge_ids, vec![6, 8]);
     }
 }

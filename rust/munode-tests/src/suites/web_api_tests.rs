@@ -1,6 +1,7 @@
 //! Hub Web API integration tests — migrated from `tests/integration/suites/web-api.test.ts`.
 
 use anyhow::Result;
+use munode_protocol::mumbleproto;
 use serde_json::Value;
 
 use crate::harness::{ClientConfig, cleanup_clients, create_clients, single_edge_env};
@@ -103,6 +104,117 @@ async fn test_topology_returns_edges_and_links() -> Result<()> {
     assert!(body.get("edges").and_then(Value::as_array).is_some());
     assert!(body.get("links").and_then(Value::as_array).is_some());
     Ok(())
+}
+
+#[tokio::test]
+async fn test_dissemination_returns_edge_views() -> Result<()> {
+    let env = single_edge_env().await?;
+    let (status, body) = get_json(env.web_api_port, "/api/dissemination").await?;
+    assert_eq!(status, 200);
+
+    let edges = body
+        .get("edges")
+        .and_then(Value::as_array)
+        .expect("dissemination edges should be array");
+    assert!(!edges.is_empty(), "should expose at least one edge view");
+
+    let first = &edges[0];
+    let edge_id = first
+        .get("edge_id")
+        .and_then(Value::as_u64)
+        .expect("edge_id missing");
+    assert!(first.get("name").and_then(Value::as_str).is_some());
+    assert!(first.get("source_count").and_then(Value::as_u64).is_some());
+    assert!(first.get("sources").and_then(Value::as_array).is_some());
+
+    let (status, detail) = get_json(
+        env.web_api_port,
+        &format!("/api/dissemination/edge/{}", edge_id),
+    )
+    .await?;
+    assert_eq!(status, 200);
+    assert_eq!(detail.get("edge_id").and_then(Value::as_u64), Some(edge_id));
+
+    let (status, _) = get_json(env.web_api_port, "/api/dissemination/edge/999999").await?;
+    assert_eq!(status, 404);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_voice_targets_endpoint_tracks_updates() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)],
+    )
+    .await?;
+
+    let test_result = async {
+        let sender = &clients[0];
+        let target = &clients[1];
+        let sender_session = sender.session_id().expect("sender session missing");
+        let target_session = target.session_id().expect("target session missing");
+
+        sender
+            .voice()
+            .set_target(
+                1,
+                vec![mumbleproto::voice_target::Target {
+                    session: vec![target_session],
+                    ..Default::default()
+                }],
+            )
+            .await?;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let (status, body) = get_json(env.web_api_port, "/api/voice_targets").await?;
+        assert_eq!(status, 200);
+        let entries = body
+            .get("voice_targets")
+            .and_then(Value::as_array)
+            .expect("voice_targets should be array");
+        let entry = entries
+            .iter()
+            .find(|entry| {
+                entry.get("client_session").and_then(Value::as_u64) == Some(sender_session as u64)
+                    && entry.get("target_id").and_then(Value::as_u64) == Some(1)
+            })
+            .expect("missing sender voice target entry");
+
+        let sessions = entry
+            .pointer("/config/sessions")
+            .and_then(Value::as_array)
+            .expect("config.sessions should be array");
+        assert!(
+            sessions
+                .iter()
+                .any(|value| value.as_u64() == Some(target_session as u64)),
+            "voice target should include configured receiver session"
+        );
+
+        let (status, body) = get_json(
+            env.web_api_port,
+            &format!("/api/voice_targets/session/{}", sender_session),
+        )
+        .await?;
+        assert_eq!(status, 200);
+        let entries = body
+            .get("voice_targets")
+            .and_then(Value::as_array)
+            .expect("session voice_targets should be array");
+        assert!(
+            entries
+                .iter()
+                .any(|item| item.get("target_id").and_then(Value::as_u64) == Some(1)),
+            "session-scoped endpoint should retain the configured target"
+        );
+
+        Ok(())
+    }
+    .await;
+
+    cleanup_clients(clients).await;
+    test_result
 }
 
 #[tokio::test]

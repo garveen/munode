@@ -192,7 +192,7 @@ Rust 版本有意简化配置选项，主要原因：
 
 以下功能已在 Rust 版本中实现（但与 TypeScript 实现方式不同）：
 
-- **Web API** - 已实现 `/api/status`、`/api/stats`、`/api/sessions`、`/api/peers`、`/api/topology`、`/api/topology/matrix`、`/api/diagnostics/peer-quality`、`/api/health` 端点
+- **Web API** - Edge 已实现 `/api/status`、`/api/stats`、`/api/sessions`、`/api/peers`、`/api/topology`、`/api/topology/matrix`、`/api/dissemination`、`/api/voice_targets`、`/api/voice_targets/session/:id`、`/api/diagnostics/peer-quality`、`/api/health`；Hub 已实现 `/api/status`、`/api/edges`、`/api/stats`、`/api/topology`、`/api/dissemination`、`/api/voice_targets`、`/api/voice_targets/session/:id`、`/api/clients`、`/api/bans`、`/metrics` 等端点
 - **Blob 存储** - 已实现，直接内嵌于 SQLite 数据库（使用 SHA-256 内容寻址）
 
 ## 配置最佳实践
@@ -295,6 +295,9 @@ port = 8080                      # 监听端口
 # GET /api/peers   — 已知对端 Edge 与路由/质量摘要
 # GET /api/topology — 本地拓扑图（节点和链路）
 # GET /api/topology/matrix — 本地拓扑矩阵视图
+# GET /api/dissemination — 当前 Edge 收到的 source-rooted 扩散切片
+# GET /api/voice_targets — 本地缓存的 voice target 配置和 whisper 路由缓存
+# GET /api/voice_targets/session/:id — 指定说话 session 的 voice target 视图
 # GET /api/diagnostics/peer-quality — 原始本地 UDP 探测质量快照
 
 log_level = "info"

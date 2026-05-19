@@ -6,6 +6,8 @@
 //!   GET /api/edges/:id                      — Specific Edge details
 //!   GET /api/stats                          — Hub statistics (sessions, channels, …)
 //!   GET /api/topology                       — Network topology (edges and links)
+//!   GET /api/dissemination                  — Authoritative per-Edge dissemination views
+//!   GET /api/dissemination/edge/:id         — Dissemination view for a specific Edge
 //!   GET /api/health                         — Liveness probe (always 200 OK)
 //!   GET /api/clients                        — All active client sessions (Hub-wide view)
 //!   GET /api/bans                           — List active ban records
@@ -31,6 +33,7 @@ use serde_json::json;
 use tracing::{error, info};
 
 use crate::server::HubState;
+use crate::topology_manager::SourceDisseminationPlan;
 
 /// Shared state passed to axum handlers.
 type AppState = Arc<HubState>;
@@ -204,6 +207,37 @@ pub struct TopologyLink {
 pub struct TopologyResponse {
     pub edges: Vec<EdgeSummary>,
     pub links: Vec<TopologyLink>,
+    pub timestamp: u64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct DisseminationBranchBackupInfo {
+    pub primary_child_edge_id: u32,
+    pub backup_next_hops: Vec<u32>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct DisseminationSourceInfo {
+    pub source_edge_id: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub active_children: Vec<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub duplicate_children: Vec<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub branch_backups: Vec<DisseminationBranchBackupInfo>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct EdgeDisseminationInfo {
+    pub edge_id: u32,
+    pub name: String,
+    pub source_count: usize,
+    pub sources: Vec<DisseminationSourceInfo>,
+}
+
+#[derive(Serialize)]
+pub struct DisseminationResponse {
+    pub edges: Vec<EdgeDisseminationInfo>,
     pub timestamp: u64,
 }
 
@@ -420,6 +454,90 @@ async fn handle_topology(State(state): State<AppState>) -> Json<TopologyResponse
         links,
         timestamp: now_secs(),
     })
+}
+
+fn dissemination_source_info(plan: SourceDisseminationPlan) -> DisseminationSourceInfo {
+    let mut active_children = plan.active_children;
+    active_children.sort_unstable();
+
+    let mut duplicate_children = plan.duplicate_children;
+    duplicate_children.sort_unstable();
+
+    let mut branch_backups: Vec<_> = plan
+        .branch_backups
+        .into_iter()
+        .map(|(primary_child_edge_id, mut backup_next_hops)| {
+            backup_next_hops.sort_unstable();
+            DisseminationBranchBackupInfo {
+                primary_child_edge_id,
+                backup_next_hops,
+            }
+        })
+        .collect();
+    branch_backups.sort_by_key(|entry| entry.primary_child_edge_id);
+
+    DisseminationSourceInfo {
+        source_edge_id: plan.source_edge_id,
+        active_children,
+        duplicate_children,
+        branch_backups,
+    }
+}
+
+fn dissemination_edge_info(
+    edge_id: u32,
+    name: String,
+    plans: Vec<SourceDisseminationPlan>,
+) -> EdgeDisseminationInfo {
+    let mut sources: Vec<_> = plans.into_iter().map(dissemination_source_info).collect();
+    sources.sort_by_key(|entry| entry.source_edge_id);
+
+    EdgeDisseminationInfo {
+        edge_id,
+        name,
+        source_count: sources.len(),
+        sources,
+    }
+}
+
+async fn collect_dissemination_views(state: &AppState) -> Vec<EdgeDisseminationInfo> {
+    let edge_reg = state.edge_registry.read().await;
+    let topo = state.topology.read().await;
+
+    let mut edge_ids: Vec<u32> = edge_reg.keys().copied().collect();
+    edge_ids.sort_unstable();
+
+    edge_ids
+        .into_iter()
+        .map(|edge_id| {
+            let name = edge_reg
+                .get(&edge_id)
+                .map(|entry| entry.name.clone())
+                .unwrap_or_else(|| format!("Edge {}", edge_id));
+            let plans = topo.compute_dissemination_plan(edge_id, &state.config.voice_routing);
+            dissemination_edge_info(edge_id, name, plans)
+        })
+        .collect()
+}
+
+async fn handle_dissemination(State(state): State<AppState>) -> Json<DisseminationResponse> {
+    let edges = collect_dissemination_views(&state).await;
+    Json(DisseminationResponse {
+        edges,
+        timestamp: now_secs(),
+    })
+}
+
+async fn handle_dissemination_by_edge(
+    State(state): State<AppState>,
+    Path(edge_id): Path<u32>,
+) -> Result<Json<EdgeDisseminationInfo>, StatusCode> {
+    collect_dissemination_views(&state)
+        .await
+        .into_iter()
+        .find(|entry| entry.edge_id == edge_id)
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn handle_health() -> Json<HealthResponse> {
@@ -775,6 +893,11 @@ pub fn build_router(state: Arc<HubState>) -> Router {
         .route("/api/edges/:id", get(handle_edge_detail))
         .route("/api/stats", get(handle_stats))
         .route("/api/topology", get(handle_topology))
+        .route("/api/dissemination", get(handle_dissemination))
+        .route(
+            "/api/dissemination/edge/:id",
+            get(handle_dissemination_by_edge),
+        )
         .route("/api/health", get(handle_health))
         .route("/api/clients", get(handle_clients))
         .route("/api/bans", get(handle_bans))
