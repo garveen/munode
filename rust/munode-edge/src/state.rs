@@ -106,18 +106,30 @@ pub struct RemoteUserStateDelta {
 }
 
 /// Per-peer local quality tracking state used by UDP probe reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerQualitySampleSource {
+    Probe,
+    DirectVoice,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PeerQualitySample {
+    pub expected_packets: u32,
+    pub received_packets: u32,
+    pub rtt_ms: Option<f32>,
+    pub source: PeerQualitySampleSource,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PeerQualityState {
     /// Pending ping sequences: seq → sent_ms.
     pub pending_pings: HashMap<u32, u64>,
-    /// Recent RTT samples in milliseconds.
-    pub rtt_samples: VecDeque<f32>,
-    /// Probes sent since the current reporting window started.
-    pub probes_sent: u32,
-    /// Pongs received since the current reporting window started.
-    pub pongs_received: u32,
+    /// Completed rolling quality observations.
+    pub samples: VecDeque<PeerQualitySample>,
     /// Next probe sequence number.
     pub next_seq: u32,
+    /// Last accepted transport sequence from the direct peer voice stream.
+    pub last_direct_voice_seq: Option<u16>,
     /// Last time a probe was sent to this peer.
     pub last_probe_sent_ms: Option<u64>,
     /// Last time a pong was received from this peer.
@@ -133,30 +145,194 @@ pub struct PeerQualityState {
 }
 
 impl PeerQualityState {
+    fn push_sample(&mut self, sample: PeerQualitySample, sample_window_size: usize) {
+        if sample.expected_packets == 0 {
+            return;
+        }
+
+        self.samples.push_back(sample);
+        while self.samples.len() > sample_window_size.max(1) {
+            self.samples.pop_front();
+        }
+    }
+
+    pub fn expire_stale_pings(&mut self, now_ms: u64, timeout_ms: u64, sample_window_size: usize) {
+        let stale: Vec<u32> = self
+            .pending_pings
+            .iter()
+            .filter_map(|(&seq, &sent_ms)| {
+                now_ms
+                    .saturating_sub(sent_ms)
+                    .ge(&timeout_ms)
+                    .then_some(seq)
+            })
+            .collect();
+
+        for seq in stale {
+            self.pending_pings.remove(&seq);
+            self.push_sample(
+                PeerQualitySample {
+                    expected_packets: 1,
+                    received_packets: 0,
+                    rtt_ms: None,
+                    source: PeerQualitySampleSource::Probe,
+                },
+                sample_window_size,
+            );
+        }
+    }
+
+    pub fn record_probe_success(
+        &mut self,
+        seq: u32,
+        now_ms: u64,
+        sample_window_size: usize,
+    ) -> bool {
+        let Some(sent_ms) = self.pending_pings.remove(&seq) else {
+            return false;
+        };
+
+        let rtt_ms = now_ms.saturating_sub(sent_ms) as f32;
+        self.push_sample(
+            PeerQualitySample {
+                expected_packets: 1,
+                received_packets: 1,
+                rtt_ms: Some(rtt_ms),
+                source: PeerQualitySampleSource::Probe,
+            },
+            sample_window_size,
+        );
+        self.last_pong_received_ms = Some(now_ms);
+        true
+    }
+
+    pub fn record_direct_voice_packet(&mut self, seq: u16, sample_window_size: usize) {
+        match self.last_direct_voice_seq {
+            Some(previous_seq) => {
+                let ahead = seq.wrapping_sub(previous_seq);
+                if ahead != 0 && ahead < 0x8000 {
+                    self.push_sample(
+                        PeerQualitySample {
+                            expected_packets: ahead as u32,
+                            received_packets: 1,
+                            rtt_ms: None,
+                            source: PeerQualitySampleSource::DirectVoice,
+                        },
+                        sample_window_size,
+                    );
+                    self.last_direct_voice_seq = Some(seq);
+                }
+            }
+            None => {
+                self.push_sample(
+                    PeerQualitySample {
+                        expected_packets: 1,
+                        received_packets: 1,
+                        rtt_ms: None,
+                        source: PeerQualitySampleSource::DirectVoice,
+                    },
+                    sample_window_size,
+                );
+                self.last_direct_voice_seq = Some(seq);
+            }
+        }
+    }
+
+    pub fn sample_count(&self) -> usize {
+        self.samples
+            .iter()
+            .map(|sample| sample.expected_packets as usize)
+            .sum()
+    }
+
+    pub fn probe_sample_count(&self) -> usize {
+        self.samples
+            .iter()
+            .filter(|sample| sample.source == PeerQualitySampleSource::Probe)
+            .count()
+    }
+
+    pub fn probe_success_count(&self) -> usize {
+        self.samples
+            .iter()
+            .filter(|sample| {
+                sample.source == PeerQualitySampleSource::Probe && sample.received_packets > 0
+            })
+            .count()
+    }
+
+    pub fn direct_voice_sample_count(&self) -> usize {
+        self.samples
+            .iter()
+            .filter(|sample| sample.source == PeerQualitySampleSource::DirectVoice)
+            .count()
+    }
+
+    pub fn direct_voice_totals(&self) -> (u32, u32) {
+        self.samples
+            .iter()
+            .fold((0, 0), |(expected, received), sample| {
+                if sample.source == PeerQualitySampleSource::DirectVoice {
+                    (
+                        expected.saturating_add(sample.expected_packets),
+                        received.saturating_add(sample.received_packets),
+                    )
+                } else {
+                    (expected, received)
+                }
+            })
+    }
+
+    pub fn rtt_sample_count(&self) -> usize {
+        self.samples
+            .iter()
+            .filter(|sample| sample.rtt_ms.is_some())
+            .count()
+    }
+
+    pub fn rtt_samples_ms(&self) -> Vec<f32> {
+        self.samples
+            .iter()
+            .filter_map(|sample| sample.rtt_ms)
+            .collect()
+    }
+
     pub fn average_rtt_ms(&self) -> Option<f32> {
-        if self.rtt_samples.is_empty() {
+        let rtt_samples = self.rtt_samples_ms();
+        if rtt_samples.is_empty() {
             None
         } else {
-            Some(self.rtt_samples.iter().sum::<f32>() / self.rtt_samples.len() as f32)
+            Some(rtt_samples.iter().sum::<f32>() / rtt_samples.len() as f32)
         }
     }
 
     pub fn packet_loss(&self) -> Option<f32> {
-        if self.probes_sent == 0 {
+        let (expected_packets, received_packets) =
+            self.samples
+                .iter()
+                .fold((0u32, 0u32), |(expected, received), sample| {
+                    (
+                        expected.saturating_add(sample.expected_packets),
+                        received.saturating_add(sample.received_packets),
+                    )
+                });
+
+        if expected_packets == 0 {
             None
         } else {
-            Some((1.0 - (self.pongs_received as f32 / self.probes_sent as f32)).clamp(0.0, 1.0))
+            Some((1.0 - (received_packets as f32 / expected_packets as f32)).clamp(0.0, 1.0))
         }
     }
 
     pub fn jitter_ms(&self) -> Option<f32> {
-        if self.rtt_samples.len() < 2 {
+        let rtt_samples = self.rtt_samples_ms();
+        if rtt_samples.len() < 2 {
             return None;
         }
 
         let mut diffs = 0.0;
         let mut count = 0usize;
-        let mut iter = self.rtt_samples.iter().copied();
+        let mut iter = rtt_samples.into_iter();
         let mut previous = match iter.next() {
             Some(value) => value,
             None => return None,
@@ -172,15 +348,23 @@ impl PeerQualityState {
     }
 
     pub fn snapshot(&self, edge_id: u32) -> PeerQualitySnapshot {
+        let rtt_samples_ms = self.rtt_samples_ms();
+        let (direct_voice_expected_packets, direct_voice_received_packets) =
+            self.direct_voice_totals();
         PeerQualitySnapshot {
             edge_id,
             average_rtt_ms: self.average_rtt_ms(),
             packet_loss: self.packet_loss(),
             jitter_ms: self.jitter_ms(),
-            rtt_samples_ms: self.rtt_samples.iter().copied().collect(),
-            sample_count: self.rtt_samples.len(),
-            probes_sent: self.probes_sent,
-            pongs_received: self.pongs_received,
+            rtt_samples_ms,
+            sample_count: self.sample_count(),
+            rtt_sample_count: self.rtt_sample_count(),
+            probe_sample_count: self.probe_sample_count(),
+            direct_voice_sample_count: self.direct_voice_sample_count(),
+            direct_voice_expected_packets,
+            direct_voice_received_packets,
+            probes_sent: self.probe_sample_count() as u32 + self.pending_pings.len() as u32,
+            pongs_received: self.probe_success_count() as u32,
             pending_ping_count: self.pending_pings.len(),
             next_seq: self.next_seq,
             last_probe_sent_ms: self.last_probe_sent_ms,
@@ -202,6 +386,11 @@ pub struct PeerQualitySnapshot {
     pub jitter_ms: Option<f32>,
     pub rtt_samples_ms: Vec<f32>,
     pub sample_count: usize,
+    pub rtt_sample_count: usize,
+    pub probe_sample_count: usize,
+    pub direct_voice_sample_count: usize,
+    pub direct_voice_expected_packets: u32,
+    pub direct_voice_received_packets: u32,
     pub probes_sent: u32,
     pub pongs_received: u32,
     pub pending_ping_count: usize,
@@ -213,6 +402,9 @@ pub struct PeerQualitySnapshot {
     pub last_report_packet_loss: Option<f32>,
     pub last_report_jitter_ms: Option<f32>,
 }
+
+const DEFAULT_PEER_QUALITY_SAMPLE_WINDOW_SIZE: u32 = 30;
+const DEFAULT_PEER_QUALITY_PROBE_TIMEOUT_SECS: u32 = 3;
 
 /// Events broadcast within the Edge server.
 #[derive(Debug, Clone)]
@@ -561,8 +753,12 @@ pub struct EdgeState {
     /// Cross-process fault injection loaded from environment variables at Edge startup.
     pub test_network_faults: TestNetworkFaults,
     /// Locally held UDP probe quality state keyed by peer edge ID.
-    /// Shared between `udp.rs` and the Web API for local observability.
+    /// Shared between `udp.rs`, `cluster_voice.rs`, and the Web API for local observability.
     pub peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
+    /// Rolling observation window size for peer-quality samples.
+    pub peer_quality_sample_window_size: AtomicU32,
+    /// Probe timeout used when converting unanswered pings into loss samples.
+    pub peer_quality_probe_timeout_secs: AtomicU32,
     /// Whether this Edge is currently accepting new Mumble client connections.
     /// Set to `false` when Hub becomes unreachable for too long; restored to `true`
     /// when Hub reconnects and registration completes.
@@ -676,6 +872,12 @@ impl EdgeState {
             test_udp_drop_rate: AtomicU32::new(0),
             test_network_faults,
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
+            peer_quality_sample_window_size: AtomicU32::new(
+                DEFAULT_PEER_QUALITY_SAMPLE_WINDOW_SIZE,
+            ),
+            peer_quality_probe_timeout_secs: AtomicU32::new(
+                DEFAULT_PEER_QUALITY_PROBE_TIMEOUT_SECS,
+            ),
             accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
             used_session_ids: RwLock::new(HashSet::new()),
@@ -733,6 +935,12 @@ impl EdgeState {
             test_udp_drop_rate: AtomicU32::new(0),
             test_network_faults,
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
+            peer_quality_sample_window_size: AtomicU32::new(
+                DEFAULT_PEER_QUALITY_SAMPLE_WINDOW_SIZE,
+            ),
+            peer_quality_probe_timeout_secs: AtomicU32::new(
+                DEFAULT_PEER_QUALITY_PROBE_TIMEOUT_SECS,
+            ),
             accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
             used_session_ids: RwLock::new(HashSet::new()),
@@ -760,6 +968,8 @@ impl EdgeState {
         rolling_stats_window: u32,
         hmac_secret: Option<&str>,
         peer_voice_tcp_pool_size: usize,
+        peer_quality_sample_window_size: usize,
+        peer_quality_probe_timeout_secs: u64,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(4096);
         let edge_crypto = hmac_secret.and_then(EdgeCrypto::from_secret).map(Arc::new);
@@ -796,6 +1006,12 @@ impl EdgeState {
             test_udp_drop_rate: AtomicU32::new(0),
             test_network_faults,
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
+            peer_quality_sample_window_size: AtomicU32::new(
+                peer_quality_sample_window_size.max(1) as u32
+            ),
+            peer_quality_probe_timeout_secs: AtomicU32::new(
+                peer_quality_probe_timeout_secs.max(1) as u32
+            ),
             accepting_connections: AtomicBool::new(true),
             edge_crypto,
             used_session_ids: RwLock::new(HashSet::new()),
@@ -820,6 +1036,30 @@ impl EdgeState {
             .store(config.server.allow_ping, Ordering::Relaxed);
         self.rolling_stats_window
             .store(config.server.rolling_stats_window, Ordering::Relaxed);
+        self.peer_quality_sample_window_size.store(
+            config.voice_routing.quality.sample_window_size.max(1) as u32,
+            Ordering::Relaxed,
+        );
+        self.peer_quality_probe_timeout_secs.store(
+            config.voice_routing.quality.probe_timeout_secs.max(1) as u32,
+            Ordering::Relaxed,
+        );
+    }
+
+    #[inline]
+    pub fn peer_quality_sample_window_size(&self) -> usize {
+        self.peer_quality_sample_window_size
+            .load(Ordering::Relaxed)
+            .max(1) as usize
+    }
+
+    #[inline]
+    pub fn peer_quality_probe_timeout_ms(&self) -> u64 {
+        u64::from(
+            self.peer_quality_probe_timeout_secs
+                .load(Ordering::Relaxed)
+                .max(1),
+        ) * 1000
     }
 
     /// Get the current edge ID (0 = not yet registered with Hub).
@@ -865,12 +1105,29 @@ impl EdgeState {
         }
     }
 
+    pub async fn observe_direct_peer_voice_packet(&self, ingress_peer: u32, seq: u16) {
+        if ingress_peer == 0 {
+            return;
+        }
+
+        let sample_window_size = self.peer_quality_sample_window_size();
+        let mut quality = self.peer_quality.lock().await;
+        let entry = quality.entry(ingress_peer).or_default();
+        entry.record_direct_voice_packet(seq, sample_window_size);
+    }
+
     /// Snapshot the locally held UDP probe quality state for Web API consumers.
     pub async fn peer_quality_snapshots(&self) -> Vec<PeerQualitySnapshot> {
-        let quality = self.peer_quality.lock().await;
+        let now_ms = peer_quality_current_millis();
+        let timeout_ms = self.peer_quality_probe_timeout_ms();
+        let sample_window_size = self.peer_quality_sample_window_size();
+        let mut quality = self.peer_quality.lock().await;
         let mut snapshots: Vec<_> = quality
-            .iter()
-            .map(|(&edge_id, state)| state.snapshot(edge_id))
+            .iter_mut()
+            .map(|(&edge_id, state)| {
+                state.expire_stale_pings(now_ms, timeout_ms, sample_window_size);
+                state.snapshot(edge_id)
+            })
             .collect();
         snapshots.sort_by_key(|snapshot| snapshot.edge_id);
         snapshots
@@ -1013,9 +1270,16 @@ impl EdgeState {
     }
 }
 
+fn peer_quality_current_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{EdgeState, RollingDedupeWindow};
+    use super::{EdgeState, PeerQualityState, RollingDedupeWindow};
     use crate::channel_manager::{ChannelData, ChannelManager};
     use crate::client::ClientManager;
     use crate::hot_slot::get_hot_slot;
@@ -1122,6 +1386,42 @@ mod tests {
         assert!(window.accept(u16::MAX));
         assert!(window.accept(0));
         assert!(!window.accept(0));
+    }
+
+    #[test]
+    fn peer_quality_state_combines_probe_rtt_and_loss_in_one_window() {
+        let mut quality = PeerQualityState::default();
+
+        quality.pending_pings.insert(1, 100);
+        assert!(quality.record_probe_success(1, 150, 32));
+
+        quality.pending_pings.insert(2, 200);
+        quality.expire_stale_pings(260, 40, 32);
+
+        assert_eq!(quality.sample_count(), 2);
+        assert_eq!(quality.rtt_sample_count(), 1);
+        assert_eq!(quality.probe_sample_count(), 2);
+        assert_eq!(quality.probe_success_count(), 1);
+        assert_eq!(quality.average_rtt_ms(), Some(50.0));
+        assert_eq!(quality.packet_loss(), Some(0.5));
+    }
+
+    #[test]
+    fn peer_quality_state_uses_direct_voice_gaps_as_loss_signal() {
+        let mut quality = PeerQualityState::default();
+
+        quality.record_direct_voice_packet(10, 32);
+        quality.record_direct_voice_packet(11, 32);
+        quality.record_direct_voice_packet(14, 32);
+
+        let (expected_packets, received_packets) = quality.direct_voice_totals();
+        assert_eq!(expected_packets, 5);
+        assert_eq!(received_packets, 3);
+        assert_eq!(quality.direct_voice_sample_count(), 3);
+        let loss = quality
+            .packet_loss()
+            .expect("direct voice loss should be computed");
+        assert!((loss - 0.4).abs() < 0.0001);
     }
 
     #[tokio::test]

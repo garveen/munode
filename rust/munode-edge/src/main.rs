@@ -253,6 +253,12 @@ enabled                       = true
 enable_hub_tcp_fallback       = true
 consecutive_failure_threshold = 2
 
+[voice_routing.quality]
+probe_interval_secs           = 1
+report_interval_secs          = 5
+probe_timeout_secs            = 3
+sample_window_size            = 30
+
 [voice_routing.relay]
 enabled             = true
 "#;

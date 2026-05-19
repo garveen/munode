@@ -86,6 +86,12 @@ pub async fn handle_incoming_logical_frame(
         "Cluster voice packet accepted"
     );
 
+    if ingress_peer == Some(parsed.source_edge_id) {
+        state
+            .observe_direct_peer_voice_packet(parsed.source_edge_id, parsed.transport_packet_seq)
+            .await;
+    }
+
     crate::voice::deliver_relayed_voice(frame.slice(parsed.payload_offset..), state, hub_client)
         .await;
 

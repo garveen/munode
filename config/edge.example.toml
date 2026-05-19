@@ -199,6 +199,22 @@ enable_hub_tcp_fallback = true                # Default: true
 # Consecutive UDP send failures before skipping a next-hop (0 = disabled)
 consecutive_failure_threshold = 2             # Default: 2
 
+[voice_routing.quality]
+# Active UDP probe interval between peer Edges, in seconds.
+# 1s keeps route quality fresh enough for WAN voice while remaining tiny compared to audio load.
+probe_interval_secs = 1                       # Default: 1
+
+# Edge -> Hub quality report interval, in seconds.
+# Reports use the current rolling sample window instead of resetting counters every cycle.
+report_interval_secs = 5                      # Default: 5
+
+# Count a probe as lost when no pong arrives within this timeout.
+probe_timeout_secs = 3                        # Default: 3
+
+# Rolling window size for local peer quality observations.
+# The same window feeds RTT, packet loss, and diagnostics.
+sample_window_size = 30                       # Default: 30
+
 [voice_routing.relay]
 # Enable Hub-mediated voice relay
 enabled            = true              # Default: true

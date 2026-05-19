@@ -240,6 +240,34 @@ impl Default for EdgeVoiceRelayConfig {
     }
 }
 
+/// Quality probing configuration for Edge-to-Edge UDP links.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeVoiceQualityConfig {
+    /// Interval between active UDP probe pings to each peer Edge.
+    #[serde(default = "default_quality_probe_interval_secs")]
+    pub probe_interval_secs: u64,
+    /// Interval between Edge → Hub quality reports.
+    #[serde(default = "default_quality_report_interval_secs")]
+    pub report_interval_secs: u64,
+    /// Timeout after which an unanswered probe is counted as lost.
+    #[serde(default = "default_quality_probe_timeout_secs")]
+    pub probe_timeout_secs: u64,
+    /// Rolling observation window size for local quality statistics.
+    #[serde(default = "default_quality_sample_window_size")]
+    pub sample_window_size: usize,
+}
+
+impl Default for EdgeVoiceQualityConfig {
+    fn default() -> Self {
+        Self {
+            probe_interval_secs: default_quality_probe_interval_secs(),
+            report_interval_secs: default_quality_report_interval_secs(),
+            probe_timeout_secs: default_quality_probe_timeout_secs(),
+            sample_window_size: default_quality_sample_window_size(),
+        }
+    }
+}
+
 /// Voice routing configuration for the Edge server.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EdgeVoiceRoutingConfig {
@@ -262,6 +290,9 @@ pub struct EdgeVoiceRoutingConfig {
     /// voice until the failed connection reconnects.  Default: 2.
     #[serde(default = "default_peer_voice_tcp_pool_size")]
     pub peer_voice_tcp_pool_size: u32,
+    /// UDP link-quality probe and reporting configuration.
+    #[serde(default)]
+    pub quality: EdgeVoiceQualityConfig,
     /// Relay node configuration.
     #[serde(default)]
     pub relay: EdgeVoiceRelayConfig,
@@ -274,6 +305,7 @@ impl Default for EdgeVoiceRoutingConfig {
             enable_hub_tcp_fallback: true,
             consecutive_failure_threshold: default_consecutive_failure_threshold(),
             peer_voice_tcp_pool_size: default_peer_voice_tcp_pool_size(),
+            quality: EdgeVoiceQualityConfig::default(),
             relay: EdgeVoiceRelayConfig::default(),
         }
     }
@@ -1143,6 +1175,18 @@ fn default_max_ttl() -> u32 {
 }
 fn default_peer_voice_tcp_pool_size() -> u32 {
     2
+}
+fn default_quality_probe_interval_secs() -> u64 {
+    1
+}
+fn default_quality_report_interval_secs() -> u64 {
+    5
+}
+fn default_quality_probe_timeout_secs() -> u64 {
+    3
+}
+fn default_quality_sample_window_size() -> usize {
+    30
 }
 
 /// GeoIP configuration.

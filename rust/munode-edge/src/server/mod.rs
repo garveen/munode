@@ -86,6 +86,8 @@ impl EdgeServer {
             self.config.server.rolling_stats_window,
             self.config.hub_server.hmac_secret.as_deref(),
             self.config.voice_routing.peer_voice_tcp_pool_size as usize,
+            self.config.voice_routing.quality.sample_window_size,
+            self.config.voice_routing.quality.probe_timeout_secs,
         );
 
         if !edge_state.test_network_faults.is_empty() {
@@ -127,6 +129,7 @@ impl EdgeServer {
                 edge_udp_addr,
                 edge_state.clone(),
                 hub_client.clone(),
+                self.config.voice_routing.quality.clone(),
             )
             .await?,
         );

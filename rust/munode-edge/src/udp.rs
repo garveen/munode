@@ -12,6 +12,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
+use munode_common::config::EdgeVoiceQualityConfig;
 use munode_protocol::transport::EDGE_MAGIC;
 
 use crate::hot_slot::get_hot_slot;
@@ -75,19 +76,6 @@ const EDGE_PKT_ENC_RELAY: u8 = 0x12;
 /// Overhead of the Poly1305 authentication tag appended to every encrypted payload.
 const AEAD_TAG_LEN: usize = 16;
 
-/// How often to send UDP ping probes to peer Edges (seconds).
-/// 10 s gives a reasonable balance: fresh enough to catch a link quality change
-/// within half a minute, but light enough that probes are <1% of voice traffic.
-const PROBE_PING_INTERVAL_SECS: u64 = 10;
-
-/// How often to report accumulated quality metrics to Hub (seconds).
-/// 30 s keeps Hub-side route tables up-to-date within one minute while avoiding
-/// a flood of RPC calls during the probe window.
-const PROBE_REPORT_INTERVAL_SECS: u64 = 30;
-
-/// Maximum number of RTT samples kept per peer for the rolling average.
-const MAX_RTT_SAMPLES: usize = 10;
-
 /// UDP server for Mumble voice data with OCB2-AES128 encryption.
 ///
 /// Workflow:
@@ -129,6 +117,7 @@ pub struct UdpServer {
     /// Channel for edge relay/direct packets: capacity 4096 (relay has priority).
     relay_tx: async_channel::Sender<(u8, Bytes, SocketAddr)>,
     relay_rx: async_channel::Receiver<(u8, Bytes, SocketAddr)>,
+    quality_config: EdgeVoiceQualityConfig,
 }
 
 impl UdpServer {
@@ -137,6 +126,7 @@ impl UdpServer {
         edge_addr: SocketAddr,
         edge_state: Arc<EdgeState>,
         hub_client: Arc<HubClient>,
+        quality_config: EdgeVoiceQualityConfig,
     ) -> Result<Self> {
         let socket = Arc::new(UdpSocket::bind(client_addr).await?);
         info!("UDP (client) server listening on {}", client_addr);
@@ -168,6 +158,7 @@ impl UdpServer {
             client_rx,
             relay_tx,
             relay_rx,
+            quality_config,
         })
     }
 
@@ -207,23 +198,34 @@ impl UdpServer {
             let probe_state = Arc::clone(&self.edge_state);
             let probe_hub = Arc::clone(&self.hub_client);
             let probe_quality = Arc::clone(&self.peer_quality);
+            let quality_config = self.quality_config.clone();
             tokio::spawn(async move {
-                let mut ping_interval =
-                    tokio::time::interval(Duration::from_secs(PROBE_PING_INTERVAL_SECS));
-                let mut report_interval =
-                    tokio::time::interval(Duration::from_secs(PROBE_REPORT_INTERVAL_SECS));
+                let mut ping_interval = tokio::time::interval(Duration::from_secs(
+                    quality_config.probe_interval_secs.max(1),
+                ));
+                let mut report_interval = tokio::time::interval(Duration::from_secs(
+                    quality_config.report_interval_secs.max(1),
+                ));
                 loop {
                     tokio::select! {
                         _ = ping_interval.tick() => {
+                            let now_ms = probe_current_millis();
+                            let timeout_ms = probe_state.peer_quality_probe_timeout_ms();
+                            let sample_window_size = probe_state.peer_quality_sample_window_size();
+                            {
+                                let mut pq = probe_quality.lock().await;
+                                for state in pq.values_mut() {
+                                    state.expire_stale_pings(now_ms, timeout_ms, sample_window_size);
+                                }
+                            }
+
                             let peers = {
                                 probe_state.peer_registry.load().all_udp_peers()
                             };
-                            let now_ms = probe_current_millis();
                             for (peer_id, peer_addr) in peers {
                                 let seq = {
                                     let mut pq = probe_quality.lock().await;
                                     let entry = pq.entry(peer_id).or_default();
-                                    entry.probes_sent += 1;
                                     entry.next_seq = entry.next_seq.wrapping_add(1);
                                     let s = entry.next_seq;
                                     entry.pending_pings.insert(s, now_ms);
@@ -241,31 +243,29 @@ impl UdpServer {
                         _ = report_interval.tick() => {
                             let my_edge_id = probe_state.get_edge_id();
                             if my_edge_id == 0 { continue; }
-                            let entries: Vec<(u32, f32, f32)> = {
+                            let entries: Vec<(u32, f32, f32, f32, u32)> = {
                                 let report_now_ms = probe_current_millis();
+                                let timeout_ms = probe_state.peer_quality_probe_timeout_ms();
+                                let sample_window_size = probe_state.peer_quality_sample_window_size();
                                 let mut pq = probe_quality.lock().await;
-                                let result = pq.iter().map(|(&eid, pqs)| {
-                                    let rtt = if pqs.rtt_samples.is_empty() { 0.0 } else {
-                                        pqs.rtt_samples.iter().sum::<f32>() / pqs.rtt_samples.len() as f32
-                                    };
-                                    let loss = if pqs.probes_sent == 0 { 0.0 } else {
-                                        1.0 - (pqs.pongs_received as f32 / pqs.probes_sent as f32)
-                                    };
-                                    (eid, rtt, loss.clamp(0.0, 1.0))
-                                }).collect();
-                                for pqs in pq.values_mut() {
+                                let result = pq.iter_mut().map(|(&eid, pqs)| {
+                                    pqs.expire_stale_pings(report_now_ms, timeout_ms, sample_window_size);
                                     pqs.last_report_ms = Some(report_now_ms);
                                     pqs.last_report_average_rtt_ms = pqs.average_rtt_ms();
                                     pqs.last_report_packet_loss = pqs.packet_loss();
                                     pqs.last_report_jitter_ms = pqs.jitter_ms();
-                                    pqs.probes_sent = 0;
-                                    pqs.pongs_received = 0;
-                                    pqs.pending_pings.clear();
-                                }
+                                    (
+                                        eid,
+                                        pqs.average_rtt_ms().unwrap_or(0.0),
+                                        pqs.packet_loss().unwrap_or(0.0),
+                                        pqs.jitter_ms().unwrap_or(0.0),
+                                        pqs.sample_count() as u32,
+                                    )
+                                }).collect();
                                 result
                             };
-                            for (target_edge_id, rtt, loss) in entries {
-                                probe_hub.report_quality(target_edge_id, rtt, loss, 0.0, 10).await;
+                            for (target_edge_id, rtt, loss, jitter, samples) in entries {
+                                probe_hub.report_quality(target_edge_id, rtt, loss, jitter, samples).await;
                             }
                         }
                     }
@@ -963,24 +963,19 @@ impl UdpServer {
             let now_ms = probe_current_millis();
             let sender_edge_id = { self.edge_state.peer_registry.load().find_by_addr(from_addr) };
             if let Some(edge_id) = sender_edge_id {
+                let sample_window_size = self.edge_state.peer_quality_sample_window_size();
                 let mut pq = self.peer_quality.lock().await;
                 let entry = pq.entry(edge_id).or_default();
-                if let Some(sent) = entry.pending_pings.remove(&seq) {
-                    let rtt = (now_ms.saturating_sub(sent)) as f32;
-                    entry.rtt_samples.push_back(rtt);
-                    if entry.rtt_samples.len() > MAX_RTT_SAMPLES {
-                        entry.rtt_samples.pop_front();
-                    }
-                    entry.pongs_received += 1;
-                    entry.last_pong_received_ms = Some(now_ms);
-                }
+                let matched = entry.record_probe_success(seq, now_ms, sample_window_size);
                 drop(pq);
                 // Successful pong resets consecutive failure counter for this peer
-                reset_hop_failure(
-                    &self.edge_state.next_hop_failures,
-                    edge_id,
-                    self.edge_state.consecutive_failure_threshold,
-                );
+                if matched {
+                    reset_hop_failure(
+                        &self.edge_state.next_hop_failures,
+                        edge_id,
+                        self.edge_state.consecutive_failure_threshold,
+                    );
+                }
             }
         }
     }
