@@ -22,7 +22,8 @@ services:
     build:
       <<: *build-common
       target: hub-runtime
-      # BuildKit local caches are not safe to share across concurrent exports.
+      # Keep BuildKit exporter state role-local. Cargo compile caches are shared
+      # inside rust/Dockerfile, while separate local cache roots avoid exporter races.
       cache_from:
         - type=local,src=.build-cache/hub
       cache_to:
@@ -34,7 +35,6 @@ services:
     build:
       <<: *build-common
       target: edge-runtime
-      # Keep edge and hub cache state isolated to avoid ingest directory races.
       cache_from:
         - type=local,src=.build-cache/edge
       cache_to:

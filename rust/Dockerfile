@@ -12,8 +12,8 @@ ARG no_proxy
 FROM rust:alpine3.23 AS chef-base
 
 RUN apk add --no-cache protobuf-dev cmake musl-dev openssl-dev openssl-libs-static pkgconf
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,id=munode-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=munode-cargo-git,target=/usr/local/cargo/git \
     cargo install cargo-chef --locked
 WORKDIR /build
 
@@ -31,9 +31,11 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef-base AS edge-builder
 COPY --from=edge-planner /build/recipe.json recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,id=munode-target-edge,target=/build/target \
+# Share all Cargo build caches across hub and edge. The target directory uses a
+# locked mount because Cargo artefacts are not safe for concurrent writers.
+RUN --mount=type=cache,id=munode-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=munode-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=munode-target,target=/build/target,sharing=locked \
     cargo chef cook --release --recipe-path recipe.json
 
 COPY rust/Cargo.toml rust/Cargo.lock ./
@@ -43,9 +45,9 @@ ENV MUNODE_PROTO_DIR=/proto
 COPY rust/munode-protocol/ munode-protocol/
 COPY rust/munode-common/ munode-common/
 COPY rust/munode-edge/ munode-edge/
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,id=munode-target-edge,target=/build/target \
+RUN --mount=type=cache,id=munode-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=munode-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=munode-target,target=/build/target,sharing=locked \
     cargo build --release --bin munode-edge \
     && cp target/release/munode-edge /usr/local/bin/
 
@@ -63,9 +65,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef-base AS hub-builder
 COPY --from=hub-planner /build/recipe.json recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,id=munode-target-hub,target=/build/target \
+RUN --mount=type=cache,id=munode-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=munode-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=munode-target,target=/build/target,sharing=locked \
     cargo chef cook --release --recipe-path recipe.json
 
 COPY rust/Cargo.toml rust/Cargo.lock ./
@@ -75,9 +77,9 @@ ENV MUNODE_PROTO_DIR=/proto
 COPY rust/munode-protocol/ munode-protocol/
 COPY rust/munode-common/ munode-common/
 COPY rust/munode-hub/ munode-hub/
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,id=munode-target-hub,target=/build/target \
+RUN --mount=type=cache,id=munode-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=munode-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=munode-target,target=/build/target,sharing=locked \
     cargo build --release --bin munode-hub \
     && cp target/release/munode-hub /usr/local/bin/
 
