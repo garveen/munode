@@ -742,6 +742,10 @@ pub struct EdgeState {
     /// Maps peer_edge_id → connection pool (N independent WebSocket connections).
     /// Populated on peerJoined; lock-free reads via ArcSwap.
     pub voice_tcp_conns: ArcSwap<HashMap<u32, Arc<PeerVoiceTcpPool>>>,
+    /// Current inbound `/voice` WebSocket connections keyed by peer edge ID.
+    /// Tracks how many peer-to-peer voice streams this Edge is actively accepting
+    /// from each remote Edge.
+    pub incoming_voice_tcp_connections: std::sync::RwLock<HashMap<u32, usize>>,
     /// Set of peer edge IDs for which a voice TCP connection manager task is running.
     /// Inserting an ID before spawning the task prevents duplicate reconnect tasks.
     /// Removing an ID (on hub.peerLeft) causes the reconnect loop to stop.
@@ -877,6 +881,7 @@ impl EdgeState {
             transport_packet_seq: AtomicU32::new(0),
             dissemination_dedupe: std::sync::Mutex::new(HashMap::new()),
             voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
+            incoming_voice_tcp_connections: std::sync::RwLock::new(HashMap::new()),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: 2,
             hub_limits: RwLock::new(None),
@@ -940,6 +945,7 @@ impl EdgeState {
             transport_packet_seq: AtomicU32::new(0),
             dissemination_dedupe: std::sync::Mutex::new(HashMap::new()),
             voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
+            incoming_voice_tcp_connections: std::sync::RwLock::new(HashMap::new()),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: 2,
             hub_limits: RwLock::new(None),
@@ -1011,6 +1017,7 @@ impl EdgeState {
             transport_packet_seq: AtomicU32::new(0),
             dissemination_dedupe: std::sync::Mutex::new(HashMap::new()),
             voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
+            incoming_voice_tcp_connections: std::sync::RwLock::new(HashMap::new()),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: peer_voice_tcp_pool_size.max(1),
             hub_limits: RwLock::new(None),
@@ -1127,6 +1134,41 @@ impl EdgeState {
         let mut quality = self.peer_quality.lock().await;
         let entry = quality.entry(ingress_peer).or_default();
         entry.record_direct_voice_packet(seq, sample_window_size);
+    }
+
+    pub fn note_incoming_voice_tcp_connected(&self, peer_edge_id: u32) {
+        if peer_edge_id == 0 {
+            return;
+        }
+
+        if let Ok(mut counts) = self.incoming_voice_tcp_connections.write() {
+            *counts.entry(peer_edge_id).or_insert(0) += 1;
+        }
+    }
+
+    pub fn note_incoming_voice_tcp_disconnected(&self, peer_edge_id: u32) {
+        if peer_edge_id == 0 {
+            return;
+        }
+
+        if let Ok(mut counts) = self.incoming_voice_tcp_connections.write() {
+            let Some(count) = counts.get_mut(&peer_edge_id) else {
+                return;
+            };
+
+            if *count > 1 {
+                *count -= 1;
+            } else {
+                counts.remove(&peer_edge_id);
+            }
+        }
+    }
+
+    pub fn incoming_voice_tcp_connection_counts(&self) -> HashMap<u32, usize> {
+        self.incoming_voice_tcp_connections
+            .read()
+            .map(|counts| counts.clone())
+            .unwrap_or_default()
     }
 
     /// Snapshot the locally held UDP probe quality state for Web API consumers.

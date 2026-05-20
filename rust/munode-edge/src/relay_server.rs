@@ -82,6 +82,28 @@ const RELAY_RESPONSE_MAGIC: u8 = 0xC2;
 /// Maximum time allowed for the challenge-response handshake to complete.
 const RELAY_AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
+struct IncomingVoiceTcpConnectionGuard {
+    edge_state: Arc<EdgeState>,
+    peer_edge_id: u32,
+}
+
+impl IncomingVoiceTcpConnectionGuard {
+    fn new(edge_state: Arc<EdgeState>, peer_edge_id: u32) -> Self {
+        edge_state.note_incoming_voice_tcp_connected(peer_edge_id);
+        Self {
+            edge_state,
+            peer_edge_id,
+        }
+    }
+}
+
+impl Drop for IncomingVoiceTcpConnectionGuard {
+    fn drop(&mut self) {
+        self.edge_state
+            .note_incoming_voice_tcp_disconnected(self.peer_edge_id);
+    }
+}
+
 /// Server-side challenge-response handshake.
 ///
 /// Sends a random nonce to the client and verifies the HMAC-SHA256 response.
@@ -386,6 +408,8 @@ async fn handle_voice_connection(
         "Voice TCP connection from peer edge {} ({})",
         peer_edge_id, peer_addr
     );
+    let _connection_guard =
+        IncomingVoiceTcpConnectionGuard::new(edge_state.clone(), peer_edge_id);
 
     // Process incoming voice frames
     while let Ok(Some(msg)) = timeout(RELAY_IDLE_TIMEOUT, read.next()).await {

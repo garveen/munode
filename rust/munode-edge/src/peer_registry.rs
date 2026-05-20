@@ -26,6 +26,16 @@ pub struct PeerVoiceTcpPool {
     pub disconnect_reported: std::sync::atomic::AtomicBool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerVoiceTcpPoolSnapshot {
+    pub configured_slots: usize,
+    pub live_slots: usize,
+    pub has_live_connection: bool,
+    pub all_disconnected_since_ms: Option<u64>,
+    pub disconnect_reported: bool,
+    pub slot_states: Vec<bool>,
+}
+
 impl PeerVoiceTcpPool {
     pub fn new(pool_size: usize) -> Self {
         let senders = (0..pool_size.max(1))
@@ -70,6 +80,31 @@ impl PeerVoiceTcpPool {
         self.senders
             .iter()
             .any(|m| m.lock().ok().map_or(false, |g| g.is_some()))
+    }
+
+    /// Capture a read-only snapshot of the current pool state for diagnostics.
+    pub fn snapshot(&self) -> PeerVoiceTcpPoolSnapshot {
+        let slot_states: Vec<bool> = self
+            .senders
+            .iter()
+            .map(|slot| slot.lock().ok().map_or(false, |guard| guard.is_some()))
+            .collect();
+        let live_slots = slot_states.iter().filter(|connected| **connected).count();
+        let all_disconnected_since_ms = self
+            .all_disconnected_since_ms
+            .load(std::sync::atomic::Ordering::Acquire);
+
+        PeerVoiceTcpPoolSnapshot {
+            configured_slots: self.senders.len(),
+            live_slots,
+            has_live_connection: live_slots > 0,
+            all_disconnected_since_ms: (all_disconnected_since_ms != 0)
+                .then_some(all_disconnected_since_ms),
+            disconnect_reported: self
+                .disconnect_reported
+                .load(std::sync::atomic::Ordering::Acquire),
+            slot_states,
+        }
     }
 
     /// Try to send `frame` to one live slot (round-robin).

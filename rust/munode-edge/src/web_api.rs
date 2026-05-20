@@ -6,6 +6,7 @@
 //!   GET /api/stats                — Local client/channel/route statistics
 //!   GET /api/sessions             — Unified local + remote session view
 //!   GET /api/peers                — Known peer Edges with route and quality summary
+//!   GET /api/connections          — Current inter-Edge connection snapshot
 //!   GET /api/topology             — Local topology graph with inline quality summary
 //!   GET /api/topology/matrix      — Matrix view of the local topology graph
 //!   GET /api/dissemination        — Local source-rooted dissemination view
@@ -31,7 +32,7 @@ use munode_common::config::EdgeConfig;
 use serde::Serialize;
 use tracing::{info, warn};
 
-use crate::peer_registry::PeerEdgeInfo;
+use crate::peer_registry::{PeerEdgeInfo, PeerVoiceTcpPool};
 use crate::state::{
     DisseminationSourceState, EdgeState, HopTransport, PeerQualitySnapshot, RouteCandidate,
     RouteDecision,
@@ -344,6 +345,50 @@ pub struct PeerListResponse {
     pub timestamp: u64,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct VoiceTcpSlotEntry {
+    pub slot: usize,
+    pub connected: bool,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct VoiceTcpConnectionSummary {
+    pub outbound_pool_present: bool,
+    pub configured_outbound_slots: usize,
+    pub live_outbound_slots: usize,
+    pub has_outbound_connection: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub all_outbound_disconnected_since_ms: Option<u64>,
+    pub outbound_disconnect_reported: bool,
+    pub inbound_connection_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub outbound_slots: Vec<VoiceTcpSlotEntry>,
+}
+
+#[derive(Serialize)]
+pub struct ConnectionEntry {
+    pub edge_id: u32,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub udp_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_port: Option<u16>,
+    pub remote_session_count: usize,
+    pub discovery: PeerDiscoverySummary,
+    pub route: PeerRouteSummary,
+    pub voice_tcp: VoiceTcpConnectionSummary,
+}
+
+#[derive(Serialize)]
+pub struct ConnectionListResponse {
+    pub source_edge_id: u32,
+    pub total: usize,
+    pub connections: Vec<ConnectionEntry>,
+    pub timestamp: u64,
+}
+
 #[derive(Serialize)]
 pub struct TopologyNode {
     pub edge_id: u32,
@@ -600,6 +645,14 @@ macro_rules! for_each_edge_data_route {
             "Known peer Edges with route and quality summary",
             ApiAccessKind::RequiresBearerToken,
             get(handle_peers)
+        );
+        $apply!(
+            $target,
+            "GET",
+            "/api/connections",
+            "Current inter-Edge UDP and voice TCP connection snapshot",
+            ApiAccessKind::RequiresBearerToken,
+            get(handle_connections)
         );
         $apply!(
             $target,
@@ -897,6 +950,119 @@ fn peer_entry(edge: &KnownEdgeEntry, quality: Option<&PeerQualitySnapshot>) -> P
         quality: quality.map(peer_quality_summary),
         route_candidates: edge.route_candidates.clone(),
     }
+}
+
+fn voice_tcp_connection_summary(
+    pool: Option<&Arc<PeerVoiceTcpPool>>,
+    inbound_connection_count: usize,
+) -> VoiceTcpConnectionSummary {
+    match pool {
+        Some(pool) => {
+            let snapshot = pool.snapshot();
+            VoiceTcpConnectionSummary {
+                outbound_pool_present: true,
+                configured_outbound_slots: snapshot.configured_slots,
+                live_outbound_slots: snapshot.live_slots,
+                has_outbound_connection: snapshot.has_live_connection,
+                all_outbound_disconnected_since_ms: snapshot.all_disconnected_since_ms,
+                outbound_disconnect_reported: snapshot.disconnect_reported,
+                inbound_connection_count,
+                outbound_slots: snapshot
+                    .slot_states
+                    .into_iter()
+                    .enumerate()
+                    .map(|(slot, connected)| VoiceTcpSlotEntry { slot, connected })
+                    .collect(),
+            }
+        }
+        None => VoiceTcpConnectionSummary {
+            outbound_pool_present: false,
+            configured_outbound_slots: 0,
+            live_outbound_slots: 0,
+            has_outbound_connection: false,
+            all_outbound_disconnected_since_ms: None,
+            outbound_disconnect_reported: false,
+            inbound_connection_count,
+            outbound_slots: Vec::new(),
+        },
+    }
+}
+
+fn connection_entry(
+    edge_id: u32,
+    edge: Option<&KnownEdgeEntry>,
+    pool: Option<&Arc<PeerVoiceTcpPool>>,
+    inbound_connection_count: usize,
+) -> ConnectionEntry {
+    let label = edge
+        .map(edge_label)
+        .unwrap_or_else(|| format!("Edge {}", edge_id));
+    let discovery = edge.map_or(
+        PeerDiscoverySummary {
+            has_direct_peer_metadata: false,
+            known_via_route_table: false,
+        },
+        |edge| PeerDiscoverySummary {
+            has_direct_peer_metadata: edge.has_direct_peer_metadata,
+            known_via_route_table: edge.known_via_route_table,
+        },
+    );
+    let route = edge.map_or(
+        PeerRouteSummary {
+            kind: EdgeRouteKind::Unknown,
+            link_type: EdgeLinkType::Unknown,
+            cost: None,
+            relay_hops: Vec::new(),
+            candidate_count: 0,
+        },
+        peer_route_summary,
+    );
+
+    ConnectionEntry {
+        edge_id,
+        label,
+        host: edge.and_then(|edge| edge.host.clone()),
+        udp_addr: edge.and_then(|edge| edge.udp_addr.clone()),
+        relay_port: edge.and_then(|edge| edge.relay_port),
+        remote_session_count: edge.map_or(0, |edge| edge.remote_session_count),
+        discovery,
+        route,
+        voice_tcp: voice_tcp_connection_summary(pool, inbound_connection_count),
+    }
+}
+
+fn build_connection_entries(
+    edges: &[KnownEdgeEntry],
+    voice_tcp_conns: &HashMap<u32, Arc<PeerVoiceTcpPool>>,
+    incoming_voice_tcp_connections: &HashMap<u32, usize>,
+) -> Vec<ConnectionEntry> {
+    let edge_map: HashMap<_, _> = edges.iter().map(|edge| (edge.edge_id, edge)).collect();
+    let mut edge_ids = BTreeSet::new();
+
+    for edge in edges {
+        edge_ids.insert(edge.edge_id);
+    }
+    for &edge_id in voice_tcp_conns.keys() {
+        edge_ids.insert(edge_id);
+    }
+    for &edge_id in incoming_voice_tcp_connections.keys() {
+        edge_ids.insert(edge_id);
+    }
+
+    edge_ids
+        .into_iter()
+        .map(|edge_id| {
+            connection_entry(
+                edge_id,
+                edge_map.get(&edge_id).copied(),
+                voice_tcp_conns.get(&edge_id),
+                incoming_voice_tcp_connections
+                    .get(&edge_id)
+                    .copied()
+                    .unwrap_or(0),
+            )
+        })
+        .collect()
 }
 
 fn peer_quality_diagnostics_entry(
@@ -1473,6 +1639,25 @@ async fn handle_peers(State(context): State<AppState>) -> Json<PeerListResponse>
     })
 }
 
+async fn handle_connections(State(context): State<AppState>) -> Json<ConnectionListResponse> {
+    let overview = collect_overview(context.as_ref()).await;
+    let voice_tcp_conns = context.edge_state.voice_tcp_conns.load_full();
+    let incoming_voice_tcp_connections = context.edge_state.incoming_voice_tcp_connection_counts();
+    let connections = build_connection_entries(
+        &overview.edges,
+        &voice_tcp_conns,
+        &incoming_voice_tcp_connections,
+    );
+    let total = connections.len();
+
+    Json(ConnectionListResponse {
+        source_edge_id: overview.source_edge_id,
+        total,
+        connections,
+        timestamp: now_secs(),
+    })
+}
+
 async fn handle_topology(State(context): State<AppState>) -> Json<TopologyResponse> {
     let overview = collect_overview(context.as_ref()).await;
     let mut nodes = Vec::with_capacity(overview.edges.len() + 1);
@@ -1718,11 +1903,12 @@ pub async fn run_web_api(
 mod tests {
     use super::{
         ConnectivityState, DisseminationBranchBackupEntry, EdgeLinkType, EdgeRouteCandidateEntry,
-        EdgeRouteKind, VoiceTargetChannelEntry, VoiceTargetResolvedChannelEntry,
+        EdgeRouteKind, VoiceTcpSlotEntry, VoiceTargetChannelEntry,
+        VoiceTargetResolvedChannelEntry, build_connection_entries,
         build_dissemination_entries, build_known_edge_entries, build_route_stats,
         build_topology_matrix, build_voice_target_entries, edge_api_endpoints, edge_link_type,
     };
-    use crate::peer_registry::PeerEdgeInfo;
+    use crate::peer_registry::{PeerEdgeInfo, PeerVoiceTcpPool};
     use crate::state::{DisseminationSourceState, HopTransport, RouteCandidate, RouteDecision};
     use crate::voice_target::{
         SessionWhisperRouteCache, VoiceTargetChannelConfig, VoiceTargetConfig,
@@ -1730,6 +1916,8 @@ mod tests {
     };
     use smallvec::smallvec;
     use std::collections::HashMap;
+    use std::sync::{Arc, atomic::Ordering};
+    use tokio::sync::mpsc;
 
     fn known_edge(
         edge_id: u32,
@@ -1947,6 +2135,75 @@ mod tests {
     }
 
     #[test]
+    fn build_connection_entries_merges_known_edges_and_live_pool_state() {
+        let edges = vec![known_edge(
+            2,
+            EdgeRouteKind::DirectTcp,
+            vec![EdgeRouteCandidateEntry {
+                route: EdgeRouteKind::DirectTcp,
+                link_type: EdgeLinkType::Direct,
+                cost: 1.0,
+                relay_hops: Vec::new(),
+            }],
+        )];
+
+        let live_pool = Arc::new(PeerVoiceTcpPool::new(2));
+        let (tx, _rx) = mpsc::channel::<Vec<u8>>(1);
+        *live_pool.senders[1].lock().unwrap() = Some(tx);
+        live_pool.mark_connected();
+
+        let stale_pool = Arc::new(PeerVoiceTcpPool::new(1));
+        stale_pool
+            .all_disconnected_since_ms
+            .store(1_717_000_123_456, Ordering::Release);
+        stale_pool
+            .disconnect_reported
+            .store(true, Ordering::Release);
+
+        let voice_tcp_conns = HashMap::from([
+            (2, Arc::clone(&live_pool)),
+            (4, Arc::clone(&stale_pool)),
+        ]);
+        let incoming_voice_tcp_connections = HashMap::from([(2, 1usize), (4, 3usize)]);
+
+        let connections = build_connection_entries(
+            &edges,
+            &voice_tcp_conns,
+            &incoming_voice_tcp_connections,
+        );
+
+        assert_eq!(connections.len(), 2);
+        assert_eq!(connections[0].edge_id, 2);
+        assert_eq!(connections[0].route.kind, EdgeRouteKind::DirectTcp);
+        assert_eq!(connections[0].voice_tcp.inbound_connection_count, 1);
+        assert_eq!(connections[0].voice_tcp.live_outbound_slots, 1);
+        assert!(connections[0].voice_tcp.has_outbound_connection);
+        assert_eq!(
+            connections[0].voice_tcp.outbound_slots,
+            vec![
+                VoiceTcpSlotEntry {
+                    slot: 0,
+                    connected: false,
+                },
+                VoiceTcpSlotEntry {
+                    slot: 1,
+                    connected: true,
+                },
+            ]
+        );
+
+        assert_eq!(connections[1].edge_id, 4);
+        assert_eq!(connections[1].label, "Edge 4");
+        assert_eq!(connections[1].route.kind, EdgeRouteKind::Unknown);
+        assert_eq!(connections[1].voice_tcp.inbound_connection_count, 3);
+        assert_eq!(
+            connections[1].voice_tcp.all_outbound_disconnected_since_ms,
+            Some(1_717_000_123_456)
+        );
+        assert!(connections[1].voice_tcp.outbound_disconnect_reported);
+    }
+
+    #[test]
     fn build_voice_target_entries_includes_sorted_config_and_cached_route() {
         let session_edge_ids = HashMap::from([(10_001, 4)]);
         let voice_targets = HashMap::from([(
@@ -2055,6 +2312,12 @@ mod tests {
             .find(|endpoint| endpoint.method == "GET" && endpoint.path == "/api/status")
             .expect("missing GET /api/status");
         assert_eq!(protected_status.access, "bearer_token");
+
+        let protected_connections = protected
+            .iter()
+            .find(|endpoint| endpoint.method == "GET" && endpoint.path == "/api/connections")
+            .expect("missing GET /api/connections");
+        assert_eq!(protected_connections.access, "bearer_token");
 
         let health = protected
             .iter()
