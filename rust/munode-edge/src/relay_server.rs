@@ -408,8 +408,7 @@ async fn handle_voice_connection(
         "Voice TCP connection from peer edge {} ({})",
         peer_edge_id, peer_addr
     );
-    let _connection_guard =
-        IncomingVoiceTcpConnectionGuard::new(edge_state.clone(), peer_edge_id);
+    let _connection_guard = IncomingVoiceTcpConnectionGuard::new(edge_state.clone(), peer_edge_id);
 
     // Process incoming voice frames
     while let Ok(Some(msg)) = timeout(RELAY_IDLE_TIMEOUT, read.next()).await {

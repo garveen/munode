@@ -1903,10 +1903,10 @@ pub async fn run_web_api(
 mod tests {
     use super::{
         ConnectivityState, DisseminationBranchBackupEntry, EdgeLinkType, EdgeRouteCandidateEntry,
-        EdgeRouteKind, VoiceTcpSlotEntry, VoiceTargetChannelEntry,
-        VoiceTargetResolvedChannelEntry, build_connection_entries,
-        build_dissemination_entries, build_known_edge_entries, build_route_stats,
-        build_topology_matrix, build_voice_target_entries, edge_api_endpoints, edge_link_type,
+        EdgeRouteKind, VoiceTargetChannelEntry, VoiceTargetResolvedChannelEntry, VoiceTcpSlotEntry,
+        build_connection_entries, build_dissemination_entries, build_known_edge_entries,
+        build_route_stats, build_topology_matrix, build_voice_target_entries, edge_api_endpoints,
+        edge_link_type,
     };
     use crate::peer_registry::{PeerEdgeInfo, PeerVoiceTcpPool};
     use crate::state::{DisseminationSourceState, HopTransport, RouteCandidate, RouteDecision};
@@ -2160,17 +2160,12 @@ mod tests {
             .disconnect_reported
             .store(true, Ordering::Release);
 
-        let voice_tcp_conns = HashMap::from([
-            (2, Arc::clone(&live_pool)),
-            (4, Arc::clone(&stale_pool)),
-        ]);
+        let voice_tcp_conns =
+            HashMap::from([(2, Arc::clone(&live_pool)), (4, Arc::clone(&stale_pool))]);
         let incoming_voice_tcp_connections = HashMap::from([(2, 1usize), (4, 3usize)]);
 
-        let connections = build_connection_entries(
-            &edges,
-            &voice_tcp_conns,
-            &incoming_voice_tcp_connections,
-        );
+        let connections =
+            build_connection_entries(&edges, &voice_tcp_conns, &incoming_voice_tcp_connections);
 
         assert_eq!(connections.len(), 2);
         assert_eq!(connections[0].edge_id, 2);
