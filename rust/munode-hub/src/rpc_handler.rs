@@ -810,6 +810,11 @@ impl RpcHandler {
             .session_manager
             .get_sessions_by_edge(server_id)
             .await;
+        info!(
+            server_id,
+            session_count = sessions.len(),
+            "Cleaning up Hub state for edge"
+        );
         for session in &sessions {
             self.state
                 .session_manager

@@ -116,13 +116,22 @@ impl RpcHandler {
                 .session_manager
                 .get_sessions_by_edge(params.server_id)
                 .await;
+            let had_registered_edge = self
+                .state
+                .edge_registry
+                .read()
+                .await
+                .contains_key(&params.server_id);
+            info!(
+                server_id = params.server_id,
+                connection_id,
+                disconnected_old_connections = disconnected,
+                stale_session_count = stale_sessions.len(),
+                had_registered_edge,
+                "Fresh edge register cleanup snapshot"
+            );
             let needs_cleanup = !stale_sessions.is_empty()
-                || self
-                    .state
-                    .edge_registry
-                    .read()
-                    .await
-                    .contains_key(&params.server_id);
+                || had_registered_edge;
 
             if needs_cleanup {
                 warn!(
@@ -130,6 +139,12 @@ impl RpcHandler {
                     params.server_id
                 );
                 self.cleanup_edge(params.server_id).await;
+            } else {
+                info!(
+                    server_id = params.server_id,
+                    connection_id,
+                    "Fresh edge process had no stale Hub state to clean before register success"
+                );
             }
         }
 
