@@ -354,6 +354,11 @@ pub struct HubClient {
     pool_size: usize,
     /// Per-slot send channels.
     pool_senders: Vec<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
+    /// Per-slot registration readiness.
+    ///
+    /// A slot is eligible for general RPCs / notifications only after its own
+    /// `edge.register` succeeded on that exact WebSocket connection.
+    pool_registered: Vec<AtomicBool>,
     /// Round-robin index for distributing sends across pool slots.
     pool_rr: AtomicUsize,
     /// Counter for generating unique request IDs.
@@ -411,6 +416,7 @@ impl HubClient {
         let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
         let pool_size = config.hub_server.pool_size.max(1) as usize;
         let pool_senders = (0..pool_size).map(|_| Mutex::new(None)).collect();
+        let pool_registered = (0..pool_size).map(|_| AtomicBool::new(false)).collect();
         // Static peers from config (for bootstrap before Hub connection).
         let static_relay_peers: Vec<(String, u16)> = config
             .hub_server
@@ -434,6 +440,7 @@ impl HubClient {
             pending: Mutex::new(HashMap::new()),
             pool_size,
             pool_senders,
+            pool_registered,
             pool_rr: AtomicUsize::new(0),
             request_counter: AtomicU64::new(0),
             start_time: Instant::now(),
@@ -1009,6 +1016,7 @@ impl HubClient {
         if let Some(s) = self.pool_senders.get(slot) {
             *s.lock().await = Some(send_tx);
         }
+        self.set_slot_registered(slot, false);
 
         let (writer_fail_tx_via, writer_fail_rx_via) = tokio::sync::oneshot::channel::<()>();
 
@@ -1181,7 +1189,7 @@ impl HubClient {
         // Every slot registers with Hub.  The register RPC is idempotent on the
         // Hub side (re-registration cleans up stale sessions and updates the
         // sender only if no other connection from this edge is already active).
-        self.do_register().await?;
+        self.do_register(slot).await?;
 
         // Run the sync sequence (fullSync, joinCluster, reportLocalUsers, etc.)
         // exactly once.  CAS ensures only one slot executes it even if multiple
@@ -1350,6 +1358,7 @@ impl HubClient {
         if let Some(s) = self.pool_senders.get(slot) {
             *s.lock().await = None;
         }
+        self.set_slot_registered(slot, false);
     }
 
     /// Check if any pool slot has an active sender.
@@ -1360,6 +1369,25 @@ impl HubClient {
             }
         }
         false
+    }
+
+    fn set_slot_registered(&self, slot: usize, registered: bool) {
+        if let Some(flag) = self.pool_registered.get(slot) {
+            flag.store(registered, Ordering::Release);
+        }
+    }
+
+    fn slot_registered(&self, slot: usize) -> bool {
+        self.pool_registered
+            .get(slot)
+            .map(|flag| flag.load(Ordering::Acquire))
+            .unwrap_or(false)
+    }
+
+    fn any_slot_registered(&self) -> bool {
+        self.pool_registered
+            .iter()
+            .any(|flag| flag.load(Ordering::Acquire))
     }
 
     /// Attempt a single WebSocket connection on `slot`.
@@ -1391,10 +1419,14 @@ impl HubClient {
         tx.send(data).await.context("Send channel closed")
     }
 
-    /// Send raw bytes through the WebSocket, using round-robin across live pool slots.
+    /// Send raw bytes through the WebSocket, using round-robin across slots whose
+    /// own `edge.register` has completed successfully.
     /// Returns the slot index that successfully sent the data.
     async fn send_raw(&self, data: Vec<u8>) -> Result<usize> {
         if self.pool_size == 1 {
+            if !self.slot_registered(0) {
+                anyhow::bail!("pool slot 0 not registered")
+            }
             self.send_on_slot(0, data).await?;
             return Ok(0);
         }
@@ -1402,6 +1434,9 @@ impl HubClient {
         let start = self.pool_rr.fetch_add(1, Ordering::Relaxed) % self.pool_size;
         for i in 0..self.pool_size {
             let slot = (start + i) % self.pool_size;
+            if !self.slot_registered(slot) {
+                continue;
+            }
             let sender_opt = {
                 let guard = self.pool_senders[slot].lock().await;
                 guard.as_ref().map(|s| s.clone())
@@ -1428,11 +1463,11 @@ impl HubClient {
         }
         // No live slot — all connections to Hub are down or busy
         warn!(
-            "HubClient::send_raw: all {} pool slot(s) unavailable (disconnected or busy) — message dropped",
+            "HubClient::send_raw: all {} registered pool slot(s) unavailable (disconnected, unregistered or busy) — message dropped",
             self.pool_size
         );
         Err(anyhow::anyhow!(
-            "all {} connection pool slots unavailable (disconnected or busy)",
+            "all {} registered connection pool slots unavailable (disconnected, unregistered or busy)",
             self.pool_size
         ))
     }
@@ -1483,13 +1518,49 @@ impl HubClient {
         }
     }
 
+    async fn rpc_call_on_slot(&self, slot: usize, request: TypedRpcRequest) -> Result<TypedRpcResponse> {
+        let method = request.method.clone();
+        let request_id = request.request_id.clone();
+        let (tx, rx) = oneshot::channel();
+
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcRequest as i32,
+            rpc_request: Some(request),
+            ..Default::default()
+        };
+        let data = packet.encode_to_vec();
+
+        self.send_on_slot(slot, data)
+            .await
+            .with_context(|| format!("failed to send RPC {} on pool slot {}", method, slot))?;
+
+        self.pending.lock().await.insert(
+            request_id.clone(),
+            PendingRequest {
+                tx,
+                slot,
+            },
+        );
+
+        let timeout = Duration::from_secs(30);
+        match time::timeout(timeout, rx).await {
+            Ok(Ok(Ok(response))) => Ok(response),
+            Ok(Ok(Err(err_msg))) => anyhow::bail!("RPC {} error: {}", method, err_msg),
+            Ok(Err(_)) => anyhow::bail!("RPC {} cancelled on pool slot {}", method, slot),
+            Err(_) => {
+                self.pending.lock().await.remove(&request_id);
+                anyhow::bail!("RPC {} timed out", method);
+            }
+        }
+    }
+
     /// Send an RPC request and wait for the response.
     ///
-    /// In pool mode, the request is sent via round-robin across live slots.  If the
-    /// chosen slot dies before the response arrives, the pending entry is cancelled
-    /// immediately by `cancel_pending_for_slot`, and this function retries once on a
-    /// different live slot with a new request ID.  This covers the most common failure
-    /// mode: a slot disconnects mid-flight.
+    /// In pool mode, the request is sent via round-robin across registered slots.
+    /// If the chosen slot dies before the response arrives, the pending entry is
+    /// cancelled immediately by `cancel_pending_for_slot`, and this function retries
+    /// once on a different registered slot with a new request ID.  This covers the
+    /// most common failure mode: a slot disconnects mid-flight.
     async fn rpc_call(&self, mut request: TypedRpcRequest) -> Result<TypedRpcResponse> {
         let method = request.method.clone();
         // Allow one retry when a slot dies mid-flight.  Two attempts total.
@@ -1519,25 +1590,26 @@ impl HubClient {
                 Ok(s) => s,
                 Err(e) => {
                     if attempt == 0 {
-                        // No live slot — this typically means a failover is in
-                        // progress (direct closed, relay not yet established).
+                        // No registered slot — this typically means a failover is in
+                        // progress (direct closed, relay not yet established, or a
+                        // newly connected slot has not finished registering yet).
                         // Wait up to 10 s for any slot to reconnect, then retry
                         // once rather than immediately returning an error.
                         const WAIT_FOR_SLOT: Duration = Duration::from_secs(10);
                         const POLL_INTERVAL: Duration = Duration::from_millis(250);
                         warn!(
-                            "No Hub slot available for RPC {method} — waiting up to {WAIT_FOR_SLOT:?} for reconnect"
+                            "No registered Hub slot available for RPC {method} — waiting up to {WAIT_FOR_SLOT:?} for reconnect"
                         );
                         let deadline = time::Instant::now() + WAIT_FOR_SLOT;
                         loop {
                             time::sleep(POLL_INTERVAL).await;
                             if time::Instant::now() >= deadline {
                                 return Err(e.context(format!(
-                                    "timed out waiting for Hub slot for RPC {method}"
+                                    "timed out waiting for a registered Hub slot for RPC {method}"
                                 )));
                             }
-                            if self.any_slot_alive().await {
-                                debug!("Hub slot available — retrying RPC {method}");
+                            if self.any_slot_registered() {
+                                debug!("Registered Hub slot available — retrying RPC {method}");
                                 break;
                             }
                         }
@@ -1702,14 +1774,17 @@ impl HubClient {
     // ==================== RPC Methods ====================
 
     /// Register this Edge with the Hub (with optional HMAC challenge-response).
-    async fn do_register(&self) -> Result<()> {
+    async fn do_register(&self, slot: usize) -> Result<()> {
         let fresh_process = self.acquire_register_fresh_process_flag().await;
-        let result = self.do_register_inner(fresh_process).await;
+        let result = self.do_register_inner(slot, fresh_process).await;
+        if result.is_ok() {
+            self.set_slot_registered(slot, true);
+        }
         self.finish_register_fresh_process_flag(fresh_process, result.is_ok());
         result
     }
 
-    async fn do_register_inner(&self, fresh_process: bool) -> Result<()> {
+    async fn do_register_inner(&self, slot: usize, fresh_process: bool) -> Result<()> {
         let request_id = self.next_request_id();
         let params = EdgeRegisterParams {
             server_id: self.server_id,
@@ -1732,12 +1807,8 @@ impl HubClient {
             ..Default::default()
         };
 
-        // Registration is sent via round-robin like any other RPC.
-        // The Hub's edge_connection handler ensures only the first connection
-        // per edge stores its sender in edge_connections; subsequent pool
-        // connections only set their server_id.
         let response = self
-            .rpc_call(request)
+            .rpc_call_on_slot(slot, request)
             .await
             .context("edge.register RPC failed")?;
 
@@ -1751,7 +1822,7 @@ impl HubClient {
                 if let Some(hmac_secret) = &self.config.hmac_secret {
                     info!("Received HMAC challenge, sending response");
                     return self
-                        .do_register_with_challenge(challenge, hmac_secret, fresh_process)
+                        .do_register_with_challenge(slot, challenge, hmac_secret, fresh_process)
                         .await;
                 }
             }
@@ -1779,6 +1850,7 @@ impl HubClient {
     /// Register with HMAC challenge-response.
     async fn do_register_with_challenge(
         &self,
+        slot: usize,
         challenge: &str,
         hmac_secret: &str,
         fresh_process: bool,
@@ -1813,7 +1885,7 @@ impl HubClient {
         };
 
         let response = self
-            .rpc_call(request)
+            .rpc_call_on_slot(slot, request)
             .await
             .context("edge.register (challenge) RPC failed")?;
 
@@ -2366,6 +2438,60 @@ impl HubClient {
 
 #[cfg(test)]
 mod tests {
+    use super::HubClient;
+    use crate::channel_manager::ChannelManager;
+    use crate::client::ClientManager;
+    use crate::state::EdgeState;
+    use munode_common::config::{
+        EdgeConfig, EdgeVoiceRoutingConfig, EdgeWebApiConfig, HubServerConfig, NetworkConfig,
+        ServerConfig, TlsConfig, WebtransportConfig,
+    };
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+
+    fn test_config(pool_size: u32) -> EdgeConfig {
+        EdgeConfig {
+            server_id: 1,
+            name: "test".to_string(),
+            network: NetworkConfig {
+                host: "127.0.0.1".to_string(),
+                port: 64738,
+                edge_port: None,
+                external_host: "127.0.0.1".to_string(),
+                external_port: None,
+                region: None,
+                proxy_protocol: false,
+                trusted_proxy_ips: Vec::new(),
+            },
+            tls: TlsConfig {
+                cert: "test.pem".to_string(),
+                key: "test.key".to_string(),
+                ca: None,
+            },
+            hub_server: HubServerConfig {
+                host: "localhost".to_string(),
+                control_port: 8080,
+                reconnect_interval: 5000,
+                heartbeat_interval: 10000,
+                hmac_secret: None,
+                pool_size,
+                static_peers: vec![],
+                tls: false,
+            },
+            server: ServerConfig::default(),
+            voice_routing: EdgeVoiceRoutingConfig::default(),
+            web_api: EdgeWebApiConfig::default(),
+            webtransport: WebtransportConfig::default(),
+            log_level: "info".to_string(),
+            log_format: "text".to_string(),
+        }
+    }
+
+    fn test_hub_client(pool_size: u32) -> Arc<HubClient> {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), false);
+        HubClient::new(&test_config(pool_size), edge_state)
+    }
+
     #[tokio::test]
     async fn resolve_peer_udp_addr_accepts_hostname() {
         let addr = super::resolve_peer_udp_addr("localhost", 64739)
@@ -2373,5 +2499,24 @@ mod tests {
             .expect("localhost should resolve");
 
         assert_eq!(addr.port(), 64739);
+    }
+
+    #[tokio::test]
+    async fn send_raw_skips_connected_but_unregistered_slot() {
+        let hub = test_hub_client(2);
+        let (tx0, mut rx0) = mpsc::channel::<Vec<u8>>(4);
+        let (tx1, mut rx1) = mpsc::channel::<Vec<u8>>(4);
+
+        *hub.pool_senders[0].lock().await = Some(tx0);
+        *hub.pool_senders[1].lock().await = Some(tx1);
+        hub.set_slot_registered(0, false);
+        hub.set_slot_registered(1, true);
+
+        let payload = b"edge.fullSync".to_vec();
+        let used_slot = hub.send_raw(payload.clone()).await.expect("send should succeed");
+
+        assert_eq!(used_slot, 1, "unregistered slot must be skipped");
+        assert_eq!(rx1.recv().await, Some(payload));
+        assert!(rx0.try_recv().is_err(), "unregistered slot should stay idle");
     }
 }
