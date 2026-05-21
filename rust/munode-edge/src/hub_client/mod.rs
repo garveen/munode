@@ -1518,7 +1518,11 @@ impl HubClient {
         }
     }
 
-    async fn rpc_call_on_slot(&self, slot: usize, request: TypedRpcRequest) -> Result<TypedRpcResponse> {
+    async fn rpc_call_on_slot(
+        &self,
+        slot: usize,
+        request: TypedRpcRequest,
+    ) -> Result<TypedRpcResponse> {
         let method = request.method.clone();
         let request_id = request.request_id.clone();
         let (tx, rx) = oneshot::channel();
@@ -1534,13 +1538,10 @@ impl HubClient {
             .await
             .with_context(|| format!("failed to send RPC {} on pool slot {}", method, slot))?;
 
-        self.pending.lock().await.insert(
-            request_id.clone(),
-            PendingRequest {
-                tx,
-                slot,
-            },
-        );
+        self.pending
+            .lock()
+            .await
+            .insert(request_id.clone(), PendingRequest { tx, slot });
 
         let timeout = Duration::from_secs(30);
         match time::timeout(timeout, rx).await {
@@ -2513,10 +2514,16 @@ mod tests {
         hub.set_slot_registered(1, true);
 
         let payload = b"edge.fullSync".to_vec();
-        let used_slot = hub.send_raw(payload.clone()).await.expect("send should succeed");
+        let used_slot = hub
+            .send_raw(payload.clone())
+            .await
+            .expect("send should succeed");
 
         assert_eq!(used_slot, 1, "unregistered slot must be skipped");
         assert_eq!(rx1.recv().await, Some(payload));
-        assert!(rx0.try_recv().is_err(), "unregistered slot should stay idle");
+        assert!(
+            rx0.try_recv().is_err(),
+            "unregistered slot should stay idle"
+        );
     }
 }
