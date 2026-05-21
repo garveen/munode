@@ -130,8 +130,7 @@ impl RpcHandler {
                 had_registered_edge,
                 "Fresh edge register cleanup snapshot"
             );
-            let needs_cleanup = !stale_sessions.is_empty()
-                || had_registered_edge;
+            let needs_cleanup = !stale_sessions.is_empty() || had_registered_edge;
 
             if needs_cleanup {
                 warn!(
