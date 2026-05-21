@@ -681,8 +681,30 @@ pub(super) async fn handle_admin_user_state_update(
     if let Some(mut client) = edge_state.client_manager.get_client(target_session).await {
         let mut needs_broadcast = false;
 
-        // Admin mute/deaf — requires MuteDeafen permission on the victim's channel
-        if user_state.mute.is_some() || user_state.deaf.is_some() {
+        // Admin speak-state changes (mute/deaf/suppress/priority speaker) require
+        // MuteDeafen permission on the victim's current channel. Murmur also
+        // rejects explicit suppress=true from a client; only suppress=false is allowed.
+        if user_state.mute.is_some()
+            || user_state.deaf.is_some()
+            || user_state.suppress.is_some()
+            || user_state.priority_speaker.is_some()
+        {
+            if user_state.suppress == Some(true) {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::MUTE_DEAFEN),
+                        channel_id: Some(client.channel_id),
+                        session: Some(actor_session),
+                        ..Default::default()
+                    };
+                    sender
+                        .send_message(MessageType::PermissionDenied, &pq)
+                        .await;
+                }
+                return;
+            }
+
             let has_mute_deafen = get_perm_cached(
                 &hub_client,
                 &edge_state,
@@ -716,25 +738,14 @@ pub(super) async fn handle_admin_user_state_update(
                 client.deaf = deaf;
                 needs_broadcast = true;
             }
-        }
-
-        // Suppress=true can only be set by the server (based on channel permissions), not by
-        // a client directly.  Reject any attempt by an actor to force-suppress another user.
-        // Murmur: "if (msg.has_suppress() && msg.suppress()) → PermissionDenied MuteDeafen"
-        if user_state.suppress == Some(true) {
-            if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
-                let pq = mumbleproto::PermissionDenied {
-                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
-                    permission: Some(perm::MUTE_DEAFEN),
-                    channel_id: Some(client.channel_id),
-                    session: Some(actor_session),
-                    ..Default::default()
-                };
-                sender
-                    .send_message(MessageType::PermissionDenied, &pq)
-                    .await;
+            if let Some(suppress) = user_state.suppress {
+                client.suppress = suppress;
+                needs_broadcast = true;
             }
-            return;
+            if let Some(priority_speaker) = user_state.priority_speaker {
+                client.priority_speaker = priority_speaker;
+                needs_broadcast = true;
+            }
         }
 
         // Admin comment clear — an actor can clear another user's comment (setting it to "")
@@ -909,16 +920,20 @@ pub(super) async fn handle_admin_user_state_update(
                 .await
                     & perm::MOVE
                     != 0;
-                let victim_can_enter = get_perm_cached(
-                    &hub_client,
-                    &edge_state,
-                    target_session,
-                    target_channel_id,
-                    false,
-                )
-                .await
-                    & perm::ENTER
-                    != 0;
+                let victim_can_enter = if actor_can_move_in {
+                    false
+                } else {
+                    get_perm_cached(
+                        &hub_client,
+                        &edge_state,
+                        target_session,
+                        target_channel_id,
+                        false,
+                    )
+                    .await
+                        & perm::ENTER
+                        != 0
+                };
                 if !actor_can_move_in && !victim_can_enter {
                     if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await
                     {
@@ -995,8 +1010,8 @@ pub(super) async fn handle_admin_user_state_update(
                         None,
                         user_state.mute,
                         user_state.deaf,
-                        None,
-                        None,
+                        user_state.suppress,
+                        user_state.priority_speaker,
                         None,
                         vec![],
                         vec![],
@@ -1011,14 +1026,84 @@ pub(super) async fn handle_admin_user_state_update(
                 }
             }
         }
-    } else if let Some(target_channel_id) = user_state.channel_id {
-        // Target user is not on this edge — check if it is a known remote user and
-        // forward the admin move to Hub so the owner edge can apply it.
-        let remote_user = edge_state
-            .channel_manager
-            .get_remote_user(target_session)
-            .await;
-        if let Some(remote) = remote_user {
+    } else if let Some(remote) = edge_state
+        .channel_manager
+        .get_remote_user(target_session)
+        .await
+    {
+        if user_state.mute.is_some()
+            || user_state.deaf.is_some()
+            || user_state.suppress.is_some()
+            || user_state.priority_speaker.is_some()
+        {
+            if user_state.suppress == Some(true) {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::MUTE_DEAFEN),
+                        channel_id: Some(remote.channel_id),
+                        session: Some(actor_session),
+                        ..Default::default()
+                    };
+                    sender
+                        .send_message(MessageType::PermissionDenied, &pq)
+                        .await;
+                }
+                return;
+            }
+
+            let has_mute_deafen = get_perm_cached(
+                &hub_client,
+                &edge_state,
+                actor_session,
+                remote.channel_id,
+                false,
+            )
+            .await
+                & perm::MUTE_DEAFEN
+                != 0;
+            if !has_mute_deafen {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::MUTE_DEAFEN),
+                        channel_id: Some(remote.channel_id),
+                        session: Some(actor_session),
+                        ..Default::default()
+                    };
+                    sender
+                        .send_message(MessageType::PermissionDenied, &pq)
+                        .await;
+                }
+                return;
+            }
+
+            if let Err(e) = hub_client
+                .rpc_user_state_changed(
+                    target_session,
+                    None,
+                    None,
+                    user_state.mute,
+                    user_state.deaf,
+                    user_state.suppress,
+                    user_state.priority_speaker,
+                    None,
+                    vec![],
+                    vec![],
+                    Some(actor_session),
+                )
+                .await
+            {
+                warn!(
+                    "rpc_user_state_changed failed (remote admin state, session {}): {:#}",
+                    target_session, e
+                );
+            }
+        }
+
+        if let Some(target_channel_id) = user_state.channel_id {
+            // Target user is not on this edge — forward the admin move to Hub so the
+            // owner edge can apply it after the Hub broadcast.
             if remote.channel_id == target_channel_id {
                 return; // already in target channel, nothing to do
             }
@@ -1061,16 +1146,20 @@ pub(super) async fn handle_admin_user_state_update(
             .await
                 & perm::MOVE
                 != 0;
-            let victim_can_enter = get_perm_cached(
-                &hub_client,
-                &edge_state,
-                target_session,
-                target_channel_id,
-                false,
-            )
-            .await
-                & perm::ENTER
-                != 0;
+            let victim_can_enter = if actor_can_move_in {
+                false
+            } else {
+                get_perm_cached(
+                    &hub_client,
+                    &edge_state,
+                    target_session,
+                    target_channel_id,
+                    false,
+                )
+                .await
+                    & perm::ENTER
+                    != 0
+            };
             if !actor_can_move_in && !victim_can_enter {
                 if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                     let pq = mumbleproto::PermissionDenied {
@@ -1122,5 +1211,16 @@ pub(super) async fn handle_admin_user_state_update(
                 );
             }
         }
+    } else {
+        warn!(
+            actor_session,
+            target_session,
+            mute = ?user_state.mute,
+            deaf = ?user_state.deaf,
+            suppress = ?user_state.suppress,
+            priority_speaker = ?user_state.priority_speaker,
+            channel_id = ?user_state.channel_id,
+            "Admin UserState target session not found on this edge"
+        );
     }
 }

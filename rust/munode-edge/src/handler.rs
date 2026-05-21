@@ -167,6 +167,15 @@ impl<'a> LoginHandler<'a> {
             }
         };
 
+        // Reuse the login batch permission snapshot for later server-side checks.
+        // Without this, admin operations on freshly connected sessions fall back to
+        // per-action Hub RPCs even though the same permission data was just fetched.
+        for (&channel_id, &(permissions, _)) in &perm_map {
+            self.edge_state
+                .permission_cache
+                .insert((session_id, channel_id), permissions);
+        }
+
         // 3. Send channel tree (BFS order), using pre-fetched permissions
         debug!(session_id, "Step 4: sending channel tree (BFS order)");
         self.send_channel_tree_with_perms(&channels, &perm_map)

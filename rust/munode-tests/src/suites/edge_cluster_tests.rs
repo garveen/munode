@@ -13,6 +13,30 @@ use crate::harness::{
     standard_env,
 };
 
+const PERM_TRAVERSE: u32 = 0x2;
+const PERM_ENTER: u32 = 0x4;
+const PERM_SPEAK: u32 = 0x8;
+
+fn group_entry(group: &str, allow: u32, deny: u32) -> munode_protocol::mumbleproto::acl::ChanAcl {
+    use munode_protocol::mumbleproto::acl::ChanAcl;
+    ChanAcl {
+        apply_here: Some(true),
+        apply_subs: Some(false),
+        inherited: Some(false),
+        user_id: None,
+        group: Some(group.to_string()),
+        grant: Some(allow),
+        deny: Some(deny),
+    }
+}
+
+fn chrono_now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
 // ── Edge registration ─────────────────────────────────────────────────────
 
 /// Both edges in a standard environment should be reachable and accept
@@ -242,6 +266,221 @@ async fn test_cross_edge_admin_move_notifies_actor_immediately() -> Result<()> {
     assert!(
         actor_notified,
         "Cross-edge admin move should notify the actor immediately"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+/// When an admin on Edge 1 mutes a user on Edge 2, both the target and the
+/// actor must observe the Hub-broadcast state change.
+#[tokio::test]
+async fn test_cross_edge_admin_mute_notifies_target_and_actor() -> Result<()> {
+    let env = standard_env().await?;
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 2)];
+    let clients = create_clients(&env, &configs).await?;
+    let (admin, target) = (&clients[0], &clients[1]);
+
+    sleep_ms(800).await;
+
+    let target_session = target.session_id().unwrap();
+    let mut target_rx = target.subscribe();
+    let mut admin_rx = admin.subscribe();
+
+    admin
+        .send_user_state(munode_protocol::mumbleproto::UserState {
+            session: Some(target_session),
+            mute: Some(true),
+            ..Default::default()
+        })
+        .await?;
+
+    let target_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match target_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u)) if u.session == target_session && u.mute => {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let actor_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match admin_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u)) if u.session == target_session && u.mute => {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(target_notified, "Cross-edge admin mute should notify the target");
+    assert!(actor_notified, "Cross-edge admin mute should notify the actor");
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+/// When an admin on Edge 1 grants priority speaker to a user on Edge 2, both
+/// the target and the actor must observe the Hub-broadcast state change.
+#[tokio::test]
+async fn test_cross_edge_admin_priority_speaker_notifies_target_and_actor() -> Result<()> {
+    let env = standard_env().await?;
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 2)];
+    let clients = create_clients(&env, &configs).await?;
+    let (admin, target) = (&clients[0], &clients[1]);
+
+    sleep_ms(800).await;
+
+    let target_session = target.session_id().unwrap();
+    let mut target_rx = target.subscribe();
+    let mut admin_rx = admin.subscribe();
+
+    admin
+        .send_user_state(munode_protocol::mumbleproto::UserState {
+            session: Some(target_session),
+            priority_speaker: Some(true),
+            ..Default::default()
+        })
+        .await?;
+
+    let target_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match target_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == target_session && u.priority_speaker =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let actor_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match admin_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == target_session && u.priority_speaker =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(
+        target_notified,
+        "Cross-edge admin priority speaker should notify the target"
+    );
+    assert!(
+        actor_notified,
+        "Cross-edge admin priority speaker should notify the actor"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+/// When an admin on Edge 1 clears suppress for a user on Edge 2, both the
+/// target and the actor must observe the Hub-broadcast state change.
+#[tokio::test]
+async fn test_cross_edge_admin_unsuppress_notifies_target_and_actor() -> Result<()> {
+    let env = standard_env().await?;
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("acl_op_user", 2)];
+    let clients = create_clients(&env, &configs).await?;
+    let (admin, target) = (&clients[0], &clients[1]);
+
+    let ts = chrono_now_ms();
+    let no_speak = admin
+        .channel(0)
+        .create_subchannel(format!("ClusterNoSpeak_{ts}"))
+        .await?;
+    sleep_ms(300).await;
+
+    admin
+        .acl(no_speak)
+        .add_entry(
+            group_entry("acl_testers", PERM_ENTER | PERM_TRAVERSE, PERM_SPEAK),
+            Duration::from_secs(5),
+        )
+        .await?;
+    sleep_ms(500).await;
+
+    target.channel(no_speak).join().await?;
+    sleep_ms(800).await;
+    assert!(
+        target.me().user().expect("self").suppress,
+        "target should start suppressed in the no-Speak channel"
+    );
+
+    let target_session = target.session_id().unwrap();
+    let mut target_rx = target.subscribe();
+    let mut admin_rx = admin.subscribe();
+
+    admin
+        .send_user_state(munode_protocol::mumbleproto::UserState {
+            session: Some(target_session),
+            suppress: Some(false),
+            ..Default::default()
+        })
+        .await?;
+
+    let target_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match target_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == target_session && !u.suppress =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let actor_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match admin_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == target_session && !u.suppress =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(
+        target_notified,
+        "Cross-edge admin unsuppress should notify the target"
+    );
+    assert!(
+        actor_notified,
+        "Cross-edge admin unsuppress should notify the actor"
     );
 
     cleanup_clients(clients).await;

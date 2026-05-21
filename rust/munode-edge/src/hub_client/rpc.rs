@@ -180,8 +180,9 @@ impl HubClient {
     }
 
     /// RPC: move a user to a different channel.
-    /// Hub updates session_manager, broadcasts hub.userMoved to OTHER edges, responds.
-    /// The requesting edge applies the move locally after confirmation.
+    /// Hub updates session_manager, broadcasts hub.userMoved to ALL edges, responds.
+    /// Every edge, including the requesting edge, waits for the Hub broadcast to
+    /// update client-visible state.
     /// Returns `Err` if the Hub rejected the move (e.g. channel full).
     pub async fn rpc_user_moved(
         &self,
@@ -219,9 +220,10 @@ impl HubClient {
         Ok(())
     }
 
-    /// RPC: update a user's state (mute/deaf/priority-speaker etc).
-    /// Hub updates session_manager, broadcasts hub.userStateBroadcast to OTHER edges, responds.
-    /// The requesting edge applies the change locally after confirmation.
+    /// RPC: update a user's state (mute/deaf/suppress/priority-speaker etc).
+    /// Hub updates session_manager, broadcasts hub.userStateBroadcast to ALL edges, responds.
+    /// Every edge, including the requesting edge, waits for the Hub broadcast to
+    /// update client-visible state.
     pub async fn rpc_user_state_changed(
         &self,
         session_id: u32,

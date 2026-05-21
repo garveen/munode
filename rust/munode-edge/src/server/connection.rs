@@ -886,15 +886,12 @@ pub(crate) async fn run_connection_inner(
                                 continue;
                             }
                         }
-                        // Check if this targets another user (admin operation)
+                        // Any UserState targeting another session is an admin-style operation.
+                        // Field-based prefiltering is lossy: it can drop valid mutations like
+                        // priority_speaker and causes source-edge behavior to diverge from the
+                        // Hub-broadcast model.
                         let target_sid = user_state.session.unwrap_or(sid);
-                        if target_sid != sid
-                            && (user_state.mute.is_some()
-                                || user_state.deaf.is_some()
-                                || user_state.channel_id.is_some()
-                                || user_state.comment.is_some()
-                                || user_state.suppress.is_some())
-                        {
+                        if target_sid != sid {
                             // Admin operation: apply to target session
                             handle_admin_user_state_update(
                                 &edge_state,
