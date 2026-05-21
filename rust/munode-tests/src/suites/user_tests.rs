@@ -64,6 +64,38 @@ async fn test_user_state_self_mute_broadcast() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_user_state_self_mute_notifies_actor() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    let user1 = &clients[0];
+
+    let user1_session = user1.session_id().unwrap();
+    let mut rx = user1.subscribe();
+
+    user1.me().set_mute(true).await?;
+
+    let got = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == user1_session && u.self_mute =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(got, "Self-mute should also notify the actor");
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_user_state_self_deaf_broadcast() -> Result<()> {
     let env = single_edge_env().await?;
     let configs = vec![ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)];

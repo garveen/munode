@@ -1,6 +1,5 @@
 //! UserState update handlers: self-initiated and admin-initiated state changes.
 use super::helpers::{get_perm_cached, hex_to_bytes};
-use crate::handler;
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 use munode_common::permission as perm;
@@ -19,13 +18,11 @@ pub(super) async fn handle_user_state_update(
     let mut needs_broadcast = false;
     let mut channel_moved = false;
     let mut suppress_changed = false;
-    let mut old_channel_id: u32 = 0; // captured before move for ninja visibility logic
 
     if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
         // 9.1 Channel move with permission check
         if let Some(target_channel_id) = user_state.channel_id {
             if client.channel_id != target_channel_id {
-                old_channel_id = client.channel_id; // capture BEFORE move
                 // Check Enter permission on target channel via Hub
                 let can_enter = get_perm_cached(
                     &hub_client,
@@ -82,53 +79,12 @@ pub(super) async fn handle_user_state_update(
                         "User {} moving to channel {}",
                         session_id, target_channel_id
                     );
-
-                    // Atomically check capacity and update channel membership.
-                    // This replaces the previous non-atomic count_in_channel + move_client_to_channel
-                    // pattern, which was susceptible to a TOCTOU race where multiple concurrent tasks
-                    // could all observe "channel not full" and all complete the move, exceeding the limit.
-                    match edge_state
-                        .client_manager
-                        .move_client_to_channel_checked(
-                            session_id,
-                            target_channel_id,
-                            new_suppress,
-                            effective_limit,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            suppress_changed = new_suppress != client.suppress;
-                            client.channel_id = target_channel_id;
-                            client.suppress = new_suppress;
-                            needs_broadcast = true;
-                            channel_moved = true;
-                        }
-                        Err(()) => {
-                            // Atomic capacity check failed: channel is full.
-                            debug!(
-                                "Channel {} is full, denying move for session {}",
-                                target_channel_id, session_id
-                            );
-                            if let Some(sender) =
-                                edge_state.client_manager.get_sender(session_id).await
-                            {
-                                let pq = mumbleproto::PermissionDenied {
-                                    r#type: Some(
-                                        mumbleproto::permission_denied::DenyType::ChannelFull
-                                            as i32,
-                                    ),
-                                    channel_id: Some(target_channel_id),
-                                    reason: Some("Channel is full".to_string()),
-                                    ..Default::default()
-                                };
-                                sender
-                                    .send_message(MessageType::PermissionDenied, &pq)
-                                    .await;
-                            }
-                            return;
-                        }
-                    }
+                    let _ = effective_limit;
+                    suppress_changed = new_suppress != client.suppress;
+                    client.channel_id = target_channel_id;
+                    client.suppress = new_suppress;
+                    needs_broadcast = true;
+                    channel_moved = true;
                 } else {
                     debug!(
                         "Channel move denied for session {} → channel {} (no Enter permission)",
@@ -311,46 +267,9 @@ pub(super) async fn handle_user_state_update(
                     continue;
                 }
 
-                // Atomically check per-channel capacity and register the listener.
-                // This replaces the previous non-atomic get_listening_count + deferred
-                // update_client pattern, eliminating the TOCTOU race where multiple tasks
-                // could both observe "channel has room" and both complete the add.
-                let per_channel_limit = edge_state
-                    .listeners_per_channel
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let added = edge_state
-                    .client_manager
-                    .add_listener_checked(session_id, ch, per_channel_limit)
-                    .await;
-
-                if added {
-                    // Keep the local client clone in sync so the per-user limit check
-                    // above remains accurate for subsequent channels in this loop.
-                    if !client.listening_channels.contains(&ch) {
-                        client.listening_channels.push(ch);
-                    }
+                if !client.listening_channels.contains(&ch) {
+                    client.listening_channels.push(ch);
                     actually_added_channels.push(ch);
-                } else {
-                    debug!(
-                        "Channel {} listener limit ({}) reached",
-                        ch, per_channel_limit
-                    );
-                    if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
-                        let pq = mumbleproto::PermissionDenied {
-                            r#type: Some(
-                                mumbleproto::permission_denied::DenyType::ChannelFull as i32,
-                            ),
-                            channel_id: Some(ch),
-                            reason: Some(format!(
-                                "Channel listener limit reached: this channel allows at most {} listener(s)",
-                                per_channel_limit
-                            )),
-                            ..Default::default()
-                        };
-                        sender
-                            .send_message(MessageType::PermissionDenied, &pq)
-                            .await;
-                    }
                 }
             }
             client
@@ -361,6 +280,68 @@ pub(super) async fn handle_user_state_update(
                 client.listening_volume_adjustments.remove(&ch);
             }
             needs_broadcast = true;
+        }
+
+        let has_local_only_updates = !user_state.listening_volume_adjustment.is_empty()
+            || user_state.plugin_context.is_some()
+            || user_state.texture.is_some()
+            || user_state.comment.is_some();
+        if needs_broadcast && !channel_moved && !has_local_only_updates {
+            let mut state_update = mumbleproto::UserState {
+                session: Some(session_id),
+                actor: Some(session_id),
+                ..Default::default()
+            };
+
+            if let Some(sd) = user_state.self_deaf {
+                state_update.self_deaf = Some(sd);
+                if sd {
+                    state_update.self_mute = Some(true);
+                }
+            }
+            if let Some(sm) = user_state.self_mute {
+                state_update.self_mute = Some(sm);
+                if !sm {
+                    state_update.self_deaf = Some(false);
+                }
+            }
+            if let Some(v) = user_state.recording {
+                if state_update.recording.is_none() {
+                    state_update.recording = Some(v);
+                }
+            }
+
+            let listening_channel_add = actually_added_channels.clone();
+            let listening_channel_remove = user_state.listening_channel_remove.clone();
+            if state_update.self_mute.is_some()
+                || state_update.self_deaf.is_some()
+                || state_update.recording.is_some()
+                || !listening_channel_add.is_empty()
+                || !listening_channel_remove.is_empty()
+            {
+                if let Err(e) = hub_client
+                    .rpc_user_state_changed(
+                        session_id,
+                        state_update.self_mute,
+                        state_update.self_deaf,
+                        None,
+                        None,
+                        None,
+                        None,
+                        state_update.recording,
+                        listening_channel_add,
+                        listening_channel_remove,
+                        None,
+                    )
+                    .await
+                {
+                    warn!(
+                        "rpc_user_state_changed failed for session {}: {:#}",
+                        session_id, e
+                    );
+                }
+            }
+            return;
         }
 
         // Volume adjustments for listened channels
@@ -523,164 +504,96 @@ pub(super) async fn handle_user_state_update(
         }
 
         if needs_broadcast {
-            edge_state
-                .client_manager
-                .update_client(client.clone())
-                .await;
-
-            // Build a targeted state-change message containing ONLY the changed fields
-            // with their ACTUAL boolean values (including `false`).
-            //
-            // Using build_user_state_msg() here would be wrong: it omits false-valued
-            // fields (returns None), so observers can never learn about state transitions
-            // like self_mute going true→false (un-mute).
-            let mut broadcast_msg = mumbleproto::UserState {
-                session: Some(session_id),
-                actor: Some(session_id),
-                ..Default::default()
-            };
-
             if channel_moved {
-                broadcast_msg.channel_id = Some(client.channel_id);
-                // Only include suppress when it actually changed to avoid spurious
-                // "Server removed server mute" notifications when moving to a channel
-                // where the user already had (or still has) speak permission.
+                if let Err(e) = hub_client
+                    .rpc_user_moved(session_id, client.channel_id, session_id)
+                    .await
+                {
+                    let is_full = e.to_string().contains("Channel is full");
+                    if is_full {
+                        if let Some(sender) = edge_state.client_manager.get_sender(session_id).await
+                        {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(
+                                    mumbleproto::permission_denied::DenyType::ChannelFull as i32,
+                                ),
+                                channel_id: Some(client.channel_id),
+                                reason: Some("Channel is full".to_string()),
+                                ..Default::default()
+                            };
+                            sender
+                                .send_message(MessageType::PermissionDenied, &pq)
+                                .await;
+                        }
+                    }
+                    warn!("rpc_user_moved failed for session {}: {:#}", session_id, e);
+                }
                 if suppress_changed {
-                    broadcast_msg.suppress = Some(client.suppress);
-                }
-            }
-
-            // Propagate self_deaf with coupling: self_deaf=true ⇒ self_mute=true.
-            if let Some(sd) = user_state.self_deaf {
-                broadcast_msg.self_deaf = Some(sd);
-                if sd {
-                    broadcast_msg.self_mute = Some(true);
-                }
-            }
-            // self_mute may override the coupling value set above;
-            // self_mute=false ⇒ self_deaf=false as well.
-            if let Some(sm) = user_state.self_mute {
-                broadcast_msg.self_mute = Some(sm);
-                if !sm {
-                    broadcast_msg.self_deaf = Some(false);
-                }
-            }
-
-            // mute/deaf/priority_speaker are not processed here (admin-only).
-            if let Some(v) = user_state.recording {
-                // Only include recording in the broadcast when the value
-                // actually changed (change detection already skips no-ops above).
-                if broadcast_msg.recording.is_none() {
-                    broadcast_msg.recording = Some(v);
-                }
-            }
-
-            if !actually_added_channels.is_empty() {
-                broadcast_msg.listening_channel_add = actually_added_channels.clone();
-            }
-            if !user_state.listening_channel_remove.is_empty() {
-                broadcast_msg.listening_channel_remove =
-                    user_state.listening_channel_remove.clone();
-            }
-            if !user_state.listening_volume_adjustment.is_empty() {
-                broadcast_msg.listening_volume_adjustment =
-                    user_state.listening_volume_adjustment.clone();
-            }
-
-            // Channel Ninja: for channel moves, apply three-way visibility logic.
-            // For non-move state changes, filter if user is in a ninja channel.
-            if channel_moved {
-                let ninja_channels_snap = edge_state.ninja_channels.read().await.clone();
-                let from_is_ninja = ninja_channels_snap.contains(&old_channel_id);
-                let to_is_ninja = ninja_channels_snap.contains(&client.channel_id);
-                if !from_is_ninja && !to_is_ninja {
-                    // No ninja channels involved — broadcast normally.
-                    edge_state
-                        .client_manager
-                        .broadcast(MessageType::UserState, &broadcast_msg, None)
-                        .await;
-                } else {
-                    let all_clients = edge_state.client_manager.get_all_clients().await;
-                    let visible_cache = edge_state.ninja_visible_to.read().await;
-                    // Build full UserState for the "appears" case (observer gains visibility).
-                    let full_appear_msg = mumbleproto::UserState {
-                        session: Some(session_id),
-                        user_id: if client.user_id > 0 {
-                            Some(client.user_id)
-                        } else {
-                            None
-                        },
-                        name: Some(client.username.clone()),
-                        channel_id: Some(client.channel_id),
-                        actor: Some(session_id),
-                        mute: if client.mute { Some(true) } else { None },
-                        deaf: if client.deaf { Some(true) } else { None },
-                        suppress: if client.suppress { Some(true) } else { None },
-                        self_mute: if client.self_mute { Some(true) } else { None },
-                        self_deaf: if client.self_deaf { Some(true) } else { None },
-                        priority_speaker: if client.priority_speaker {
-                            Some(true)
-                        } else {
-                            None
-                        },
-                        recording: if client.recording { Some(true) } else { None },
-                        hash: client.cert_hash.clone(),
-                        ..Default::default()
-                    };
-                    let remove_msg = handler::build_user_remove_msg(session_id, None);
-                    for observer in &all_clients {
-                        if observer.session == session_id {
-                            continue;
-                        }
-                        let was_visible = if from_is_ninja {
-                            visible_cache
-                                .get(&observer.session)
-                                .map(|s| s.contains(&old_channel_id))
-                                .unwrap_or(false)
-                        } else {
-                            true
-                        };
-                        let now_visible = if to_is_ninja {
-                            visible_cache
-                                .get(&observer.session)
-                                .map(|s| s.contains(&client.channel_id))
-                                .unwrap_or(false)
-                        } else {
-                            true
-                        };
-                        match (was_visible, now_visible) {
-                            (true, true) => {
-                                edge_state
-                                    .client_manager
-                                    .send_to(
-                                        observer.session,
-                                        MessageType::UserState,
-                                        &broadcast_msg,
-                                    )
-                                    .await;
-                            }
-                            (true, false) => {
-                                edge_state
-                                    .client_manager
-                                    .send_to(observer.session, MessageType::UserRemove, &remove_msg)
-                                    .await;
-                            }
-                            (false, true) => {
-                                edge_state
-                                    .client_manager
-                                    .send_to(
-                                        observer.session,
-                                        MessageType::UserState,
-                                        &full_appear_msg,
-                                    )
-                                    .await;
-                            }
-                            (false, false) => {}
-                        }
+                    if let Err(e) = hub_client
+                        .rpc_user_state_changed(
+                            session_id,
+                            None,
+                            None,
+                            None,
+                            None,
+                            Some(client.suppress),
+                            None,
+                            None,
+                            vec![],
+                            vec![],
+                            None,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "rpc_user_state_changed (suppress) failed for session {}: {:#}",
+                            session_id, e
+                        );
                     }
                 }
             } else {
-                // Non-move state change: filter if user is currently in a ninja channel.
+                edge_state
+                    .client_manager
+                    .update_client(client.clone())
+                    .await;
+
+                let mut broadcast_msg = mumbleproto::UserState {
+                    session: Some(session_id),
+                    actor: Some(session_id),
+                    ..Default::default()
+                };
+
+                if let Some(sd) = user_state.self_deaf {
+                    broadcast_msg.self_deaf = Some(sd);
+                    if sd {
+                        broadcast_msg.self_mute = Some(true);
+                    }
+                }
+                if let Some(sm) = user_state.self_mute {
+                    broadcast_msg.self_mute = Some(sm);
+                    if !sm {
+                        broadcast_msg.self_deaf = Some(false);
+                    }
+                }
+
+                if let Some(v) = user_state.recording {
+                    if broadcast_msg.recording.is_none() {
+                        broadcast_msg.recording = Some(v);
+                    }
+                }
+
+                if !actually_added_channels.is_empty() {
+                    broadcast_msg.listening_channel_add = actually_added_channels.clone();
+                }
+                if !user_state.listening_channel_remove.is_empty() {
+                    broadcast_msg.listening_channel_remove =
+                        user_state.listening_channel_remove.clone();
+                }
+                if !user_state.listening_volume_adjustment.is_empty() {
+                    broadcast_msg.listening_volume_adjustment =
+                        user_state.listening_volume_adjustment.clone();
+                }
+
                 let ninja_channels_snap = edge_state.ninja_channels.read().await.clone();
                 if ninja_channels_snap.contains(&client.channel_id) {
                     let all_clients = edge_state.client_manager.get_all_clients().await;
@@ -703,51 +616,11 @@ pub(super) async fn handle_user_state_update(
                         .broadcast(MessageType::UserState, &broadcast_msg, None)
                         .await;
                 }
-            }
-            // Invalidate BroadcastCaches: channel/deaf/listener state changed.
-            edge_state
-                .topology_version
-                .fetch_add(1, std::sync::atomic::Ordering::Release);
 
-            // Notify Hub of the CHANGED fields only so that other edges stay in
-            // sync.  Previously we sent the full current state on every update
-            // which caused other edges to build a delta that included
-            // Some(false) for every default-off field, triggering spurious
-            // "Server opened mic/speaker" / "Server granted priority speaker"
-            // notifications on their local clients.
-            if channel_moved {
-                if let Err(e) = hub_client
-                    .rpc_user_moved(session_id, client.channel_id, session_id)
-                    .await
-                {
-                    warn!("rpc_user_moved failed for session {}: {:#}", session_id, e);
-                }
-                // If suppress changed due to the channel move (ACL re-check), also notify
-                // Hub so other edges update their remote_users suppress state.
-                if suppress_changed {
-                    if let Err(e) = hub_client
-                        .rpc_user_state_changed(
-                            session_id,
-                            None,
-                            None,
-                            None,
-                            None,
-                            Some(client.suppress),
-                            None,
-                            None,
-                            vec![],
-                            vec![],
-                            None, // suppress changes have no actor
-                        )
-                        .await
-                    {
-                        warn!(
-                            "rpc_user_state_changed (suppress) failed for session {}: {:#}",
-                            session_id, e
-                        );
-                    }
-                }
-            } else {
+                edge_state
+                    .topology_version
+                    .fetch_add(1, std::sync::atomic::Ordering::Release);
+
                 let listening_channel_add = if !broadcast_msg.listening_channel_add.is_empty() {
                     broadcast_msg.listening_channel_add.clone()
                 } else {
@@ -776,12 +649,12 @@ pub(super) async fn handle_user_state_update(
                             broadcast_msg.self_deaf,
                             broadcast_msg.mute,
                             broadcast_msg.deaf,
-                            None, // suppress not changed here
+                            None,
                             broadcast_msg.priority_speaker,
                             broadcast_msg.recording,
                             listening_channel_add,
                             listening_channel_remove,
-                            None, // self-initiated changes have no actor
+                            None,
                         )
                         .await
                     {
@@ -991,7 +864,6 @@ pub(super) async fn handle_admin_user_state_update(
 
         // Admin channel move (drag user to another channel)
         let mut channel_moved = false;
-        let mut suppress_changed = false;
         if let Some(target_channel_id) = user_state.channel_id {
             if client.channel_id != target_channel_id {
                 // Check 1: actor needs Move permission in the victim's current channel
@@ -1079,51 +951,21 @@ pub(super) async fn handle_admin_user_state_update(
                     != 0;
                 let new_suppress = !can_speak;
 
-                // Compute effective capacity limit for the target channel.
-                let effective_limit = if let Some(ch) = edge_state
-                    .channel_manager
-                    .get_channel(target_channel_id)
-                    .await
-                {
-                    if ch.max_users > 0 {
-                        ch.max_users
-                    } else {
-                        let hub_limits = edge_state.hub_limits.read().await;
-                        hub_limits
-                            .as_ref()
-                            .and_then(|l| {
-                                if l.max_users_per_channel.unwrap_or(0) > 0 {
-                                    l.max_users_per_channel
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or(0)
-                    }
-                } else {
-                    0
-                };
+                client.channel_id = target_channel_id;
+                client.suppress = new_suppress;
+                needs_broadcast = true;
+                channel_moved = true;
+            }
+        }
 
-                // Atomically check capacity and move in-place.
-                match edge_state
-                    .client_manager
-                    .move_client_to_channel_checked(
-                        target_session,
-                        target_channel_id,
-                        new_suppress,
-                        effective_limit,
-                    )
+        if needs_broadcast {
+            if channel_moved {
+                if let Err(e) = hub_client
+                    .rpc_user_moved(target_session, client.channel_id, actor_session)
                     .await
                 {
-                    Ok(()) => {
-                        suppress_changed = new_suppress != client.suppress;
-                        client.channel_id = target_channel_id;
-                        client.suppress = new_suppress;
-                        needs_broadcast = true;
-                        channel_moved = true;
-                    }
-                    Err(()) => {
-                        // Channel full — send PermissionDenied to the actor.
+                    let is_full = e.to_string().contains("Channel is full");
+                    if is_full {
                         if let Some(sender) =
                             edge_state.client_manager.get_sender(actor_session).await
                         {
@@ -1131,7 +973,7 @@ pub(super) async fn handle_admin_user_state_update(
                                 r#type: Some(
                                     mumbleproto::permission_denied::DenyType::ChannelFull as i32,
                                 ),
-                                channel_id: Some(target_channel_id),
+                                channel_id: Some(client.channel_id),
                                 reason: Some("Channel is full".to_string()),
                                 ..Default::default()
                             };
@@ -1139,50 +981,7 @@ pub(super) async fn handle_admin_user_state_update(
                                 .send_message(MessageType::PermissionDenied, &pq)
                                 .await;
                         }
-                        return;
                     }
-                }
-            }
-        }
-
-        if needs_broadcast {
-            edge_state
-                .client_manager
-                .update_client(client.clone())
-                .await;
-            // Build targeted message; only include fields that were actually changed,
-            // with their real boolean values (including false) so clients can observe
-            // state transitions (e.g., admin un-muting a user).
-            let mut broadcast_msg = mumbleproto::UserState {
-                session: Some(target_session),
-                actor: Some(actor_session),
-                ..Default::default()
-            };
-            if channel_moved {
-                broadcast_msg.channel_id = Some(client.channel_id);
-                if suppress_changed {
-                    broadcast_msg.suppress = Some(client.suppress);
-                }
-            }
-            if let Some(v) = user_state.mute {
-                broadcast_msg.mute = Some(v);
-            }
-            if let Some(v) = user_state.deaf {
-                broadcast_msg.deaf = Some(v);
-            }
-            edge_state
-                .client_manager
-                .broadcast(MessageType::UserState, &broadcast_msg, None)
-                .await;
-            // Invalidate BroadcastCaches: admin changed channel/deaf state.
-            edge_state
-                .topology_version
-                .fetch_add(1, std::sync::atomic::Ordering::Release);
-            if channel_moved {
-                if let Err(e) = hub_client
-                    .rpc_user_moved(target_session, client.channel_id, actor_session)
-                    .await
-                {
                     warn!(
                         "rpc_user_moved failed (admin move, session {}): {:#}",
                         target_session, e
@@ -1194,8 +993,8 @@ pub(super) async fn handle_admin_user_state_update(
                         target_session,
                         None,
                         None,
-                        broadcast_msg.mute,
-                        broadcast_msg.deaf,
+                        user_state.mute,
+                        user_state.deaf,
                         None,
                         None,
                         None,

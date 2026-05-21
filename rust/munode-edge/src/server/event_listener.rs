@@ -286,11 +286,17 @@ pub(crate) async fn hub_event_listener(
                             msg.listening_channel_remove = listening_channel_remove;
                         }
                         // Channel Ninja: filter state-change notifications for users in ninja channels
-                        let user_channel = state
-                            .channel_manager
-                            .get_remote_user(session_id)
-                            .await
-                            .map(|u| u.channel_id);
+                        let user_channel = if let Some(user) =
+                            state.channel_manager.get_remote_user(session_id).await
+                        {
+                            Some(user.channel_id)
+                        } else {
+                            state
+                                .client_manager
+                                .get_client(session_id)
+                                .await
+                                .map(|user| user.channel_id)
+                        };
                         let ninja_channels_snap: std::collections::HashSet<u32> =
                             state.ninja_channels.read().await.iter().copied().collect();
                         if let Some(ch) = user_channel {

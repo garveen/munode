@@ -201,6 +201,53 @@ async fn test_user_state_propagates_across_edges() -> Result<()> {
     Ok(())
 }
 
+/// When an admin on Edge 1 moves a user on Edge 2, the actor must also receive
+/// the broadcast UserState immediately instead of waiting for a periodic sync.
+#[tokio::test]
+async fn test_cross_edge_admin_move_notifies_actor_immediately() -> Result<()> {
+    let env = standard_env().await?;
+    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("user1", 2)];
+    let clients = create_clients(&env, &configs).await?;
+    let (admin, target) = (&clients[0], &clients[1]);
+
+    sleep_ms(800).await;
+
+    let target_session = target.session_id().unwrap();
+    let mut admin_rx = admin.subscribe();
+
+    admin
+        .send_user_state(munode_protocol::mumbleproto::UserState {
+            session: Some(target_session),
+            channel_id: Some(1),
+            ..Default::default()
+        })
+        .await?;
+
+    let actor_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match admin_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == target_session && u.channel_id == 1 =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(
+        actor_notified,
+        "Cross-edge admin move should notify the actor immediately"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
 // ── Text message routing ──────────────────────────────────────────────────
 
 /// A channel text message sent from Edge 1 should arrive at a client on

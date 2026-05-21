@@ -168,7 +168,8 @@ async fn test_admin_mute_user() -> Result<()> {
     let (admin, target) = (&clients[0], &clients[1]);
 
     let target_session = target.session_id().unwrap();
-    let mut rx = target.subscribe();
+    let mut target_rx = target.subscribe();
+    let mut admin_rx = admin.subscribe();
 
     use munode_protocol::mumbleproto;
     admin
@@ -181,7 +182,21 @@ async fn test_admin_mute_user() -> Result<()> {
 
     let muted = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            match rx.recv().await {
+            match target_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u)) if u.session == target_session && u.mute => {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let actor_notified = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match admin_rx.recv().await {
                 Ok(ClientEvent::UserStateChanged(u)) if u.session == target_session && u.mute => {
                     break true;
                 }
@@ -194,6 +209,10 @@ async fn test_admin_mute_user() -> Result<()> {
     .unwrap_or(false);
 
     assert!(muted, "Admin should be able to mute a user");
+    assert!(
+        actor_notified,
+        "Admin should also receive the mute broadcast"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }

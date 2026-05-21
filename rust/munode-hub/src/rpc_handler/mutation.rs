@@ -161,7 +161,7 @@ impl RpcHandler {
         &self,
         request: &TypedRpcRequest,
         request_id: &str,
-        edge_server_id: u32,
+        _edge_server_id: u32,
     ) -> Result<EdgeHubPacket> {
         let params = request
             .edge_user_moved
@@ -219,7 +219,7 @@ impl RpcHandler {
             .move_user_to_channel(params.session_id, params.channel_id)
             .await;
 
-        self.broadcast_notification_excluding("hub.userMoved", edge_server_id, |notification| {
+        self.broadcast_notification("hub.userMoved", |notification| {
             notification.user_moved = Some(HubUserMovedParams {
                 session_id: params.session_id,
                 edge_id: params.edge_id,
@@ -247,7 +247,7 @@ impl RpcHandler {
         &self,
         request: &TypedRpcRequest,
         request_id: &str,
-        edge_server_id: u32,
+        _edge_server_id: u32,
     ) -> Result<EdgeHubPacket> {
         let params = request
             .edge_user_state_changed
@@ -388,12 +388,7 @@ impl RpcHandler {
             rpc_notification: Some(notification),
             ..Default::default()
         };
-        crate::server::broadcast_critical_excluding_sequenced(
-            &self.state,
-            packet.encode_to_vec(),
-            edge_server_id,
-        )
-        .await;
+        crate::server::broadcast_critical_sequenced(&self.state, packet.encode_to_vec()).await;
 
         Ok(
             self.make_response_packet(request_id, "edge.userStateChanged", |response| {

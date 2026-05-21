@@ -229,42 +229,57 @@ impl HubClient {
                 if let Some(p) = &notification.user_state_broadcast {
                     let session_id = p.session_id;
                     if session_id > 0 {
+                        let mut delta = crate::state::RemoteUserStateDelta::default();
+                        if let Some(b) = p.self_mute {
+                            delta.self_mute = Some(b);
+                        }
+                        if let Some(b) = p.self_deaf {
+                            delta.self_deaf = Some(b);
+                        }
+                        if let Some(b) = p.mute {
+                            delta.mute = Some(b);
+                        }
+                        if let Some(b) = p.deaf {
+                            delta.deaf = Some(b);
+                        }
+                        if let Some(b) = p.suppress {
+                            delta.suppress = Some(b);
+                        }
+                        if let Some(b) = p.priority_speaker {
+                            delta.priority_speaker = Some(b);
+                        }
+                        if let Some(b) = p.recording {
+                            delta.recording = Some(b);
+                        }
+                        delta.actor_session = p.actor_session;
+
                         if let Some(mut user) = self
                             .edge_state
                             .channel_manager
                             .get_remote_user(session_id)
                             .await
                         {
-                            let mut delta = crate::state::RemoteUserStateDelta::default();
                             if let Some(b) = p.self_mute {
                                 user.self_mute = b;
-                                delta.self_mute = Some(b);
                             }
                             if let Some(b) = p.self_deaf {
                                 user.self_deaf = b;
-                                delta.self_deaf = Some(b);
                             }
                             if let Some(b) = p.mute {
                                 user.mute = b;
-                                delta.mute = Some(b);
                             }
                             if let Some(b) = p.deaf {
                                 user.deaf = b;
-                                delta.deaf = Some(b);
                             }
                             if let Some(b) = p.suppress {
                                 user.suppress = b;
-                                delta.suppress = Some(b);
                             }
                             if let Some(b) = p.priority_speaker {
                                 user.priority_speaker = b;
-                                delta.priority_speaker = Some(b);
                             }
                             if let Some(b) = p.recording {
                                 user.recording = b;
-                                delta.recording = Some(b);
                             }
-                            delta.actor_session = p.actor_session;
                             let listening_add: Vec<u32> = p
                                 .listening_channel_add
                                 .iter()
@@ -288,6 +303,61 @@ impl HubClient {
                                 .channel_manager
                                 .upsert_remote_user(user)
                                 .await;
+                            if listening_changed || deaf_changed {
+                                self.edge_state
+                                    .topology_version
+                                    .fetch_add(1, std::sync::atomic::Ordering::Release);
+                            }
+                            self.edge_state.emit(EdgeEvent::RemoteUserStateChanged {
+                                session_id,
+                                delta,
+                                listening_channel_add: listening_add,
+                                listening_channel_remove: listening_remove,
+                                actor_session: p.actor_session,
+                            });
+                        } else if let Some(mut client) =
+                            self.edge_state.client_manager.get_client(session_id).await
+                        {
+                            if let Some(b) = p.self_mute {
+                                client.self_mute = b;
+                            }
+                            if let Some(b) = p.self_deaf {
+                                client.self_deaf = b;
+                            }
+                            if let Some(b) = p.mute {
+                                client.mute = b;
+                            }
+                            if let Some(b) = p.deaf {
+                                client.deaf = b;
+                            }
+                            if let Some(b) = p.suppress {
+                                client.suppress = b;
+                            }
+                            if let Some(b) = p.priority_speaker {
+                                client.priority_speaker = b;
+                            }
+                            if let Some(b) = p.recording {
+                                client.recording = b;
+                            }
+
+                            let listening_add: Vec<u32> = p
+                                .listening_channel_add
+                                .iter()
+                                .copied()
+                                .filter(|&ch_id| !client.listening_channels.contains(&ch_id))
+                                .collect();
+                            let listening_remove = p.listening_channel_remove.clone();
+                            for &ch_id in &listening_add {
+                                client.listening_channels.push(ch_id);
+                            }
+                            client
+                                .listening_channels
+                                .retain(|ch| !listening_remove.contains(ch));
+
+                            let listening_changed =
+                                !listening_add.is_empty() || !listening_remove.is_empty();
+                            let deaf_changed = delta.deaf.is_some() || delta.self_deaf.is_some();
+                            self.edge_state.client_manager.update_client(client).await;
                             if listening_changed || deaf_changed {
                                 self.edge_state
                                     .topology_version
@@ -352,6 +422,13 @@ impl HubClient {
                         .await
                         .is_some()
                     {
+                        let old_suppress = self
+                            .edge_state
+                            .client_manager
+                            .get_client(params.session_id)
+                            .await
+                            .map(|client| client.suppress)
+                            .unwrap_or(false);
                         // Determine new suppress state: check speak permission in the new channel.
                         let new_suppress = match self
                             .handle_permission_query(params.session_id, params.channel_id)
@@ -376,6 +453,29 @@ impl HubClient {
                             "Local client {} moved to channel {} by remote admin (suppress={})",
                             params.session_id, params.channel_id, new_suppress
                         );
+                        if old_suppress != new_suppress {
+                            if let Err(error) = self
+                                .rpc_user_state_changed(
+                                    params.session_id,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    Some(new_suppress),
+                                    None,
+                                    None,
+                                    vec![],
+                                    vec![],
+                                    None,
+                                )
+                                .await
+                            {
+                                warn!(
+                                    "rpc_user_state_changed failed after hub.userMoved for session {}: {:#}",
+                                    params.session_id, error
+                                );
+                            }
+                        }
                     }
                     // actor_session: 0 means server-initiated; fall back to session_id for user self-moves
                     let actor_session = params
