@@ -229,30 +229,30 @@ impl RpcHandler {
             }
         }
 
-        let old_channel_id = self
-            .state
-            .session_manager
-            .get_session(params.session_id)
+        let Some((old_channel_id, moved_params)) = self
+            .apply_authoritative_user_move(
+                params.session_id,
+                params.channel_id,
+                params.actor_session,
+            )
             .await
-            .map(|session| session.channel_id);
-        self.state
-            .session_manager
-            .move_user_to_channel(params.session_id, params.channel_id)
-            .await;
+        else {
+            return Ok(
+                self.make_response_packet(request_id, "edge.userMoved", |response| {
+                    response.edge_user_moved = Some(EdgeUserMovedResult {
+                        success: false,
+                        error: Some("unknown session".into()),
+                    });
+                }),
+            );
+        };
 
         self.broadcast_notification("hub.userMoved", |notification| {
-            notification.user_moved = Some(HubUserMovedParams {
-                session_id: params.session_id,
-                edge_id: params.edge_id,
-                channel_id: params.channel_id,
-                actor_session: params.actor_session,
-            });
+            notification.user_moved = Some(moved_params);
         })
         .await;
 
-        if let Some(old_channel_id) = old_channel_id {
-            self.maybe_cleanup_temp_channel(old_channel_id).await;
-        }
+        self.maybe_cleanup_temp_channel(old_channel_id).await;
 
         Ok(
             self.make_response_packet(request_id, "edge.userMoved", |response| {

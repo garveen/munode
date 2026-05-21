@@ -1870,6 +1870,8 @@ pub struct HubUserMovedParams {
     pub channel_id: u32,
     #[prost(uint32, optional, tag = "4")]
     pub actor_session: ::core::option::Option<u32>,
+    #[prost(bool, optional, tag = "5")]
+    pub suppress: ::core::option::Option<bool>,
 }
 /// ---------------------------------------------------------------------------
 /// hub.channelCreated - Hub 通知 Edge 频道创建

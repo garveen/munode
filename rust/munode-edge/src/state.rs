@@ -462,6 +462,7 @@ pub enum EdgeEvent {
         from_channel_id: u32,
         channel_id: u32,
         actor_session: u32,
+        suppress: Option<bool>,
     },
     /// A channel was created.
     ChannelCreated { channel_id: u32 },

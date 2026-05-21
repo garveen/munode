@@ -380,114 +380,93 @@ impl HubClient {
                         "Remote user moved: session {} -> channel {}",
                         params.session_id, params.channel_id
                     );
-                    // Capture the channel the user was in BEFORE the move, so the event
-                    // listener can apply correct ninja from→to visibility logic.
-                    let from_channel_id = if let Some(u) = self
+                    let remote_user_before = self
                         .edge_state
                         .channel_manager
                         .get_remote_user(params.session_id)
-                        .await
-                    {
-                        u.channel_id
-                    } else if let Some(c) = self
+                        .await;
+                    let local_client_before = self
                         .edge_state
                         .client_manager
                         .get_client(params.session_id)
-                        .await
-                    {
+                        .await;
+                    let had_remote_user = remote_user_before.is_some();
+                    let had_local_client = local_client_before.is_some();
+                    // Capture the channel the user was in BEFORE the move, so the event
+                    // listener can apply correct ninja from→to visibility logic.
+                    let from_channel_id = if let Some(u) = remote_user_before.as_ref() {
+                        u.channel_id
+                    } else if let Some(c) = local_client_before.as_ref() {
                         c.channel_id
                     } else {
                         params.channel_id // fallback: treat as same channel (no-op visibility change)
                     };
                     // Update remote-user tracking if the mover is tracked as remote on this edge.
-                    if let Some(mut user) = self
-                        .edge_state
-                        .channel_manager
-                        .get_remote_user(params.session_id)
-                        .await
-                    {
-                        user.channel_id = params.channel_id;
-                        self.edge_state
-                            .channel_manager
-                            .upsert_remote_user(user)
-                            .await;
+                    let mut remote_user_changed = false;
+                    let mut moved_suppress = None;
+                    if let Some(mut user) = remote_user_before {
+                        let old_suppress = user.suppress;
+                        if user.channel_id != params.channel_id {
+                            remote_user_changed = true;
+                        }
+                        if let Some(suppress) = params.suppress {
+                            user.suppress = suppress;
+                            if suppress != old_suppress {
+                                moved_suppress = Some(suppress);
+                            }
+                        }
+                        if remote_user_changed || moved_suppress.is_some() {
+                            user.channel_id = params.channel_id;
+                            self.edge_state
+                                .channel_manager
+                                .upsert_remote_user(user)
+                                .await;
+                        }
                     }
                     // If the moved user is LOCAL on this edge (i.e. the admin move came from
                     // a different edge), update client_manager so that voice routing and
                     // subsequent ACL checks use the correct channel.
-                    if self
-                        .edge_state
-                        .client_manager
-                        .get_client(params.session_id)
-                        .await
-                        .is_some()
-                    {
-                        let old_suppress = self
-                            .edge_state
-                            .client_manager
-                            .get_client(params.session_id)
-                            .await
-                            .map(|client| client.suppress)
-                            .unwrap_or(false);
-                        // Determine new suppress state: check speak permission in the new channel.
-                        let new_suppress = match self
-                            .handle_permission_query(params.session_id, params.channel_id)
-                            .await
-                        {
-                            Ok(r) => r
-                                .permissions
-                                .map(|p| p & munode_common::permission::SPEAK != 0)
-                                .map(|can| !can)
-                                .unwrap_or(false),
-                            Err(_) => false,
-                        };
-                        self.edge_state
-                            .client_manager
-                            .move_client_to_channel(
-                                params.session_id,
-                                params.channel_id,
-                                new_suppress,
-                            )
-                            .await;
-                        debug!(
-                            "Local client {} moved to channel {} by remote admin (suppress={})",
-                            params.session_id, params.channel_id, new_suppress
-                        );
-                        if old_suppress != new_suppress {
-                            if let Err(error) = self
-                                .rpc_user_state_changed(
+                    let mut local_client_changed = false;
+                    if let Some(local_client) = local_client_before.as_ref() {
+                        let old_suppress = local_client.suppress;
+                        let old_channel_id = local_client.channel_id;
+                        let new_suppress = params.suppress.unwrap_or(old_suppress);
+                        local_client_changed = old_channel_id != params.channel_id;
+                        if local_client_changed || old_suppress != new_suppress {
+                            self.edge_state
+                                .client_manager
+                                .move_client_to_channel(
                                     params.session_id,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    Some(new_suppress),
-                                    None,
-                                    None,
-                                    vec![],
-                                    vec![],
-                                    None,
+                                    params.channel_id,
+                                    new_suppress,
                                 )
-                                .await
-                            {
-                                warn!(
-                                    "rpc_user_state_changed failed after hub.userMoved for session {}: {:#}",
-                                    params.session_id, error
-                                );
-                            }
+                                .await;
+                            debug!(
+                                "Local client {} applied hub.userMoved to channel {} (suppress={})",
+                                params.session_id, params.channel_id, new_suppress
+                            );
+                        }
+                        if old_suppress != new_suppress {
+                            moved_suppress = Some(new_suppress);
                         }
                     }
-                    // actor_session: 0 means server-initiated; fall back to session_id for user self-moves
-                    let actor_session = params
-                        .actor_session
-                        .filter(|&a| a != 0)
-                        .unwrap_or(params.session_id);
-                    self.edge_state.emit(EdgeEvent::RemoteUserMoved {
-                        session_id: params.session_id,
-                        from_channel_id,
-                        channel_id: params.channel_id,
-                        actor_session,
-                    });
+                    if remote_user_changed
+                        || local_client_changed
+                        || (!had_remote_user && !had_local_client)
+                    {
+                        // actor_session: 0 means server-initiated; fall back to session_id for user self-moves
+                        let actor_session = params
+                            .actor_session
+                            .filter(|&a| a != 0)
+                            .unwrap_or(params.session_id);
+                        self.edge_state.emit(EdgeEvent::RemoteUserMoved {
+                            session_id: params.session_id,
+                            from_channel_id,
+                            channel_id: params.channel_id,
+                            actor_session,
+                            suppress: moved_suppress,
+                        });
+                    }
                     // Invalidate BroadcastCaches: remote user moved channel, relay targets may change.
                     self.edge_state
                         .topology_version

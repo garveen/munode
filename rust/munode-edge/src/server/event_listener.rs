@@ -345,6 +345,7 @@ pub(crate) async fn hub_event_listener(
                         from_channel_id,
                         channel_id,
                         actor_session,
+                        suppress,
                     } => {
                         // Channel Ninja: apply three-way visibility logic per observer.
                         // was_visible = observer could see user in from_channel
@@ -363,6 +364,7 @@ pub(crate) async fn hub_event_listener(
                                 session: Some(session_id),
                                 channel_id: Some(channel_id),
                                 actor: Some(actor_session),
+                                suppress,
                                 ..Default::default()
                             };
                             state
@@ -404,6 +406,7 @@ pub(crate) async fn hub_event_listener(
                                 session: Some(session_id),
                                 channel_id: Some(channel_id),
                                 actor: Some(actor_session),
+                                suppress,
                                 ..Default::default()
                             };
                             let remove_msg = handler::build_user_remove_msg(session_id, None);

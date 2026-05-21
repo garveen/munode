@@ -826,6 +826,7 @@ message HubUserMovedParams {
   required uint32 edge_id = 2;
   required uint32 channel_id = 3;
   optional uint32 actor_session = 4;
+  optional bool suppress = 5;
 }
 
 // ---------------------------------------------------------------------------

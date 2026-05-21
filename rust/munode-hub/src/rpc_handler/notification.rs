@@ -149,31 +149,22 @@ impl RpcHandler {
             return;
         }
 
-        let old_channel_id = self
-            .state
-            .session_manager
-            .get_session(params.session_id)
+        let Some((old_channel_id, moved_params)) = self
+            .apply_authoritative_user_move(
+                params.session_id,
+                params.channel_id,
+                params.actor_session,
+            )
             .await
-            .map(|session| session.channel_id);
-        self.state
-            .session_manager
-            .move_user_to_channel(params.session_id, params.channel_id)
-            .await;
-
-        let moved_params = HubUserMovedParams {
-            session_id: params.session_id,
-            edge_id: params.edge_id,
-            channel_id: params.channel_id,
-            actor_session: params.actor_session,
+        else {
+            return;
         };
         self.broadcast_notification("hub.userMoved", |notification| {
             notification.user_moved = Some(moved_params);
         })
         .await;
 
-        if let Some(old_channel_id) = old_channel_id {
-            self.maybe_cleanup_temp_channel(old_channel_id).await;
-        }
+        self.maybe_cleanup_temp_channel(old_channel_id).await;
     }
 
     pub(super) async fn on_user_state_changed(&self, notification: &TypedRpcNotification) {

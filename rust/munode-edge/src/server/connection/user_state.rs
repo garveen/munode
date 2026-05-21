@@ -505,6 +505,7 @@ pub(super) async fn handle_user_state_update(
 
         if needs_broadcast {
             if channel_moved {
+                let mut move_committed = false;
                 if let Err(e) = hub_client
                     .rpc_user_moved(session_id, client.channel_id, session_id)
                     .await
@@ -527,8 +528,11 @@ pub(super) async fn handle_user_state_update(
                         }
                     }
                     warn!("rpc_user_moved failed for session {}: {:#}", session_id, e);
+                } else {
+                    move_committed = true;
                 }
-                if suppress_changed {
+
+                if move_committed && suppress_changed {
                     if let Err(e) = hub_client
                         .rpc_user_state_changed(
                             session_id,

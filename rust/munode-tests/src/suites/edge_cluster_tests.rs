@@ -225,6 +225,95 @@ async fn test_user_state_propagates_across_edges() -> Result<()> {
     Ok(())
 }
 
+/// When a user on Edge 1 moves themselves, both the actor and remote edges
+/// must observe the updated channel immediately, and reconnect must restore
+/// the moved channel from Hub-backed last-channel state.
+#[tokio::test]
+async fn test_cross_edge_self_move_notifies_actor_and_persists_last_channel() -> Result<()> {
+    let env = standard_env().await?;
+    let configs = vec![
+        ClientConfig::new("user_edge1", 1),
+        ClientConfig::new("user_edge2", 2),
+    ];
+    let clients = create_clients(&env, &configs).await?;
+    let (mover, observer) = (&clients[0], &clients[1]);
+
+    sleep_ms(800).await;
+
+    let mover_session = mover.session_id().unwrap();
+    let mut mover_rx = mover.subscribe();
+    let mut observer_rx = observer.subscribe();
+
+    mover.channel(1).join().await?;
+
+    let actor_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match mover_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == mover_session && u.channel_id == 1 =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let observer_notified = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match observer_rx.recv().await {
+                Ok(ClientEvent::UserStateChanged(u))
+                    if u.session == mover_session && u.channel_id == 1 =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(
+        actor_notified,
+        "Self-move should notify the actor immediately"
+    );
+    assert!(
+        observer_notified,
+        "Self-move should propagate to remote edges immediately"
+    );
+    assert_eq!(
+        mover.me().session().expect("mover session").channel_id,
+        1,
+        "Mover should observe its own updated channel immediately"
+    );
+
+    let _ = mover.disconnect().await;
+    sleep_ms(500).await;
+
+    let reconnect = create_clients(&env, &[ClientConfig::new("user_edge1", 1)]).await?;
+    let mover_reconnected = &reconnect[0];
+    sleep_ms(700).await;
+
+    assert_eq!(
+        mover_reconnected
+            .me()
+            .session()
+            .expect("reconnected mover session")
+            .channel_id,
+        1,
+        "Reconnected mover should be restored to the moved channel"
+    );
+
+    cleanup_clients(reconnect).await;
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
 /// When an admin on Edge 1 moves a user on Edge 2, the actor must also receive
 /// the broadcast UserState immediately instead of waiting for a periodic sync.
 #[tokio::test]

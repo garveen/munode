@@ -181,8 +181,8 @@ impl HubClient {
 
     /// RPC: move a user to a different channel.
     /// Hub updates session_manager, broadcasts hub.userMoved to ALL edges, responds.
-    /// Every edge, including the requesting edge, waits for the Hub broadcast to
-    /// update client-visible state.
+    /// Every edge, including the requesting edge, applies the authoritative move
+    /// when the hub.userMoved notification is processed locally.
     /// Returns `Err` if the Hub rejected the move (e.g. channel full).
     pub async fn rpc_user_moved(
         &self,

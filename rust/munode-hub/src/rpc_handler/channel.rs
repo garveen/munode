@@ -183,34 +183,33 @@ impl RpcHandler {
             if is_temp {
                 if let Some(creator_session) = params.creator_session {
                     if creator_session != 0 {
-                        if let Some(session) = self
+                        if self
                             .state
                             .session_manager
                             .get_session(creator_session)
                             .await
+                            .is_some()
                         {
-                            let old_ch = session.channel_id;
-                            self.state
-                                .session_manager
-                                .move_user_to_channel(creator_session, id)
+                            if let Some((old_ch, moved_params)) = self
+                                .apply_authoritative_user_move(
+                                    creator_session,
+                                    id,
+                                    Some(creator_session),
+                                )
+                                .await
+                            {
+                                self.broadcast_notification("hub.userMoved", |n| {
+                                    n.user_moved = Some(moved_params);
+                                })
                                 .await;
-                            let moved_params = HubUserMovedParams {
-                                session_id: creator_session,
-                                edge_id: session.edge_id,
-                                channel_id: id,
-                                actor_session: Some(creator_session),
-                            };
-                            self.broadcast_notification("hub.userMoved", |n| {
-                                n.user_moved = Some(moved_params);
-                            })
-                            .await;
-                            info!(
-                                session_id = creator_session,
-                                channel_id = id,
-                                "Temporary channel created: moved creator into new channel"
-                            );
-                            // Clean up the old channel if it was also temporary and is now empty.
-                            self.maybe_cleanup_temp_channel(old_ch).await;
+                                info!(
+                                    session_id = creator_session,
+                                    channel_id = id,
+                                    "Temporary channel created: moved creator into new channel"
+                                );
+                                // Clean up the old channel if it was also temporary and is now empty.
+                                self.maybe_cleanup_temp_channel(old_ch).await;
+                            }
                         }
                     }
                 }
@@ -930,26 +929,21 @@ impl RpcHandler {
             }
             *channel_counts.entry(target_channel).or_insert(0) += 1;
 
-            self.state
-                .session_manager
-                .move_user_to_channel(session.session_id, target_channel)
+            if let Some((_old_channel_id, moved_params)) = self
+                .apply_authoritative_user_move(session.session_id, target_channel, None)
+                .await
+            {
+                self.broadcast_notification("hub.userMoved", |n| {
+                    n.user_moved = Some(moved_params.clone());
+                })
                 .await;
-            let moved_params = HubUserMovedParams {
-                session_id: session.session_id,
-                edge_id: session.edge_id,
-                channel_id: target_channel,
-                actor_session: None,
-            };
-            self.broadcast_notification("hub.userMoved", |n| {
-                n.user_moved = Some(moved_params.clone());
-            })
-            .await;
-            info!(
-                session_id = session.session_id,
-                from = session.channel_id,
-                to = target_channel,
-                "Channel removal: moved session to target channel"
-            );
+                info!(
+                    session_id = session.session_id,
+                    from = session.channel_id,
+                    to = target_channel,
+                    "Channel removal: moved session to target channel"
+                );
+            }
         }
 
         // --- 3. Remove channel-listener state for the sub-tree ---

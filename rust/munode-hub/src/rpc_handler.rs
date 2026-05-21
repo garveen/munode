@@ -490,6 +490,46 @@ impl RpcHandler {
         }
     }
 
+    /// Apply a Hub-authoritative channel move to the session registry and build the
+    /// corresponding `hub.userMoved` payload, including the effective suppress state
+    /// for the destination channel.
+    async fn apply_authoritative_user_move(
+        &self,
+        session_id: u32,
+        target_channel_id: u32,
+        actor_session: Option<u32>,
+    ) -> Option<(u32, HubUserMovedParams)> {
+        let mut session = self.state.session_manager.get_session(session_id).await?;
+        let old_channel_id = session.channel_id;
+        let can_speak = self
+            .state
+            .acl_manager
+            .has_permission(
+                session.user_id as i32,
+                target_channel_id,
+                &session.groups,
+                permission::SPEAK,
+            )
+            .await;
+        let suppress = !can_speak;
+
+        session.channel_id = target_channel_id;
+        session.suppress = suppress;
+        let edge_id = session.edge_id;
+        self.state.session_manager.add_session(session).await;
+
+        Some((
+            old_channel_id,
+            HubUserMovedParams {
+                session_id,
+                edge_id,
+                channel_id: target_channel_id,
+                actor_session,
+                suppress: Some(suppress),
+            },
+        ))
+    }
+
     // ==================== Helpers ====================
 
     /// Record a failed authentication attempt for the given IP address and apply an auto-ban
