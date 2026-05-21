@@ -1,9 +1,9 @@
-use super::user_state::{handle_admin_user_state_update, handle_user_state_update};
+use super::user_state::handle_admin_user_state_update;
 use crate::channel_manager::ChannelManager;
 use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
 use crate::hub_client::HubClient;
 use crate::server::event_listener::hub_event_listener;
-use crate::state::{EdgeEvent, EdgeState};
+use crate::state::{EdgeEvent, EdgeState, RemoteUserStateDelta};
 use bytes::{Bytes, BytesMut};
 use munode_common::config::{EdgeConfig, HubServerConfig, NetworkConfig, ServerConfig, TlsConfig};
 use munode_common::permission as perm;
@@ -188,8 +188,18 @@ fn decode_user_state(data: &[u8]) -> mumbleproto::UserState {
     mumbleproto::UserState::decode(&frame.payload[..]).expect("decode UserState")
 }
 
+async fn assert_no_message(rx: &mut mpsc::Receiver<bytes::Bytes>) {
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
+            .await
+            .is_err(),
+        "did not expect a local message without authoritative Hub echo"
+    );
+}
+
 /// Build a minimal `EdgeState` + disconnected `HubClient` for unit tests.
-/// The HubClient has no active WebSocket so Hub notifications are silently dropped.
+/// The returned HubClient never starts `connect_and_run()`, so there is no active
+/// control channel and no authoritative Hub echo path unless a test simulates it.
 fn test_edge_and_hub() -> (Arc<EdgeState>, Arc<HubClient>) {
     let channel_manager = ChannelManager::new();
     let client_manager = ClientManager::new();
@@ -199,31 +209,37 @@ fn test_edge_and_hub() -> (Arc<EdgeState>, Arc<HubClient>) {
 }
 
 // -----------------------------------------------------------------------
-// Test: user self-mutes – broadcast includes self_mute=Some(true)
+// Test: authoritative self-mute echo fan-outs to local clients.
 // -----------------------------------------------------------------------
 #[tokio::test]
 async fn test_self_mute_broadcast_to_self_and_others() {
-    let (es, hub) = test_edge_and_hub();
+    let (es, _hub) = test_edge_and_hub();
 
-    // Register two Ready clients.
     let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
     let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
+    let mut client1 = ready_client(1, 0);
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_a))
+        .add_client(client1.clone(), ClientSender::new(tx_a))
         .await;
     es.client_manager
         .add_client(ready_client(2, 0), ClientSender::new(tx_b))
         .await;
 
-    // User 1 mutes themselves.
-    let us = mumbleproto::UserState {
-        session: Some(1),
-        self_mute: Some(true),
-        ..Default::default()
-    };
-    handle_user_state_update(&es, &hub, 1, &us).await;
+    client1.self_mute = true;
+    es.client_manager.update_client(client1).await;
 
-    // Both clients must receive self_mute=true.
+    let es = run_event_listener_task(es).await;
+    es.emit(EdgeEvent::RemoteUserStateChanged {
+        session_id: 1,
+        delta: RemoteUserStateDelta {
+            self_mute: Some(true),
+            ..Default::default()
+        },
+        listening_channel_add: vec![],
+        listening_channel_remove: vec![],
+        actor_session: Some(1),
+    });
+
     let msg_a = decode_user_state(&rx_a.recv().await.unwrap());
     assert_eq!(msg_a.session, Some(1));
     assert_eq!(msg_a.self_mute, Some(true), "self: must see self_mute=true");
@@ -243,35 +259,41 @@ async fn test_self_mute_broadcast_to_self_and_others() {
 }
 
 // -----------------------------------------------------------------------
-// Test: user un-mutes – broadcast must carry self_mute=Some(false), not None
-// This is the critical regression: build_user_state_msg previously emitted
-// None for false fields, making the un-mute invisible to observers.
+// Test: authoritative self-unmute echo must carry explicit false values.
 // -----------------------------------------------------------------------
 #[tokio::test]
 async fn test_self_unmute_broadcast_carries_false() {
-    let (es, hub) = test_edge_and_hub();
+    let (es, _hub) = test_edge_and_hub();
 
     let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
     let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
-    // Start with user 1 already muted.
     let mut client1 = ready_client(1, 0);
     client1.self_mute = true;
+    client1.self_deaf = true;
     es.client_manager
-        .add_client(client1, ClientSender::new(tx_a))
+        .add_client(client1.clone(), ClientSender::new(tx_a))
         .await;
     es.client_manager
         .add_client(ready_client(2, 0), ClientSender::new(tx_b))
         .await;
 
-    // User 1 un-mutes.
-    let us = mumbleproto::UserState {
-        session: Some(1),
-        self_mute: Some(false),
-        ..Default::default()
-    };
-    handle_user_state_update(&es, &hub, 1, &us).await;
+    client1.self_mute = false;
+    client1.self_deaf = false;
+    es.client_manager.update_client(client1).await;
 
-    // CRITICAL: un-mute must deliver self_mute=Some(false), NOT None.
+    let es = run_event_listener_task(es).await;
+    es.emit(EdgeEvent::RemoteUserStateChanged {
+        session_id: 1,
+        delta: RemoteUserStateDelta {
+            self_mute: Some(false),
+            self_deaf: Some(false),
+            ..Default::default()
+        },
+        listening_channel_add: vec![],
+        listening_channel_remove: vec![],
+        actor_session: Some(1),
+    });
+
     let msg_a = decode_user_state(&rx_a.recv().await.unwrap());
     assert_eq!(
         msg_a.self_mute,
@@ -303,28 +325,38 @@ async fn test_self_unmute_broadcast_carries_false() {
 }
 
 // -----------------------------------------------------------------------
-// Test: self_deaf=true must imply self_mute=true (Mumble protocol rule)
+// Test: authoritative self-deaf echo must carry both self_deaf and self_mute.
 // -----------------------------------------------------------------------
 #[tokio::test]
 async fn test_self_deaf_implies_self_mute() {
-    let (es, hub) = test_edge_and_hub();
+    let (es, _hub) = test_edge_and_hub();
 
     let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
     let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
+    let mut client1 = ready_client(1, 0);
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_a))
+        .add_client(client1.clone(), ClientSender::new(tx_a))
         .await;
     es.client_manager
         .add_client(ready_client(2, 0), ClientSender::new(tx_b))
         .await;
 
-    // Client only sends self_deaf=true; self_mute is absent in the message.
-    let us = mumbleproto::UserState {
-        session: Some(1),
-        self_deaf: Some(true),
-        ..Default::default()
-    };
-    handle_user_state_update(&es, &hub, 1, &us).await;
+    client1.self_deaf = true;
+    client1.self_mute = true;
+    es.client_manager.update_client(client1).await;
+
+    let es = run_event_listener_task(es).await;
+    es.emit(EdgeEvent::RemoteUserStateChanged {
+        session_id: 1,
+        delta: RemoteUserStateDelta {
+            self_mute: Some(true),
+            self_deaf: Some(true),
+            ..Default::default()
+        },
+        listening_channel_add: vec![],
+        listening_channel_remove: vec![],
+        actor_session: Some(1),
+    });
 
     let msg_a = decode_user_state(&rx_a.recv().await.unwrap());
     assert_eq!(msg_a.self_deaf, Some(true), "self: self_deaf must be true");
@@ -355,32 +387,37 @@ async fn test_self_deaf_implies_self_mute() {
 }
 
 // -----------------------------------------------------------------------
-// Test: un-deafening (self_deaf=false) alone does NOT clear self_mute
+// Test: authoritative self-deaf=false echo alone does NOT clear self_mute.
 // -----------------------------------------------------------------------
 #[tokio::test]
 async fn test_un_deaf_does_not_clear_self_mute() {
-    let (es, hub) = test_edge_and_hub();
+    let (es, _hub) = test_edge_and_hub();
 
     let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
-    // Start with user 1 both muted and deafened.
     let mut c1 = ready_client(1, 0);
     c1.self_mute = true;
     c1.self_deaf = true;
     es.client_manager
-        .add_client(c1, ClientSender::new(tx_a))
+        .add_client(c1.clone(), ClientSender::new(tx_a))
         .await;
 
-    // Un-deafen only.
-    let us = mumbleproto::UserState {
-        session: Some(1),
-        self_deaf: Some(false),
-        ..Default::default()
-    };
-    handle_user_state_update(&es, &hub, 1, &us).await;
+    c1.self_deaf = false;
+    es.client_manager.update_client(c1).await;
+
+    let es = run_event_listener_task(es).await;
+    es.emit(EdgeEvent::RemoteUserStateChanged {
+        session_id: 1,
+        delta: RemoteUserStateDelta {
+            self_deaf: Some(false),
+            ..Default::default()
+        },
+        listening_channel_add: vec![],
+        listening_channel_remove: vec![],
+        actor_session: Some(1),
+    });
 
     let msg = decode_user_state(&rx_a.recv().await.unwrap());
     assert_eq!(msg.self_deaf, Some(false), "self_deaf must be false");
-    // self_mute was NOT touched – field should be absent (None).
     assert_eq!(
         msg.self_mute, None,
         "un-deaf alone must not change self_mute"
@@ -392,25 +429,33 @@ async fn test_un_deaf_does_not_clear_self_mute() {
 }
 
 // -----------------------------------------------------------------------
-// Test: recording flag change broadcasts Some(false) on recording stop
+// Test: authoritative recording stop echo broadcasts Some(false).
 // -----------------------------------------------------------------------
 #[tokio::test]
 async fn test_recording_flag_false_is_broadcast() {
-    let (es, hub) = test_edge_and_hub();
+    let (es, _hub) = test_edge_and_hub();
 
     let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
     let mut c1 = ready_client(1, 0);
     c1.recording = true;
     es.client_manager
-        .add_client(c1, ClientSender::new(tx_a))
+        .add_client(c1.clone(), ClientSender::new(tx_a))
         .await;
 
-    let us = mumbleproto::UserState {
-        session: Some(1),
-        recording: Some(false),
-        ..Default::default()
-    };
-    handle_user_state_update(&es, &hub, 1, &us).await;
+    c1.recording = false;
+    es.client_manager.update_client(c1).await;
+
+    let es = run_event_listener_task(es).await;
+    es.emit(EdgeEvent::RemoteUserStateChanged {
+        session_id: 1,
+        delta: RemoteUserStateDelta {
+            recording: Some(false),
+            ..Default::default()
+        },
+        listening_channel_add: vec![],
+        listening_channel_remove: vec![],
+        actor_session: Some(1),
+    });
 
     let msg = decode_user_state(&rx_a.recv().await.unwrap());
     assert_eq!(
@@ -421,14 +466,11 @@ async fn test_recording_flag_false_is_broadcast() {
 }
 
 // -----------------------------------------------------------------------
-// Test: admin mute/unmute of another user
+// Test: authoritative admin unmute echo must carry mute=false and actor.
 // -----------------------------------------------------------------------
 #[tokio::test]
 async fn test_admin_mute_and_unmute_broadcast_false() {
-    let (es, hub) = test_edge_and_hub();
-
-    // Grant admin (session 1) MUTE_DEAFEN permission on channel 0.
-    es.permission_cache.insert((1, 0), perm::MUTE_DEAFEN);
+    let (es, _hub) = test_edge_and_hub();
 
     let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
     let (tx_target, mut rx_target) = mpsc::channel::<bytes::Bytes>(16);
@@ -438,18 +480,24 @@ async fn test_admin_mute_and_unmute_broadcast_false() {
     let mut target = ready_client(2, 0);
     target.mute = true;
     es.client_manager
-        .add_client(target, ClientSender::new(tx_target))
+        .add_client(target.clone(), ClientSender::new(tx_target))
         .await;
 
-    // Admin (session 1) un-mutes user 2.
-    let us = mumbleproto::UserState {
-        session: Some(2),
-        mute: Some(false),
-        ..Default::default()
-    };
-    handle_admin_user_state_update(&es, &hub, 1, 2, &us).await;
+    target.mute = false;
+    es.client_manager.update_client(target).await;
 
-    // Both admin and target must receive mute=Some(false).
+    let es = run_event_listener_task(es).await;
+    es.emit(EdgeEvent::RemoteUserStateChanged {
+        session_id: 2,
+        delta: RemoteUserStateDelta {
+            mute: Some(false),
+            ..Default::default()
+        },
+        listening_channel_add: vec![],
+        listening_channel_remove: vec![],
+        actor_session: Some(1),
+    });
+
     let msg_admin = decode_user_state(&rx_admin.recv().await.unwrap());
     assert_eq!(msg_admin.session, Some(2));
     assert_eq!(
@@ -740,14 +788,11 @@ async fn test_admin_move_denied_when_hub_unreachable() {
 }
 
 // -----------------------------------------------------------------------
-// Test: admin mute-only op still succeeds even when Hub is unreachable.
-//
-// The Move permission checks only run when channel_id is present in the
-// UserState message.  A pure mute/unmute operation (no channel_id) must
-// NOT be gated by Hub permission queries.
+// Test: admin mute-only op still bypasses move permission queries when Hub is
+// unreachable, but before any authoritative Hub echo it must not fan out locally.
 // -----------------------------------------------------------------------
 #[tokio::test]
-async fn test_admin_mute_without_move_succeeds_when_hub_unreachable() {
+async fn test_admin_mute_without_move_does_not_locally_apply_before_hub_echo() {
     let (es, hub) = test_edge_and_hub();
 
     // Grant admin (session 1) MUTE_DEAFEN permission on channel 0.
@@ -768,23 +813,22 @@ async fn test_admin_mute_without_move_succeeds_when_hub_unreachable() {
         mute: Some(true),
         ..Default::default()
     };
-    handle_admin_user_state_update(&es, &hub, 1, 2, &us).await;
 
-    // Both admin and victim must receive UserState (not PermissionDenied).
-    let msg_admin = decode_user_state(&rx_admin.recv().await.unwrap());
-    assert_eq!(
-        msg_admin.mute,
-        Some(true),
-        "admin: victim mute must propagate"
-    );
+    let es_for_task = es.clone();
+    let hub_for_task = hub.clone();
+    let handle = tokio::spawn(async move {
+        handle_admin_user_state_update(&es_for_task, &hub_for_task, 1, 2, &us).await;
+    });
 
-    let msg_victim = decode_user_state(&rx_victim.recv().await.unwrap());
-    assert_eq!(
-        msg_victim.mute,
-        Some(true),
-        "victim: must be notified of mute"
-    );
+    assert_no_message(&mut rx_admin).await;
+    assert_no_message(&mut rx_victim).await;
 
     let victim = es.client_manager.get_client(2).await.unwrap();
-    assert!(victim.mute, "victim.mute must be updated");
+    assert!(
+        !victim.mute,
+        "without authoritative Hub echo the local victim state must remain unchanged"
+    );
+
+    handle.abort();
+    let _ = handle.await;
 }
