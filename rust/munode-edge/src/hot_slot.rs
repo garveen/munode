@@ -100,7 +100,7 @@ pub struct HotSlot {
     pub channel_id: AtomicU32,
     /// OCB2-AES128 crypto state for UDP voice delivery.  `None` until CryptSetup.
     pub crypt_state: ArcSwap<Option<Arc<Mutex<CryptState>>>>,
-    /// TCP sender for delivering frames to this client (UDPTunnel and control).
+    /// Voice-lane sender for delivering UDPTunnel frames to this client.
     pub sender: ArcSwap<Option<mpsc::Sender<Bytes>>>,
     /// Per-session group membership for lock-free group-filter whisper routing.
     /// Updated whenever the Hub sends a revised session list (same cadence as deaf/suppress).

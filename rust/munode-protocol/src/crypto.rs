@@ -11,6 +11,7 @@ use aes::{
     Aes128,
     cipher::{BlockDecrypt, BlockEncrypt, KeyInit},
 };
+use std::time::{Duration, Instant};
 
 /// OCB2-AES128 cryptographic state for a client connection.
 ///
@@ -34,6 +35,8 @@ pub struct CryptState {
     pub lost: u32,
     /// Count of nonce resync operations.
     pub resync: u32,
+    last_good: Instant,
+    last_request: Instant,
 }
 
 impl Clone for CryptState {
@@ -50,6 +53,8 @@ impl Clone for CryptState {
             late: self.late,
             lost: self.lost,
             resync: self.resync,
+            last_good: self.last_good,
+            last_request: self.last_request,
         }
     }
 }
@@ -58,6 +63,7 @@ impl CryptState {
     /// Create a new CryptState with zero key/IVs.
     pub fn new() -> Self {
         let key = [0u8; 16];
+        let now = Instant::now();
         // SAFETY: key is always exactly 16 bytes; AES-128 requires 16 bytes.
         let cipher = Aes128::new_from_slice(&key).expect("AES-128 key must be 16 bytes");
         Self {
@@ -70,6 +76,8 @@ impl CryptState {
             late: 0,
             lost: 0,
             resync: 0,
+            last_good: now,
+            last_request: now.checked_sub(Duration::from_secs(60)).unwrap_or(now),
         }
     }
 
@@ -84,6 +92,9 @@ impl CryptState {
         rng.fill(&mut self.decrypt_iv)?;
         // SAFETY: self.key is always 16 bytes; AES-128 requires 16 bytes.
         self.cipher = Aes128::new_from_slice(&self.key).expect("AES-128 key must be 16 bytes");
+        let now = Instant::now();
+        self.last_good = now;
+        self.last_request = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
         Ok(())
     }
 
@@ -98,6 +109,9 @@ impl CryptState {
         self.decrypt_iv = *decrypt_iv;
         // SAFETY: self.key is always 16 bytes; AES-128 requires 16 bytes.
         self.cipher = Aes128::new_from_slice(&self.key).expect("AES-128 key must be 16 bytes");
+        let now = Instant::now();
+        self.last_good = now;
+        self.last_request = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
     }
 
     /// Get the raw AES key.
@@ -109,6 +123,21 @@ impl CryptState {
     pub fn update_decrypt_iv(&mut self, client_nonce: &[u8; 16]) {
         self.decrypt_iv = *client_nonce;
         self.resync += 1;
+    }
+
+    pub fn should_request_resync(&mut self) -> bool {
+        self.should_request_resync_at(Instant::now())
+    }
+
+    fn should_request_resync_at(&mut self, now: Instant) -> bool {
+        if now.duration_since(self.last_good) <= Duration::from_secs(5)
+            || now.duration_since(self.last_request) <= Duration::from_secs(5)
+        {
+            return false;
+        }
+
+        self.last_request = now;
+        true
     }
 
     /// Encrypt a voice packet into `dst`.
@@ -289,6 +318,7 @@ impl CryptState {
         }
 
         // Update stats
+        self.last_good = Instant::now();
         self.good += 1;
         if late > 0 {
             self.late = self.late.saturating_add(late as u32);
@@ -762,5 +792,25 @@ mod tests {
             "Should decrypt packet with IV[0]=0x00 (post-wrap)"
         );
         assert_eq!(out2, plaintext);
+    }
+
+    #[test]
+    fn test_resync_requests_are_throttled() {
+        let mut crypt = CryptState::new();
+        let base = Instant::now();
+
+        crypt.last_good = base.checked_sub(Duration::from_secs(6)).unwrap_or(base);
+        crypt.last_request = base.checked_sub(Duration::from_secs(6)).unwrap_or(base);
+        assert!(crypt.should_request_resync_at(base));
+
+        assert!(!crypt.should_request_resync_at(base + Duration::from_secs(1)));
+
+        crypt.last_good = base + Duration::from_secs(8);
+        crypt.last_request = base.checked_sub(Duration::from_secs(6)).unwrap_or(base);
+        assert!(!crypt.should_request_resync_at(base + Duration::from_secs(12)));
+
+        crypt.last_good = base.checked_sub(Duration::from_secs(6)).unwrap_or(base);
+        crypt.last_request = base.checked_sub(Duration::from_secs(6)).unwrap_or(base);
+        assert!(crypt.should_request_resync_at(base + Duration::from_secs(12)));
     }
 }

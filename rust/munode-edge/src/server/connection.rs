@@ -14,7 +14,10 @@ pub(crate) use helpers::{get_perm_cached, prefetch_whisper_permissions};
 use login::{LoginTaskArgs, LoginTaskResult, do_login_task};
 use user_state::{handle_admin_user_state_update, handle_user_state_update};
 
-use crate::client::{ClientSender, ClientState};
+use crate::client::{
+    CLIENT_CONTROL_QUEUE_CAPACITY, CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, ClientState,
+    recv_outgoing_batch,
+};
 use crate::handler::{self, LoginHandler};
 use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::EdgeState;
@@ -143,9 +146,12 @@ pub(super) async fn handle_client_connection(
 
     let (reader_half, mut writer) = tokio::io::split(tls_stream);
 
-    // Create per-client message sender channel
-    let (send_tx, mut send_rx) = mpsc::channel::<bytes::Bytes>(4096);
-    let client_sender = ClientSender::new(send_tx);
+    // Create per-client message sender channels.
+    // Control traffic must remain deliverable even when voice fallback backs up,
+    // so voice uses its own smaller best-effort lane.
+    let (control_tx, mut control_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (voice_tx, mut voice_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
+    let client_sender = ClientSender::new_split(control_tx, voice_tx);
 
     // Notified when the writer task exits due to a TCP write/flush error (not clean close).
     // The read loop selects on this so half-open connections are detected promptly instead
@@ -158,20 +164,9 @@ pub(super) async fn handle_client_connection(
     let writer_handle = tokio::spawn(async move {
         loop {
             // Wait for the first message.
-            let first = match send_rx.recv().await {
-                Some(data) => data,
-                None => break, // channel closed → client disconnected (clean)
+            let Some(pending) = recv_outgoing_batch(&mut control_rx, &mut voice_rx).await else {
+                break;
             };
-
-            let mut pending = vec![first];
-
-            // Non-blocking drain: collect any already-queued messages.
-            while let Ok(more) = send_rx.try_recv() {
-                pending.push(more);
-                if pending.len() >= 32 {
-                    break;
-                }
-            }
 
             if let Err(e) = write_pending_batch(&mut writer, &pending).await {
                 debug!("Write error to client: {}", e);
@@ -1100,7 +1095,7 @@ pub(crate) async fn run_connection_inner(
                                 if let Some(sender_tx) =
                                     edge_state.client_manager.get_sender(sid).await
                                 {
-                                    sender_tx.send_raw(data).await;
+                                    sender_tx.try_send_voice_raw(data);
                                 }
                             } else if let Some(targets) = crate::routing::compute_voice_targets(
                                 &frame.payload,

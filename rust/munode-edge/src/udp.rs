@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
 use munode_common::config::EdgeVoiceQualityConfig;
-use munode_protocol::transport::EDGE_MAGIC;
+use munode_protocol::{message_type::MessageType, mumbleproto, transport::EDGE_MAGIC};
 
 use crate::hot_slot::get_hot_slot;
 use crate::hub_client::HubClient;
@@ -185,6 +185,20 @@ impl UdpServer {
     pub fn unregister_client(&self, session_id: u32) {
         if let Some((_, addr)) = self.session_to_addr.remove(&session_id) {
             self.addr_to_session.remove(&addr);
+        }
+    }
+
+    async fn request_crypt_resync(&self, session_id: u32) {
+        if let Some(sender) = self.edge_state.client_manager.get_sender(session_id).await {
+            if sender
+                .send_message(MessageType::CryptSetup, &mumbleproto::CryptSetup::default())
+                .await
+            {
+                debug!(
+                    session_id,
+                    "requested CryptSetup resync after UDP decrypt failure"
+                );
+            }
         }
     }
 
@@ -554,7 +568,7 @@ impl UdpServer {
         let known_session = self.addr_to_session.get(&peer_addr).map(|r| *r.value());
 
         if let Some(session_id) = known_session {
-            self.handle_known_client(data, session_id).await;
+            self.handle_known_client(data, peer_addr, session_id).await;
         } else {
             self.try_identify_and_handle(data, peer_addr).await;
         }
@@ -565,7 +579,7 @@ impl UdpServer {
     /// All sender metadata (CryptState, channel_id, suppress, bandwidth) is read
     /// lock-free from the session's HotSlot — zero async awaits on the hot path.
     /// Rate-limit is checked **before decrypt** so overflowing packets skip AES entirely.
-    async fn handle_known_client(&self, data: &[u8], session_id: u32) {
+    async fn handle_known_client(&self, data: &[u8], peer_addr: SocketAddr, session_id: u32) {
         let slot = crate::hot_slot::get_hot_slot(session_id);
         if !slot.is_active_for(session_id) {
             debug!("No active HotSlot for {} — UDP packet dropped", session_id);
@@ -636,6 +650,7 @@ impl UdpServer {
             }
         }
 
+        let mut should_request_resync = false;
         let plaintext = {
             let mut cs = match crypt_arc.lock() {
                 Ok(cs) => cs,
@@ -649,17 +664,22 @@ impl UdpServer {
             };
             let mut plain = Vec::new();
             if !cs.decrypt(data, &mut plain) {
+                should_request_resync = cs.should_request_resync();
                 debug!(
                     "OCB2 decrypt failed for session {} ({} bytes)",
                     session_id,
                     data.len()
                 );
-                return;
+                Vec::new()
+            } else {
+                plain
             }
-            plain
         };
 
         if plaintext.is_empty() {
+            if should_request_resync {
+                self.request_crypt_resync(session_id).await;
+            }
             return;
         }
 
@@ -674,6 +694,20 @@ impl UdpServer {
                 self.send_encrypted(session_id, &plaintext).await;
             }
         } else {
+            // Mirror Murmur's aiUdpFlag recovery: only a successfully decrypted
+            // UDP audio packet proves that the client has switched back from TCP
+            // fallback for media. UDP ping succeeds even while the client stays
+            // in TCP mode, so ping alone must not restore server->client audio
+            // delivery to UDP.
+            if self
+                .session_to_addr
+                .get(&session_id)
+                .map(|entry| *entry.value())
+                != Some(peer_addr)
+            {
+                self.register_client(session_id, peer_addr);
+            }
+
             // Rate check already done above; pass None to skip it in route_voice.
             self.route_voice(
                 session_id,
@@ -1132,6 +1166,18 @@ fn bind_session_addr(
     session_id: u32,
     addr: SocketAddr,
 ) {
+    if !session_to_addr.contains_key(&session_id) {
+        let stale_addrs: Vec<SocketAddr> = addr_to_session
+            .iter()
+            .filter_map(|entry| {
+                ((*entry.value() == session_id) && (*entry.key() != addr)).then_some(*entry.key())
+            })
+            .collect();
+        for stale_addr in stale_addrs {
+            addr_to_session.remove(&stale_addr);
+        }
+    }
+
     if let Some(previous_addr) = session_to_addr.insert(session_id, addr) {
         if previous_addr != addr {
             addr_to_session.remove(&previous_addr);
@@ -1173,6 +1219,28 @@ mod tests {
         );
         assert_eq!(
             session_to_addr.get(&10_001).map(|entry| *entry.value()),
+            Some(new_addr)
+        );
+    }
+
+    #[test]
+    fn bind_session_addr_recovers_after_forward_index_was_cleared() {
+        let addr_to_session = DashMap::new();
+        let session_to_addr = DashMap::new();
+        let old_addr = localhost(41_001);
+        let new_addr = localhost(41_002);
+
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_002, old_addr);
+        session_to_addr.remove(&10_002);
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_002, new_addr);
+
+        assert!(addr_to_session.get(&old_addr).is_none());
+        assert_eq!(
+            addr_to_session.get(&new_addr).map(|entry| *entry.value()),
+            Some(10_002)
+        );
+        assert_eq!(
+            session_to_addr.get(&10_002).map(|entry| *entry.value()),
             Some(new_addr)
         );
     }

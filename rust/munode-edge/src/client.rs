@@ -16,6 +16,66 @@ use munode_protocol::transport::encode_message;
 use crate::bandwidth::BandwidthRecord;
 use crate::crypto::CryptState;
 
+pub const CLIENT_CONTROL_QUEUE_CAPACITY: usize = 256;
+pub const CLIENT_VOICE_QUEUE_CAPACITY: usize = 2048;
+const CLIENT_WRITE_BATCH_LIMIT: usize = 32;
+
+pub(crate) async fn recv_outgoing_batch(
+    control_rx: &mut mpsc::Receiver<bytes::Bytes>,
+    voice_rx: &mut mpsc::Receiver<bytes::Bytes>,
+) -> Option<Vec<bytes::Bytes>> {
+    let first = loop {
+        if let Ok(data) = control_rx.try_recv() {
+            break Some(data);
+        }
+        if let Ok(data) = voice_rx.try_recv() {
+            break Some(data);
+        }
+        if control_rx.is_closed() && voice_rx.is_closed() {
+            break None;
+        }
+
+        tokio::select! {
+            biased;
+            data = control_rx.recv(), if !control_rx.is_closed() => {
+                if let Some(data) = data {
+                    break Some(data);
+                }
+            }
+            data = voice_rx.recv(), if !voice_rx.is_closed() => {
+                if let Some(data) = data {
+                    break Some(data);
+                }
+            }
+        }
+    }?;
+
+    let mut pending = Vec::with_capacity(CLIENT_WRITE_BATCH_LIMIT);
+    pending.push(first);
+
+    while pending.len() < CLIENT_WRITE_BATCH_LIMIT {
+        while pending.len() < CLIENT_WRITE_BATCH_LIMIT {
+            match control_rx.try_recv() {
+                Ok(data) => pending.push(data),
+                Err(mpsc::error::TryRecvError::Empty)
+                | Err(mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+
+        if pending.len() >= CLIENT_WRITE_BATCH_LIMIT {
+            break;
+        }
+
+        match voice_rx.try_recv() {
+            Ok(data) => pending.push(data),
+            Err(mpsc::error::TryRecvError::Empty)
+            | Err(mpsc::error::TryRecvError::Disconnected) => break,
+        }
+    }
+
+    Some(pending)
+}
+
 /// Client connection state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientState {
@@ -28,17 +88,31 @@ pub enum ClientState {
 /// A handle for sending messages to a client's TLS connection.
 #[derive(Clone)]
 pub struct ClientSender {
-    tx: mpsc::Sender<bytes::Bytes>,
+    control_tx: mpsc::Sender<bytes::Bytes>,
+    voice_tx: mpsc::Sender<bytes::Bytes>,
 }
 
 impl ClientSender {
     pub fn new(tx: mpsc::Sender<bytes::Bytes>) -> Self {
-        Self { tx }
+        Self {
+            control_tx: tx.clone(),
+            voice_tx: tx,
+        }
+    }
+
+    pub fn new_split(
+        control_tx: mpsc::Sender<bytes::Bytes>,
+        voice_tx: mpsc::Sender<bytes::Bytes>,
+    ) -> Self {
+        Self {
+            control_tx,
+            voice_tx,
+        }
     }
 
     /// Send raw bytes to the client.
     pub async fn send_raw(&self, data: bytes::Bytes) -> bool {
-        self.tx.send(data).await.is_ok()
+        self.control_tx.send(data).await.is_ok()
     }
 
     /// Non-blocking send: enqueues `data` without waiting.
@@ -48,12 +122,30 @@ impl ClientSender {
     /// preferable to blocking the caller's read loop — which would prevent it from
     /// responding to TCP Ping messages and cause Mumble's ping-timeout to fire.
     pub fn try_send_raw(&self, data: bytes::Bytes) -> bool {
-        self.tx.try_send(data).is_ok()
+        self.control_tx.try_send(data).is_ok()
     }
 
-    /// Clone the inner `mpsc::Sender` for storage in a [`crate::hot_slot::HotSlot`].
+    /// Non-blocking send on the voice lane.
+    ///
+    /// Voice is best-effort: if the dedicated media lane is full, stale audio is
+    /// dropped rather than delaying newer frames or blocking control traffic.
+    pub fn try_send_voice_raw(&self, data: bytes::Bytes) -> bool {
+        self.voice_tx.try_send(data).is_ok()
+    }
+
+    /// Send raw voice bytes to the client.
+    pub async fn send_voice_raw(&self, data: bytes::Bytes) -> bool {
+        self.voice_tx.send(data).await.is_ok()
+    }
+
+    /// Clone the inner voice-lane sender for storage in a [`crate::hot_slot::HotSlot`].
+    pub fn clone_voice_sender(&self) -> mpsc::Sender<bytes::Bytes> {
+        self.voice_tx.clone()
+    }
+
+    /// Back-compat alias for the hot-slot voice sender.
     pub fn clone_sender(&self) -> mpsc::Sender<bytes::Bytes> {
-        self.tx.clone()
+        self.clone_voice_sender()
     }
 
     /// Encode and send a Mumble protocol message.
@@ -279,7 +371,7 @@ impl ClientManager {
             suppress,
             mute,
             self_mute,
-            sender.clone_sender(),
+            sender.clone_voice_sender(),
             bw_arc,
             client_groups,
             plugin_context,
@@ -1355,6 +1447,54 @@ mod tests {
 
         let data = rx.try_recv().unwrap();
         assert!(!data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_split_sender_separates_control_and_voice_lanes() {
+        let (control_tx, mut control_rx) = mpsc::channel(4);
+        let (voice_tx, mut voice_rx) = mpsc::channel(4);
+        let sender = ClientSender::new_split(control_tx, voice_tx);
+
+        let ping = mumbleproto::Ping {
+            timestamp: Some(7),
+            ..Default::default()
+        };
+        assert!(sender.send_message(MessageType::Ping, &ping).await);
+        assert!(sender.try_send_voice_raw(bytes::Bytes::from_static(b"voice-frame")));
+
+        let control = control_rx.try_recv().unwrap();
+        assert!(!control.is_empty());
+        assert_eq!(
+            voice_rx.try_recv().unwrap(),
+            bytes::Bytes::from_static(b"voice-frame")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_recv_outgoing_batch_prioritizes_control_lane() {
+        let (control_tx, mut control_rx) = mpsc::channel(4);
+        let (voice_tx, mut voice_rx) = mpsc::channel(4);
+
+        voice_tx
+            .send(bytes::Bytes::from_static(b"voice-1"))
+            .await
+            .unwrap();
+        control_tx
+            .send(bytes::Bytes::from_static(b"control-1"))
+            .await
+            .unwrap();
+        voice_tx
+            .send(bytes::Bytes::from_static(b"voice-2"))
+            .await
+            .unwrap();
+
+        let batch = recv_outgoing_batch(&mut control_rx, &mut voice_rx)
+            .await
+            .unwrap();
+        assert_eq!(batch.len(), 3);
+        assert_eq!(batch[0], bytes::Bytes::from_static(b"control-1"));
+        assert_eq!(batch[1], bytes::Bytes::from_static(b"voice-1"));
+        assert_eq!(batch[2], bytes::Bytes::from_static(b"voice-2"));
     }
 
     #[tokio::test]

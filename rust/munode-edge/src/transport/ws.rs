@@ -48,7 +48,9 @@ use tracing::{debug, info};
 
 use munode_common::config::EdgeConfig;
 
-use crate::client::ClientSender;
+use crate::client::{
+    CLIENT_CONTROL_QUEUE_CAPACITY, CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, recv_outgoing_batch,
+};
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 use crate::transport::TransportKind;
@@ -543,9 +545,10 @@ where
 {
     let (ws_sink, ws_source) = ws_stream.split();
 
-    // Per-session outgoing message channel.
-    let (send_tx, mut send_rx) = mpsc::channel::<Bytes>(4096);
-    let client_sender = ClientSender::new(send_tx);
+    // Per-session outgoing message channels.
+    let (control_tx, mut control_rx) = mpsc::channel::<Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (voice_tx, mut voice_rx) = mpsc::channel::<Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
+    let client_sender = ClientSender::new_split(control_tx, voice_tx);
 
     let write_failed = Arc::new(tokio::sync::Notify::new());
     let write_failed_notify = Arc::clone(&write_failed);
@@ -554,18 +557,13 @@ where
     let writer_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
         let mut sink = ws_sink;
         loop {
-            let data = match send_rx.recv().await {
-                Some(d) => d,
-                None => break,
+            let Some(pending) = recv_outgoing_batch(&mut control_rx, &mut voice_rx).await else {
+                break;
             };
-            // Drain any additional pending frames to reduce per-send overhead.
-            let mut batch = vec![WsMessage::Binary(data.to_vec().into())];
-            while let Ok(more) = send_rx.try_recv() {
-                batch.push(WsMessage::Binary(more.to_vec().into()));
-                if batch.len() >= 32 {
-                    break;
-                }
-            }
+            let batch: Vec<WsMessage> = pending
+                .into_iter()
+                .map(|data| WsMessage::Binary(data.to_vec().into()))
+                .collect();
             for msg in batch {
                 if let Err(e) = sink.send(msg).await {
                     debug!("WebSocket write error: {}", e);

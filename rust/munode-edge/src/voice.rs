@@ -369,8 +369,9 @@ pub fn deliver_voice_tcp(sessions: &[u32], frame: &bytes::Bytes) -> usize {
         }
         let sender_guard = slot.sender.load();
         if let Some(sender) = &**sender_guard {
-            sender.try_send(frame.clone()).ok();
-            count += 1;
+            if sender.try_send(frame.clone()).is_ok() {
+                count += 1;
+            }
         }
     }
     count

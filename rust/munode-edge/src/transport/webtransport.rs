@@ -34,7 +34,9 @@ use wtransport::{Endpoint, Identity, ServerConfig, VarInt};
 
 use munode_common::config::EdgeConfig;
 
-use crate::client::ClientSender;
+use crate::client::{
+    CLIENT_CONTROL_QUEUE_CAPACITY, CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, recv_outgoing_batch,
+};
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 use crate::transport::TransportKind;
@@ -222,9 +224,10 @@ async fn handle_wt_session(
     // Wrap the recv stream as Box<dyn AsyncRead>.
     let reader: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(recv_stream);
 
-    // Per-session outgoing message channel.
-    let (send_tx, mut send_rx) = mpsc::channel::<bytes::Bytes>(4096);
-    let client_sender = ClientSender::new(send_tx);
+    // Per-session outgoing message channels.
+    let (control_tx, mut control_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (voice_tx, mut voice_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
+    let client_sender = ClientSender::new_split(control_tx, voice_tx);
 
     let write_failed = Arc::new(tokio::sync::Notify::new());
     let write_failed_notify = Arc::clone(&write_failed);
@@ -233,18 +236,9 @@ async fn handle_wt_session(
     let writer_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
         let mut send_stream = send_stream;
         loop {
-            let first = match send_rx.recv().await {
-                Some(data) => data,
-                None => break,
+            let Some(pending) = recv_outgoing_batch(&mut control_rx, &mut voice_rx).await else {
+                break;
             };
-
-            let mut pending = vec![first];
-            while let Ok(more) = send_rx.try_recv() {
-                pending.push(more);
-                if pending.len() >= 32 {
-                    break;
-                }
-            }
 
             for chunk in &pending {
                 // Bound the write with a timeout: QUIC flow control can stall indefinitely
