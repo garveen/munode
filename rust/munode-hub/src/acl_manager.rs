@@ -250,7 +250,7 @@ impl AclManager {
                 if !is_target && !acl.apply_subs {
                     continue;
                 }
-                if !self.acl_matches_user(acl, user_id, groups) {
+                if !Self::acl_matches_user(acl, user_id, groups) {
                     continue;
                 }
                 granted |= acl.allow;
@@ -555,7 +555,7 @@ impl AclManager {
     }
 
     /// Check if an ACL entry applies to a specific user.
-    fn acl_matches_user(&self, acl: &AclEntry, user_id: i32, groups: &[String]) -> bool {
+    pub(crate) fn acl_matches_user(acl: &AclEntry, user_id: i32, groups: &[String]) -> bool {
         // Match by user_id
         if let Some(acl_user_id) = acl.user_id {
             if acl_user_id > 0 && acl_user_id == user_id {

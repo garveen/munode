@@ -5,12 +5,13 @@ use crate::handler::{self, LoginHandler, LoginInfo};
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 use munode_common::config::EdgeConfig;
+use munode_common::permission;
 use munode_protocol::hubedge;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tracing::{debug, error, info, warn};
 
 pub(super) struct LoginTaskResult {
@@ -59,6 +60,180 @@ pub(super) struct LoginTaskArgs {
     /// Set for WebTransport and WebSocket transports that provide their own
     /// transport-layer encryption (QUIC TLS 1.3 / wss://).
     pub(super) skip_crypt_setup: bool,
+}
+
+struct ChannelAccessDisplayWorkerJob {
+    session_id: u32,
+    channel_ids: Vec<u32>,
+    client_sender: ClientSender,
+    edge_state: Arc<EdgeState>,
+    hub_client: Arc<HubClient>,
+}
+
+#[derive(Clone)]
+struct ChannelAccessDisplayWorker {
+    tx: std::sync::mpsc::Sender<ChannelAccessDisplayWorkerJob>,
+}
+
+impl ChannelAccessDisplayWorker {
+    fn shared() -> &'static Self {
+        static WORKER: OnceLock<ChannelAccessDisplayWorker> = OnceLock::new();
+        WORKER.get_or_init(Self::new)
+    }
+
+    fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<ChannelAccessDisplayWorkerJob>();
+        std::thread::Builder::new()
+            .name("edge-channel-access-display".to_string())
+            .spawn(move || {
+                apply_display_worker_priority();
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build edge display worker runtime");
+                while let Ok(job) = rx.recv() {
+                    runtime.block_on(process_channel_access_display_job(job));
+                }
+            })
+            .expect("failed to spawn edge display worker thread");
+        Self { tx }
+    }
+
+    fn enqueue(&self, job: ChannelAccessDisplayWorkerJob) -> bool {
+        self.tx.send(job).is_ok()
+    }
+}
+
+fn apply_display_worker_priority() {
+    #[cfg(unix)]
+    {
+        // Alpine containers run on musl/Linux. Increasing niceness is the most
+        // deployment-friendly way to lower priority without extra capabilities.
+        let rc = unsafe { nix::libc::setpriority(nix::libc::PRIO_PROCESS, 0, 10) };
+        if rc != 0 {
+            let error = std::io::Error::last_os_error();
+            warn!(%error, "channel access display worker could not lower its priority");
+        } else {
+            debug!("channel access display worker running at nice=10");
+        }
+    }
+}
+
+async fn process_channel_access_display_job(job: ChannelAccessDisplayWorkerJob) {
+    match job
+        .hub_client
+        .batch_permission_query(job.session_id, &job.channel_ids)
+        .await
+    {
+        Ok(result) if result.success => {
+            for entry in result.entries {
+                let is_enter_restricted = entry.is_enter_restricted.unwrap_or(false);
+                job.edge_state
+                    .permission_cache
+                    .insert((job.session_id, entry.channel_id), entry.permissions);
+                job.edge_state
+                    .enter_restricted_cache
+                    .insert(entry.channel_id, is_enter_restricted);
+
+                let msg = mumbleproto::ChannelState {
+                    channel_id: Some(entry.channel_id),
+                    can_enter: Some(entry.permissions & permission::ENTER != 0),
+                    is_enter_restricted: Some(is_enter_restricted),
+                    ..Default::default()
+                };
+                if !job
+                    .client_sender
+                    .send_message(MessageType::ChannelState, &msg)
+                    .await
+                {
+                    return;
+                }
+            }
+        }
+        Ok(result) => {
+            debug!(
+                session_id = job.session_id,
+                channel_count = job.channel_ids.len(),
+                error = result
+                    .error
+                    .as_deref()
+                    .unwrap_or("unknown batch permission failure"),
+                "background channel access display refresh failed"
+            );
+        }
+        Err(error) => {
+            debug!(
+                session_id = job.session_id,
+                channel_count = job.channel_ids.len(),
+                %error,
+                "background channel access display RPC failed"
+            );
+        }
+    }
+}
+
+/// Backfill the client-visible channel lock/restricted state after login.
+///
+/// This path is cache-first on the Edge: warmed entries are sent immediately,
+/// and only the remaining channels are queried from the Hub on a dedicated
+/// low-priority Edge worker thread.
+pub(super) fn spawn_channel_access_display_refresh(
+    session_id: u32,
+    client_sender: ClientSender,
+    edge_state: Arc<EdgeState>,
+    hub_client: Arc<HubClient>,
+) {
+    tokio::spawn(async move {
+        let channels = edge_state.channel_manager.get_channels_bfs().await;
+        let mut missing_channel_ids = Vec::new();
+
+        for channel in &channels {
+            let cached_permissions = edge_state
+                .permission_cache
+                .get(&(session_id, channel.id))
+                .map(|value| *value);
+            let cached_enter_restricted = edge_state
+                .enter_restricted_cache
+                .get(&channel.id)
+                .map(|value| *value);
+
+            match (cached_permissions, cached_enter_restricted) {
+                (Some(permissions), Some(is_enter_restricted)) => {
+                    let msg = mumbleproto::ChannelState {
+                        channel_id: Some(channel.id),
+                        can_enter: Some(permissions & permission::ENTER != 0),
+                        is_enter_restricted: Some(is_enter_restricted),
+                        ..Default::default()
+                    };
+                    if !client_sender
+                        .send_message(MessageType::ChannelState, &msg)
+                        .await
+                    {
+                        return;
+                    }
+                }
+                _ => missing_channel_ids.push(channel.id),
+            }
+        }
+
+        if missing_channel_ids.is_empty() {
+            return;
+        }
+
+        if !ChannelAccessDisplayWorker::shared().enqueue(ChannelAccessDisplayWorkerJob {
+            session_id,
+            channel_ids: missing_channel_ids.clone(),
+            client_sender,
+            edge_state,
+            hub_client,
+        }) {
+            debug!(
+                session_id,
+                channel_count = missing_channel_ids.len(),
+                "channel access display worker unavailable; skipped background refresh"
+            );
+        }
+    });
 }
 
 /// Performs the full authentication and login sequence for a new client.

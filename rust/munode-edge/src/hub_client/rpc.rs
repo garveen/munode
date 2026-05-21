@@ -304,8 +304,8 @@ impl HubClient {
     }
 
     /// Batch permission query: returns effective permissions for a slice of channel IDs
-    /// in a single Hub RPC round trip. Used during the login sequence to populate
-    /// `can_enter`/`is_enter_restricted` in ChannelState messages without N serial RPCs.
+    /// in a single Hub RPC round trip. Used during login-adjacent warmup paths to avoid
+    /// N serial permission RPCs.
     pub async fn batch_permission_query(
         &self,
         session_id: u32,

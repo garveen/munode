@@ -4,7 +4,7 @@ use anyhow::Result;
 use bytes::BytesMut;
 use prost::Message;
 use sha1::{Digest as Sha1Digest, Sha1};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use munode_common::config::EdgeConfig;
 use munode_protocol::message_type::MessageType;
@@ -123,60 +123,20 @@ impl<'a> LoginHandler<'a> {
         debug!(session_id, "Step 2: sending CodecVersion");
         self.send_codec_version().await?;
 
-        // Pre-fetch all channel permissions in a single Hub RPC call.
-        // This includes the root channel (id=0) which is needed by ServerSync.
-        // Doing it once here avoids N sequential RPCs during send_channel_tree.
-        debug!(
-            session_id,
-            "Step 3: fetching channel list and batch permission query"
-        );
+        // The initial login path no longer blocks on full-tree ACL evaluation.
+        // Global lock/restricted icon state is backfilled asynchronously after
+        // the client becomes Ready; here we only fetch the channel tree itself.
+        debug!(session_id, "Step 3: fetching channel list");
         let channels = self.edge_state.channel_manager.get_channels_bfs().await;
-        let channel_ids: Vec<u32> = channels.iter().map(|c| c.id).collect();
         debug!(
             session_id,
-            channel_count = channel_ids.len(),
-            "Fetched {} channels, querying permissions",
-            channel_ids.len()
+            channel_count = channels.len(),
+            "Fetched {} channels",
+            channels.len()
         );
-        // Collect unique IDs (channel 0 will be in the list; no need to add separately)
-        // perm_map: channel_id → (effective_permissions, is_enter_restricted)
-        let perm_map: std::collections::HashMap<u32, (u32, bool)> = {
-            match self
-                .hub_client
-                .batch_permission_query(session_id, &channel_ids)
-                .await
-            {
-                Ok(result) => result
-                    .entries
-                    .iter()
-                    .map(|e| {
-                        (
-                            e.channel_id,
-                            (e.permissions, e.is_enter_restricted.unwrap_or(false)),
-                        )
-                    })
-                    .collect(),
-                Err(e) => {
-                    // Fail open: proceed without channel permissions rather than aborting login
-                    warn!(
-                        "Batch permission query failed during login for session {}: {}",
-                        session_id, e
-                    );
-                    std::collections::HashMap::new()
-                }
-            }
-        };
+        let perm_map = std::collections::HashMap::new();
 
-        // Reuse the login batch permission snapshot for later server-side checks.
-        // Without this, admin operations on freshly connected sessions fall back to
-        // per-action Hub RPCs even though the same permission data was just fetched.
-        for (&channel_id, &(permissions, _)) in &perm_map {
-            self.edge_state
-                .permission_cache
-                .insert((session_id, channel_id), permissions);
-        }
-
-        // 3. Send channel tree (BFS order), using pre-fetched permissions
+        // 3. Send channel tree (BFS order) without blocking on full-tree permission state.
         debug!(session_id, "Step 4: sending channel tree (BFS order)");
         self.send_channel_tree_with_perms(&channels, &perm_map)
             .await?;
@@ -200,14 +160,42 @@ impl<'a> LoginHandler<'a> {
             session_id,
             target_channel, "Step 7: sending PermissionQuery for target channel + parent"
         );
-        self.send_channel_permission_queries(target_channel, &perm_map)
+        self.send_channel_permission_queries(session_id, target_channel)
             .await?;
 
-        // Collect root-channel permissions for the caller to use in ServerSync.
-        let root_permissions = perm_map.get(&0).map(|(p, _)| *p).unwrap_or(0);
+        // Root permissions still need to be ready for ServerSync.
+        let root_permissions = self
+            .query_login_channel_permissions(session_id, 0)
+            .await
+            .unwrap_or(0);
 
         debug!(session_id, "Pre-ServerSync login sequence completed");
         Ok(LoginInfo { root_permissions })
+    }
+
+    async fn query_login_channel_permissions(
+        &self,
+        session_id: u32,
+        channel_id: u32,
+    ) -> Option<u32> {
+        if let Some(cached) = self
+            .edge_state
+            .permission_cache
+            .get(&(session_id, channel_id))
+        {
+            return Some(*cached);
+        }
+
+        let result = self
+            .hub_client
+            .handle_permission_query(session_id, channel_id)
+            .await
+            .ok()?;
+        let permissions = result.permissions.unwrap_or(0);
+        self.edge_state
+            .permission_cache
+            .insert((session_id, channel_id), permissions);
+        Some(permissions)
     }
 
     /// Send CryptSetup with generated encryption keys, and register the CryptState
@@ -546,14 +534,17 @@ impl<'a> LoginHandler<'a> {
     /// PermissionQuery round-trip after ServerSync.
     async fn send_channel_permission_queries(
         &self,
+        session_id: u32,
         target_channel_id: u32,
-        perm_map: &std::collections::HashMap<u32, (u32, bool)>,
     ) -> Result<()> {
         // Target channel permissions
-        if let Some((perms, _)) = perm_map.get(&target_channel_id) {
+        if let Some(target_permissions) = self
+            .query_login_channel_permissions(session_id, target_channel_id)
+            .await
+        {
             let pq = mumbleproto::PermissionQuery {
                 channel_id: Some(target_channel_id),
-                permissions: Some(*perms),
+                permissions: Some(target_permissions),
                 flush: Some(false),
             };
             self.send(MessageType::PermissionQuery, &pq).await?;
@@ -567,10 +558,13 @@ impl<'a> LoginHandler<'a> {
             .await
         {
             if let Some(parent_id) = ch.parent_id {
-                if let Some((parent_perms, _)) = perm_map.get(&parent_id) {
+                if let Some(parent_permissions) = self
+                    .query_login_channel_permissions(session_id, parent_id)
+                    .await
+                {
                     let pq = mumbleproto::PermissionQuery {
                         channel_id: Some(parent_id),
-                        permissions: Some(*parent_perms),
+                        permissions: Some(parent_permissions),
                         flush: Some(false),
                     };
                     self.send(MessageType::PermissionQuery, &pq).await?;

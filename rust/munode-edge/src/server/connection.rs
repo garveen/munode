@@ -11,7 +11,7 @@ use helpers::{
     strip_html_tags,
 };
 pub(crate) use helpers::{get_perm_cached, prefetch_whisper_permissions};
-use login::{LoginTaskArgs, LoginTaskResult, do_login_task};
+use login::{LoginTaskArgs, LoginTaskResult, do_login_task, spawn_channel_access_display_refresh};
 use user_state::{handle_admin_user_state_update, handle_user_state_update};
 
 use crate::client::{
@@ -451,6 +451,13 @@ pub(crate) async fn run_connection_inner(
                             if login_handler.send_server_config().await.is_err() {
                                 break 'outer;
                             }
+
+                            spawn_channel_access_display_refresh(
+                                sid,
+                                task_result.client_sender.clone(),
+                                edge_state.clone(),
+                                hub_client.clone(),
+                            );
 
                             // Apply preconnect self_mute/self_deaf that arrived while
                             // the login RPC was in flight.
