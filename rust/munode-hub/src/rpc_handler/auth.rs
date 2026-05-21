@@ -5,6 +5,7 @@ impl RpcHandler {
         &self,
         request: &TypedRpcRequest,
         request_id: &str,
+        connection_id: u64,
     ) -> Result<EdgeHubPacket> {
         let params = request
             .edge_register
@@ -51,61 +52,50 @@ impl RpcHandler {
             }
         }
 
-        let is_additional_pool_slot = self
-            .state
-            .edge_connections
-            .read()
-            .await
-            .get(&params.server_id)
-            .map(|pool| pool.len() > 1)
-            .unwrap_or(false);
+        let fresh_process = params.fresh_process.unwrap_or(false);
 
-        let stale_sessions = self
-            .state
-            .session_manager
-            .get_sessions_by_edge(params.server_id)
-            .await;
-        if !stale_sessions.is_empty() {
-            if is_additional_pool_slot {
+        if fresh_process {
+            let disconnected = self
+                .disconnect_edge_connections_for_fresh_register(params.server_id, connection_id)
+                .await;
+
+            if disconnected > 0 {
                 debug!(
-                    "Edge {} adding pool slot (pool size > 1): preserving {} existing session(s)",
-                    params.server_id,
-                    stale_sessions.len()
+                    "Fresh edge process {} requested immediate shutdown for {} old connection(s)",
+                    params.server_id, disconnected
                 );
-            } else {
+            }
+
+            self.state
+                .edge_connections
+                .write()
+                .await
+                .remove(&params.server_id);
+            self.state
+                .edge_health
+                .write()
+                .await
+                .remove(&params.server_id);
+
+            let stale_sessions = self
+                .state
+                .session_manager
+                .get_sessions_by_edge(params.server_id)
+                .await;
+            let needs_cleanup = !stale_sessions.is_empty()
+                || self
+                    .state
+                    .edge_registry
+                    .read()
+                    .await
+                    .contains_key(&params.server_id);
+
+            if needs_cleanup {
                 warn!(
-                    "Edge {} re-registered with {} stale session(s) — cleaning up",
-                    params.server_id,
-                    stale_sessions.len()
-                );
-                let reconnecting_edge_id = params.server_id;
-                for session in &stale_sessions {
-                    self.state
-                        .session_manager
-                        .remove_session(session.session_id)
-                        .await;
-                    let session_id = session.session_id;
-                    self.broadcast_notification_excluding(
-                        "hub.userRemoveBroadcast",
-                        reconnecting_edge_id,
-                        |notification| {
-                            notification.user_remove_broadcast =
-                                Some(HubUserRemoveBroadcastParams {
-                                    session: session_id,
-                                    actor: None,
-                                    reason: Some("Edge reconnected - session cleanup".to_string()),
-                                    ban: None,
-                                    target_sessions: vec![],
-                                });
-                        },
-                    )
-                    .await;
-                }
-                info!(
-                    "Cleaned up {} stale session(s) for re-registering edge {}",
-                    stale_sessions.len(),
+                    "Fresh edge process {} taking over — resetting remaining old state before register success",
                     params.server_id
                 );
+                self.cleanup_edge(params.server_id).await;
             }
         }
 
@@ -120,8 +110,12 @@ impl RpcHandler {
         };
 
         info!(
-            "Edge registered: {} (id={}, {}:{})",
-            registration.name, registration.server_id, registration.host, registration.port
+            "Edge registered: {} (id={}, fresh_process={}, {}:{})",
+            registration.name,
+            registration.server_id,
+            fresh_process,
+            registration.host,
+            registration.port
         );
 
         self.state
@@ -221,11 +215,13 @@ impl RpcHandler {
         let password = &params.password;
 
         let cancel = Arc::new(AtomicBool::new(false));
-        self.state
-            .pending_auths
-            .write()
-            .await
-            .insert(params.session_id, (cancel.clone(), edge_server_id));
+        self.state.pending_auths.write().await.insert(
+            params.session_id,
+            crate::server::PendingEdgeAuth {
+                cancel: cancel.clone(),
+                edge_id: edge_server_id,
+            },
+        );
 
         if let Some(re) = &self.username_regex {
             if !re.is_match(username) {

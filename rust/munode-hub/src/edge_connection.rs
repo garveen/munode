@@ -5,20 +5,24 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite;
 use tracing::{debug, error, info, warn};
 
 use munode_protocol::hubedge::*;
 
 use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
-use crate::server::{EdgeHealth, EdgeNotifEnvelope, HubState};
+use crate::server::{EdgeConnectionControl, EdgeHealth, EdgeNotifEnvelope, HubState};
 
 /// Represents a single connected edge server.
 pub struct EdgeConnection {
     state: Arc<HubState>,
     rpc_handler: Arc<RpcHandler>,
+    connection_id: u64,
     /// The server_id once registered.
     server_id: Option<u32>,
+    shutdown: Arc<tokio::sync::Notify>,
+    control_server_id: Option<u32>,
     /// Clone of this connection's outbound sender, set after registration.
     /// Used to identify and remove this specific sender from the edge's pool
     /// on disconnect, without affecting other pool connections.
@@ -27,10 +31,16 @@ pub struct EdgeConnection {
 
 impl EdgeConnection {
     pub fn new(state: Arc<HubState>, rpc_handler: Arc<RpcHandler>) -> Self {
+        let connection_id = state
+            .next_edge_connection_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self {
             state,
             rpc_handler,
+            connection_id,
             server_id: None,
+            shutdown: Arc::new(tokio::sync::Notify::new()),
+            control_server_id: None,
             own_sender: None,
         }
     }
@@ -51,6 +61,8 @@ impl EdgeConnection {
         // it notifies the reader so the read loop exits promptly without waiting for
         // the OS to surface the error on the receive side (may take minutes on a black-hole link).
         let (writer_fail_tx, writer_fail_rx) = tokio::sync::oneshot::channel::<()>();
+        let shutdown = Arc::clone(&self.shutdown);
+        let mut request_tasks = JoinSet::new();
 
         // Writer task: forwards messages from send_rx to WebSocket
         let writer_handle = tokio::spawn(async move {
@@ -80,9 +92,19 @@ impl EdgeConnection {
 
         // Read loop
         let mut writer_fail = writer_fail_rx;
+        let mut forced_shutdown = false;
         loop {
             tokio::select! {
                 biased;
+                _ = shutdown.notified() => {
+                    info!(
+                        "Hub requested edge connection shutdown for {} (connection_id={})",
+                        addr,
+                        self.connection_id
+                    );
+                    forced_shutdown = true;
+                    break;
+                }
                 _ = &mut writer_fail => {
                     debug!("Hub edge_connection reader: writer failed, closing read loop for {}", addr);
                     break;
@@ -90,7 +112,7 @@ impl EdgeConnection {
                 msg = ws_read.next() => {
                     match msg {
                         Some(Ok(tungstenite::Message::Binary(data))) => {
-                            if let Err(e) = self.handle_incoming(&data, &send_tx).await {
+                            if let Err(e) = self.handle_incoming(&data, &send_tx, &mut request_tasks).await {
                                 warn!("Error handling edge message from {}: {}", addr, e);
                             }
                         }
@@ -116,9 +138,25 @@ impl EdgeConnection {
             }
         }
 
-        // Signal the writer task to stop and wait for it to drain its queue.
-        let _ = writer_stop_tx.send(()).await;
-        let _ = writer_handle.await;
+        if forced_shutdown {
+            writer_handle.abort();
+            let _ = writer_handle.await;
+        } else {
+            // Signal the writer task to stop and wait for it to drain its queue.
+            let _ = writer_stop_tx.send(()).await;
+            let _ = writer_handle.await;
+        }
+        request_tasks.abort_all();
+        while let Some(joined) = request_tasks.join_next().await {
+            if let Err(e) = joined {
+                if !e.is_cancelled() {
+                    warn!(
+                        "Edge connection {} request task ended unexpectedly: {}",
+                        self.connection_id, e
+                    );
+                }
+            }
+        }
 
         // Cleanup on disconnect.
         // Remove only this connection's sender from the pool.  Other pool connections
@@ -126,6 +164,7 @@ impl EdgeConnection {
         // is removed (pool becomes empty), ensuring we don't destroy a healthy edge's
         // sessions just because one of its WebSocket connections dropped.
         if let Some(server_id) = self.server_id {
+            self.unregister_connection_control().await;
             let should_cleanup = if let Some(our_sender) = &self.own_sender {
                 let pool_is_empty = {
                     let mut connections = self.state.edge_connections.write().await;
@@ -154,6 +193,8 @@ impl EdgeConnection {
                 self.rpc_handler.cleanup_edge(server_id).await;
             }
             info!("Edge {} (server_id={}) disconnected", addr, server_id);
+        } else {
+            self.unregister_connection_control().await;
         }
 
         Ok(())
@@ -205,84 +246,115 @@ impl EdgeConnection {
         }
     }
 
+    async fn register_connection_control(&mut self, server_id: u32) {
+        if self.control_server_id == Some(server_id) {
+            return;
+        }
+
+        if let Some(old_server_id) = self.control_server_id.replace(server_id) {
+            let mut controls = self.state.edge_connection_controls.write().await;
+            if let Some(entries) = controls.get_mut(&old_server_id) {
+                entries.remove(&self.connection_id);
+                if entries.is_empty() {
+                    controls.remove(&old_server_id);
+                }
+            }
+        }
+
+        self.state
+            .edge_connection_controls
+            .write()
+            .await
+            .entry(server_id)
+            .or_default()
+            .insert(
+                self.connection_id,
+                EdgeConnectionControl {
+                    shutdown: Arc::clone(&self.shutdown),
+                },
+            );
+    }
+
+    async fn unregister_connection_control(&mut self) {
+        let Some(server_id) = self.control_server_id.take() else {
+            return;
+        };
+
+        let mut controls = self.state.edge_connection_controls.write().await;
+        if let Some(entries) = controls.get_mut(&server_id) {
+            entries.remove(&self.connection_id);
+            if entries.is_empty() {
+                controls.remove(&server_id);
+            }
+        }
+    }
+
+    fn register_response_succeeded(response_data: &[u8]) -> Result<bool> {
+        let packet = EdgeHubPacket::decode(response_data)
+            .context("Failed to decode register response packet")?;
+        let response = packet
+            .rpc_response
+            .context("Missing rpc_response in register packet")?;
+        let register = response
+            .edge_register
+            .context("Missing edge_register result in register response")?;
+        Ok(register.success)
+    }
+
+    async fn install_registered_sender(&mut self, edge_id: u32, send_tx: &mpsc::Sender<Vec<u8>>) {
+        self.own_sender = Some(send_tx.clone());
+
+        let reset_processor = {
+            let mut connections = self.state.edge_connections.write().await;
+            match connections.get(&edge_id) {
+                Some(pool) => {
+                    pool.add(send_tx.clone());
+                    debug!(
+                        "Pool slot for edge {} connected after successful register",
+                        edge_id
+                    );
+                    false
+                }
+                None => {
+                    connections.insert(edge_id, EdgeSenderPool::new(send_tx.clone()));
+                    true
+                }
+            }
+        };
+
+        {
+            let mut health = self.state.edge_health.write().await;
+            if reset_processor {
+                health.insert(edge_id, EdgeHealth::new());
+            } else {
+                health.entry(edge_id).or_insert_with(EdgeHealth::new);
+            }
+        }
+
+        self.ensure_edge_notif_processor(edge_id, reset_processor)
+            .await;
+    }
+
     /// Handle an incoming binary message from the edge.
     async fn handle_incoming(
         &mut self,
         data: &[u8],
         send_tx: &mpsc::Sender<Vec<u8>>,
+        request_tasks: &mut JoinSet<()>,
     ) -> Result<()> {
         let packet = EdgeHubPacket::decode(data).context("Failed to decode EdgeHubPacket")?;
 
         match PacketType::try_from(packet.r#type) {
             Ok(PacketType::RpcRequest) => {
                 if let Some(request) = packet.rpc_request {
-                    // Track server_id on registration.
-                    // With peer-equal pool connections, every slot from the same
-                    // Edge sends edge.register.  The first one to register stores
-                    // its sender in edge_connections (used for Hub→Edge
-                    // notifications); subsequent registrations from the same edge
-                    // only set their own server_id but do NOT overwrite the sender
-                    // — that avoids a disconnect of any pool slot accidentally
-                    // rotating the notification channel and triggering cleanup_edge.
                     if request.method == "edge.register" {
                         if let Some(params) = &request.edge_register {
-                            let sid = params.server_id;
-                            self.server_id = Some(sid);
-                            // Track this connection's sender for disconnect cleanup.
-                            self.own_sender = Some(send_tx.clone());
-                            // Determine whether this is the very first pool slot
-                            // for this edge (fresh connection after a disconnect
-                            // or first-ever startup) **atomically with the pool
-                            // mutation**.  Doing the check under a separate read
-                            // lock creates a TOCTOU race: two slots can both see
-                            // "no pool" and both reset the inbound notification
-                            // sequencer, dropping any notifications that were
-                            // enqueued between the two resets.  See audit C1 in
-                            // docs/edge-hub-consistency-audit.md.
-                            let is_first_registration = {
-                                let mut connections = self.state.edge_connections.write().await;
-                                match connections.get(&sid) {
-                                    Some(pool) => {
-                                        // Another pool connection already registered this
-                                        // edge — add this sender to the existing pool so
-                                        // Hub can fall back to it if the first sender dies.
-                                        pool.add(send_tx.clone());
-                                        debug!(
-                                            "Pool slot for edge {} connected (added to sender pool)",
-                                            sid
-                                        );
-                                        false
-                                    }
-                                    None => {
-                                        // First registration for this edge — create the pool.
-                                        connections
-                                            .insert(sid, EdgeSenderPool::new(send_tx.clone()));
-                                        true
-                                    }
-                                }
-                            };
-                            // Initialise health record (idempotent)
-                            self.state
-                                .edge_health
-                                .write()
-                                .await
-                                .entry(sid)
-                                .or_insert_with(EdgeHealth::new);
-                            // Reset the inbound notification sequencer only on
-                            // first (fresh) registration.  The Edge resets its
-                            // outbound sequence counter on every restart, so the
-                            // old sequencer's expected_seq would discard all new
-                            // notifications as duplicates.  Additional pool slots
-                            // for an already-registered edge reuse the running
-                            // sequencer so in-flight notifications are not lost.
-                            self.ensure_edge_notif_processor(sid, is_first_registration)
-                                .await;
+                            self.server_id = Some(params.server_id);
+                            self.register_connection_control(params.server_id).await;
                         }
                     }
 
                     let edge_id = self.server_id.unwrap_or(0);
-                    let rpc_handler = Arc::clone(&self.rpc_handler);
-                    let send_tx_clone = send_tx.clone();
                     let ninja_enabled = edge_id != 0 && self.state.config.channel_ninja.enabled;
                     let ninja_channels = if ninja_enabled {
                         self.state.config.channel_ninja.ninja_channels.clone()
@@ -291,11 +363,63 @@ impl EdgeConnection {
                     };
                     let is_register = request.method == "edge.register";
 
+                    if is_register {
+                        match self
+                            .rpc_handler
+                            .handle_request(request, edge_id, self.connection_id)
+                            .await
+                        {
+                            Ok(response_data) => {
+                                match Self::register_response_succeeded(&response_data) {
+                                    Ok(true) => {
+                                        self.install_registered_sender(edge_id, send_tx).await;
+                                    }
+                                    Ok(false) => {}
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to inspect edge.register response for edge {}: {:#}",
+                                            edge_id, e
+                                        );
+                                    }
+                                }
+                                if send_tx.send(response_data).await.is_err() {
+                                    debug!(
+                                        "Edge {} connection closed before RPC response could be sent",
+                                        edge_id
+                                    );
+                                }
+                                if ninja_enabled {
+                                    self.rpc_handler
+                                        .send_notification_to_edge_unsequenced(
+                                            edge_id,
+                                            "hub.ninjaConfig",
+                                            |n| {
+                                                let json = serde_json::json!({
+                                                    "enabled": true,
+                                                    "ninja_channels": ninja_channels
+                                                });
+                                                n.unknown_params_json = Some(json.to_string());
+                                            },
+                                        )
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Unexpected RPC handler error for edge {}: {}", edge_id, e);
+                            }
+                        }
+                        return Ok(());
+                    }
+
+                    let rpc_handler = Arc::clone(&self.rpc_handler);
+                    let send_tx_clone = send_tx.clone();
+
                     // Spawn each RPC request as an independent task so that a slow handler
                     // (e.g. Argon2 authentication, ~100-300 ms) does not block subsequent
                     // messages from other clients sharing the same Edge→Hub connection.
-                    tokio::spawn(async move {
-                        match rpc_handler.handle_request(request, edge_id).await {
+                    let connection_id = self.connection_id;
+                    request_tasks.spawn(async move {
+                        match rpc_handler.handle_request(request, edge_id, connection_id).await {
                             Ok(response_data) => {
                                 if send_tx_clone.send(response_data).await.is_err() {
                                     debug!(

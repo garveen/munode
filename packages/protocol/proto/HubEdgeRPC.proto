@@ -76,6 +76,11 @@ message EdgeRegisterParams {
   required string certificate = 7;
   optional string challenge = 8;
   optional string challenge_response = 9;
+  // True only for the bootstrap registration of a freshly-started Edge process.
+  // Hub treats this as a same-server_id takeover: old sessions/state are purged
+  // before returning registration success. Additional pool slots and same-process
+  // reconnects must leave this unset/false.
+  optional bool fresh_process = 10;
 }
 
 message EdgeRegisterResult {

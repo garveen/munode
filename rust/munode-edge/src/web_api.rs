@@ -126,6 +126,8 @@ pub struct SessionEntry {
     pub client_release: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_os: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_transport: Option<LocalSessionTransportSummary>,
 }
 
 #[derive(Serialize)]
@@ -136,6 +138,24 @@ pub struct SessionListResponse {
     pub remote_count: usize,
     pub sessions: Vec<SessionEntry>,
     pub timestamp: u64,
+}
+
+#[derive(Serialize)]
+pub struct LocalSessionTransportSummary {
+    pub has_udp_addr: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub udp_addr: Option<String>,
+    pub has_crypt_state: bool,
+    pub udp_packets: u32,
+    pub tcp_packets: u32,
+    pub udp_ping_avg: f32,
+    pub udp_ping_var: f32,
+    pub tcp_ping_avg: f32,
+    pub tcp_ping_var: f32,
+    pub remote_good: u32,
+    pub remote_late: u32,
+    pub remote_lost: u32,
+    pub remote_resync: u32,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1563,9 +1583,28 @@ async fn handle_sessions(State(context): State<AppState>) -> Json<SessionListRes
     let remote_count = remote_all.len();
     let my_edge_id = context.source_edge_id();
 
-    let mut sessions: Vec<SessionEntry> = local_all
-        .into_iter()
-        .map(|c| SessionEntry {
+    let mut sessions = Vec::with_capacity(local_count + remote_count);
+
+    for c in local_all {
+        let udp_addr = context
+            .edge_state
+            .udp_session_to_addr
+            .get(&c.session)
+            .map(|entry| entry.value().to_string());
+        let has_crypt_state = context
+            .edge_state
+            .client_manager
+            .get_crypt_state(c.session)
+            .await
+            .is_some();
+        let ping_stats = context
+            .edge_state
+            .client_manager
+            .get_ping_stats(c.session)
+            .await
+            .unwrap_or_default();
+
+        sessions.push(SessionEntry {
             session: c.session,
             edge_id: my_edge_id,
             scope: SessionScope::Local,
@@ -1585,8 +1624,23 @@ async fn handle_sessions(State(context): State<AppState>) -> Json<SessionListRes
             client_version: c.client_version,
             client_release: Some(c.client_release),
             client_os: Some(c.client_os),
-        })
-        .collect();
+            local_transport: Some(LocalSessionTransportSummary {
+                has_udp_addr: udp_addr.is_some(),
+                udp_addr,
+                has_crypt_state,
+                udp_packets: ping_stats.udp_packets,
+                tcp_packets: ping_stats.tcp_packets,
+                udp_ping_avg: ping_stats.udp_ping_avg,
+                udp_ping_var: ping_stats.udp_ping_var,
+                tcp_ping_avg: ping_stats.tcp_ping_avg,
+                tcp_ping_var: ping_stats.tcp_ping_var,
+                remote_good: ping_stats.remote_good,
+                remote_late: ping_stats.remote_late,
+                remote_lost: ping_stats.remote_lost,
+                remote_resync: ping_stats.remote_resync,
+            }),
+        });
+    }
 
     for u in remote_all {
         sessions.push(SessionEntry {
@@ -1609,6 +1663,7 @@ async fn handle_sessions(State(context): State<AppState>) -> Json<SessionListRes
             client_version: None,
             client_release: None,
             client_os: None,
+            local_transport: None,
         });
     }
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -6,7 +7,7 @@ use anyhow::{Context, Result};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use munode_common::config::{HubConfig, load_hub_config};
 use munode_common::logging::LogReloadHandle;
@@ -36,6 +37,12 @@ pub(crate) struct EdgeNotifEnvelope {
     /// (pre-sequencing) notifications that must be processed immediately.
     pub seq: Option<u64>,
     pub notification: TypedRpcNotification,
+}
+
+/// External lifecycle control for one accepted Edge WebSocket connection.
+#[derive(Clone)]
+pub(crate) struct EdgeConnectionControl {
+    pub shutdown: Arc<tokio::sync::Notify>,
 }
 
 /// A single whisper-target slot as reported by an Edge via `EdgeSyncVoiceTarget`.
@@ -70,6 +77,11 @@ pub struct EdgeRegistration {
     /// Every Edge exposes a relay server; `None` means the relay port was not
     /// advertised (older protocol version).
     pub relay_port: Option<u32>,
+}
+
+pub struct PendingEdgeAuth {
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub edge_id: u32,
 }
 
 /// Health data for a connected Edge server.
@@ -142,6 +154,10 @@ pub struct HubState {
     /// Filesystem-backed blob storage.
     pub blob_store: Arc<BlobStore>,
     pub edge_connections: RwLock<HashMap<u32, EdgeSenderPool>>,
+    /// Live WebSocket connection controls for each registered or registering edge.
+    pub(crate) edge_connection_controls: RwLock<HashMap<u32, HashMap<u64, EdgeConnectionControl>>>,
+    /// Hub-local monotonic identifier for each accepted edge socket.
+    pub(crate) next_edge_connection_id: AtomicU64,
     /// Health records for each connected Edge, keyed by edge server_id.
     pub edge_health: RwLock<HashMap<u32, EdgeHealth>>,
     /// Cluster topology manager.
@@ -193,7 +209,7 @@ pub struct HubState {
     /// disconnect) so the auth task aborts before `session_manager.add_session`,
     /// preventing ghost sessions when `handleUserLeft` is sent immediately on
     /// TCP disconnect.
-    pub pending_auths: RwLock<HashMap<u32, (std::sync::Arc<std::sync::atomic::AtomicBool>, u32)>>,
+    pub pending_auths: RwLock<HashMap<u32, PendingEdgeAuth>>,
 }
 
 /// The main Hub server.
@@ -298,6 +314,8 @@ impl HubServer {
             database,
             blob_store,
             edge_connections: RwLock::new(HashMap::new()),
+            edge_connection_controls: RwLock::new(HashMap::new()),
+            next_edge_connection_id: AtomicU64::new(1),
             edge_health: RwLock::new(HashMap::new()),
             topology: RwLock::new(TopologyManager::new()),
             edge_registry: RwLock::new(HashMap::new()),
@@ -886,8 +904,26 @@ async fn health_check_loop(
 
             if should_clean {
                 warn!("Edge {} heartbeat timeout — cleaning up", edge_id);
+                let disconnected = rpc_handler
+                    .disconnect_edge_connections_for_fresh_register(edge_id, 0)
+                    .await;
+                if disconnected > 0 {
+                    debug!(
+                        "Edge {} heartbeat timeout requested immediate shutdown for {} old connection(s)",
+                        edge_id, disconnected
+                    );
+                }
+
+                let needs_cleanup = !state
+                    .session_manager
+                    .get_sessions_by_edge(edge_id)
+                    .await
+                    .is_empty()
+                    || state.edge_registry.read().await.contains_key(&edge_id);
                 state.edge_connections.write().await.remove(&edge_id);
-                rpc_handler.cleanup_edge(edge_id).await;
+                if needs_cleanup {
+                    rpc_handler.cleanup_edge(edge_id).await;
+                }
             }
         }
     }

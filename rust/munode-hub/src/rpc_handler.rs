@@ -164,6 +164,42 @@ pub struct RpcHandler {
 }
 
 impl RpcHandler {
+    pub(crate) async fn disconnect_edge_connections_for_fresh_register(
+        &self,
+        server_id: u32,
+        keep_connection_id: u64,
+    ) -> usize {
+        let controls: Vec<crate::server::EdgeConnectionControl> = {
+            let controls = self.state.edge_connection_controls.read().await;
+            controls
+                .get(&server_id)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|(connection_id, _)| **connection_id != keep_connection_id)
+                        .map(|(_, control)| control.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        if controls.is_empty() {
+            return 0;
+        }
+
+        info!(
+            "Fresh edge register for {}: forcibly shutting down {} old connection(s) without waiting",
+            server_id,
+            controls.len()
+        );
+
+        for control in &controls {
+            control.shutdown.notify_waiters();
+        }
+
+        controls.len()
+    }
+
     pub fn new(state: Arc<HubState>) -> Self {
         let username_regex =
             state
@@ -203,6 +239,7 @@ impl RpcHandler {
         &self,
         request: TypedRpcRequest,
         edge_server_id: u32,
+        connection_id: u64,
     ) -> Result<Vec<u8>> {
         let request_id = request.request_id.clone();
         let method = request.method.clone();
@@ -217,7 +254,10 @@ impl RpcHandler {
             self.handle_relay_voice_via_tcp(request, &request_id).await
         } else {
             match method.as_str() {
-                "edge.register" => self.handle_register(&request, &request_id).await,
+                "edge.register" => {
+                    self.handle_register(&request, &request_id, connection_id)
+                        .await
+                }
                 "edge.authenticateUser" => {
                     self.handle_authenticate_user(&request, &request_id, edge_server_id)
                         .await
@@ -704,28 +744,18 @@ impl RpcHandler {
         }
     }
 
-    /// Remove all sessions for a disconnected edge.
+    /// Remove all sessions and authoritative cluster state for a disconnected edge.
     ///
-    /// Called from the edge_connection task *after* the last pool slot has been
-    /// removed from `edge_connections`.  Because there is an unavoidable window
-    /// between "pool became empty" and the first line of this function, a fresh
-    /// slot from the same Edge can race in and re-register before we run.  We
-    /// therefore re-check `edge_connections` under a write lock before touching
-    /// authoritative per-edge state (`edge_registry`, `topology`,
-    /// `notification_seqs`, `edge_notif_senders`) and before broadcasting
-    /// `hub.peerLeft`.  Session cleanup is still performed unconditionally so
-    /// pre-reconnect ghosts are purged; the re-registering slot's
-    /// `do_report_local_users` repopulates the authoritative list.
-    ///
+    /// Called only after the last old connection for that edge has fully exited.
     /// See audit C2 / C5 in `docs/edge-hub-consistency-audit.md`.
     pub async fn cleanup_edge(&self, server_id: u32) {
         // Cancel any in-flight `authenticate_user` tasks owned by this edge so
         // that sessions mid-auth do not ghost after edge-level cleanup.
         {
             let pending = self.state.pending_auths.read().await;
-            for (_sid, (flag, eid)) in pending.iter() {
-                if *eid == server_id {
-                    flag.store(true, Ordering::Relaxed);
+            for (_sid, entry) in pending.iter() {
+                if entry.edge_id == server_id {
+                    entry.cancel.store(true, Ordering::Relaxed);
                 }
             }
         }
@@ -756,31 +786,6 @@ impl RpcHandler {
                 n.user_remove_broadcast = Some(remove_params);
             })
             .await;
-        }
-
-        // Re-check that no new pool slot from the same edge has taken over
-        // between the disconnect path removing the last sender and this
-        // function running.  If one has, the edge is _not_ actually gone and
-        // tearing down `edge_registry` / `topology` would delete the new
-        // slot's freshly-installed state and cause every other edge to
-        // receive a spurious `hub.peerLeft`.
-        let edge_still_absent = {
-            let connections = self.state.edge_connections.read().await;
-            !connections.contains_key(&server_id)
-        };
-        if !edge_still_absent {
-            debug!(
-                "cleanup_edge({}): edge was re-registered concurrently, skipping registry/topology teardown",
-                server_id
-            );
-            if !sessions.is_empty() {
-                info!(
-                    "Cleaned up {} pre-reconnect session(s) for edge {}",
-                    sessions.len(),
-                    server_id
-                );
-            }
-            return;
         }
 
         self.state.edge_registry.write().await.remove(&server_id);

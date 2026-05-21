@@ -772,6 +772,12 @@ pub struct EdgeRegisterParams {
     pub challenge: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "9")]
     pub challenge_response: ::core::option::Option<::prost::alloc::string::String>,
+    /// True only for the bootstrap registration of a freshly-started Edge process.
+    /// Hub treats this as a same-server_id takeover: old sessions/state are purged
+    /// before returning registration success. Additional pool slots and same-process
+    /// reconnects must leave this unset/false.
+    #[prost(bool, optional, tag = "10")]
+    pub fresh_process: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeRegisterResult {

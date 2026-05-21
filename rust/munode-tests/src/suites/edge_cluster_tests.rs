@@ -323,8 +323,14 @@ async fn test_cross_edge_admin_mute_notifies_target_and_actor() -> Result<()> {
     .await
     .unwrap_or(false);
 
-    assert!(target_notified, "Cross-edge admin mute should notify the target");
-    assert!(actor_notified, "Cross-edge admin mute should notify the actor");
+    assert!(
+        target_notified,
+        "Cross-edge admin mute should notify the target"
+    );
+    assert!(
+        actor_notified,
+        "Cross-edge admin mute should notify the actor"
+    );
 
     cleanup_clients(clients).await;
     Ok(())
@@ -403,7 +409,10 @@ async fn test_cross_edge_admin_priority_speaker_notifies_target_and_actor() -> R
 #[tokio::test]
 async fn test_cross_edge_admin_unsuppress_notifies_target_and_actor() -> Result<()> {
     let env = standard_env().await?;
-    let configs = vec![ClientConfig::new("admin", 1), ClientConfig::new("acl_op_user", 2)];
+    let configs = vec![
+        ClientConfig::new("admin", 1),
+        ClientConfig::new("acl_op_user", 2),
+    ];
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 

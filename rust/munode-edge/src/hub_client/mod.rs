@@ -373,6 +373,16 @@ pub struct HubClient {
     /// reportLocalUsers, etc.) so it runs exactly once across all pool slots.
     /// CAS from false→true to claim the sync.
     sync_done: AtomicBool,
+    /// Becomes true after this Edge process has completed its first successful
+    /// Hub registration. While false, exactly one slot may attempt a bootstrap
+    /// `edge.register` with `fresh_process=true`; all other startup slots wait.
+    process_registered_once: AtomicBool,
+    /// Serializes the bootstrap `fresh_process=true` registration attempt so a
+    /// new Edge process does not race multiple takeover registrations in parallel.
+    bootstrap_register_claimed: AtomicBool,
+    /// Wakes waiting pool slots once the bootstrap registration either succeeds
+    /// or fails and releases the claim.
+    bootstrap_register_notify: tokio::sync::Notify,
     /// Notified once after the sync sequence completes.  All slots wait on
     /// this before forwarding notifications to the processor, ensuring the
     /// caches are populated first.
@@ -431,6 +441,9 @@ impl HubClient {
             notification_expected_seq: AtomicU64::new(1),
             full_sync_lock: Mutex::new(()),
             sync_done: AtomicBool::new(false),
+            process_registered_once: AtomicBool::new(false),
+            bootstrap_register_claimed: AtomicBool::new(false),
+            bootstrap_register_notify: tokio::sync::Notify::new(),
             sync_notify: tokio::sync::Notify::new(),
             pending_notifications: tokio::sync::Mutex::new(Vec::new()),
             outbound_notif_seq: AtomicU64::new(0),
@@ -650,6 +663,38 @@ impl HubClient {
     fn edge_id(&self) -> u32 {
         let id = self.edge_state.get_edge_id();
         if id != 0 { id } else { self.server_id }
+    }
+
+    async fn acquire_register_fresh_process_flag(&self) -> bool {
+        loop {
+            if self.process_registered_once.load(Ordering::Acquire) {
+                return false;
+            }
+
+            if self
+                .bootstrap_register_claimed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
+            }
+
+            self.bootstrap_register_notify.notified().await;
+        }
+    }
+
+    fn finish_register_fresh_process_flag(&self, fresh_process: bool, success: bool) {
+        if !fresh_process {
+            return;
+        }
+
+        if success {
+            self.process_registered_once.store(true, Ordering::Release);
+        }
+
+        self.bootstrap_register_claimed
+            .store(false, Ordering::Release);
+        self.bootstrap_register_notify.notify_waiters();
     }
 
     /// Generate a unique request ID.
@@ -1658,6 +1703,13 @@ impl HubClient {
 
     /// Register this Edge with the Hub (with optional HMAC challenge-response).
     async fn do_register(&self) -> Result<()> {
+        let fresh_process = self.acquire_register_fresh_process_flag().await;
+        let result = self.do_register_inner(fresh_process).await;
+        self.finish_register_fresh_process_flag(fresh_process, result.is_ok());
+        result
+    }
+
+    async fn do_register_inner(&self, fresh_process: bool) -> Result<()> {
         let request_id = self.next_request_id();
         let params = EdgeRegisterParams {
             server_id: self.server_id,
@@ -1669,6 +1721,7 @@ impl HubClient {
             certificate: String::new(),
             challenge: None,
             challenge_response: None,
+            fresh_process: Some(fresh_process),
         };
 
         let request = TypedRpcRequest {
@@ -1698,7 +1751,7 @@ impl HubClient {
                 if let Some(hmac_secret) = &self.config.hmac_secret {
                     info!("Received HMAC challenge, sending response");
                     return self
-                        .do_register_with_challenge(challenge, hmac_secret)
+                        .do_register_with_challenge(challenge, hmac_secret, fresh_process)
                         .await;
                 }
             }
@@ -1724,7 +1777,12 @@ impl HubClient {
     }
 
     /// Register with HMAC challenge-response.
-    async fn do_register_with_challenge(&self, challenge: &str, hmac_secret: &str) -> Result<()> {
+    async fn do_register_with_challenge(
+        &self,
+        challenge: &str,
+        hmac_secret: &str,
+        fresh_process: bool,
+    ) -> Result<()> {
         use ring::hmac;
 
         let key = hmac::Key::new(hmac::HMAC_SHA256, hmac_secret.as_bytes());
@@ -1743,6 +1801,7 @@ impl HubClient {
             certificate: String::new(),
             challenge: Some(challenge.to_string()),
             challenge_response: Some(challenge_response),
+            fresh_process: Some(fresh_process),
         };
 
         let request = TypedRpcRequest {

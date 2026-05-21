@@ -106,8 +106,8 @@ impl RpcHandler {
 
         {
             let pending = self.state.pending_auths.read().await;
-            if let Some((flag, _)) = pending.get(&session_id) {
-                flag.store(true, Ordering::Relaxed);
+            if let Some(entry) = pending.get(&session_id) {
+                entry.cancel.store(true, Ordering::Relaxed);
                 debug!(
                     "Auth cancel flag set for disconnecting session {}",
                     session_id
