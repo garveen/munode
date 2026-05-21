@@ -11,6 +11,7 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
         edge_server_id: u32,
+        connection_id: u64,
     ) -> Result<EdgeHubPacket> {
         let params = request
             .edge_report_session
@@ -38,6 +39,26 @@ impl RpcHandler {
             recording: session.recording.unwrap_or(false),
             listening_channels: session.listening_channels.clone(),
         };
+
+        if !self
+            .is_connection_active(edge_server_id, connection_id)
+            .await
+        {
+            warn!(
+                edge_id = edge_server_id,
+                connection_id,
+                session_id = session.session_id,
+                "Ignoring edge.reportSession from stale edge connection after fresh takeover"
+            );
+            return Ok(
+                self.make_response_packet(request_id, "edge.reportSession", |response| {
+                    response.edge_report_session = Some(EdgeReportSessionResult {
+                        success: false,
+                        error: Some("stale edge connection".into()),
+                    });
+                }),
+            );
+        }
 
         let already_known = self
             .state

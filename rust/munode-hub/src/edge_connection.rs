@@ -453,6 +453,20 @@ impl EdgeConnection {
             Ok(PacketType::RpcNotification) => {
                 if let Some(notification) = packet.rpc_notification {
                     let edge_id = self.server_id.unwrap_or(0);
+                    if edge_id != 0
+                        && !self
+                            .rpc_handler
+                            .is_connection_active(edge_id, self.connection_id)
+                            .await
+                    {
+                        debug!(
+                            edge_id,
+                            connection_id = self.connection_id,
+                            method = notification.method.as_str(),
+                            "Ignoring notification from stale edge connection after fresh takeover"
+                        );
+                        return Ok(());
+                    }
                     let envelope = EdgeNotifEnvelope {
                         seq: packet.edge_notification_seq,
                         notification,
@@ -478,6 +492,20 @@ impl EdgeConnection {
             }
             Ok(PacketType::Heartbeat) => {
                 if let Some(heartbeat) = packet.heartbeat {
+                    if heartbeat.edge_id != 0
+                        && !self
+                            .rpc_handler
+                            .is_connection_active(heartbeat.edge_id, self.connection_id)
+                            .await
+                    {
+                        debug!(
+                            edge_id = heartbeat.edge_id,
+                            connection_id = self.connection_id,
+                            sequence = heartbeat.sequence,
+                            "Ignoring heartbeat from stale edge connection after fresh takeover"
+                        );
+                        return Ok(());
+                    }
                     debug!(
                         "Heartbeat from edge {} (seq={})",
                         heartbeat.edge_id, heartbeat.sequence

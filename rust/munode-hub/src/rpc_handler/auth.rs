@@ -1,6 +1,40 @@
 use super::*;
 
 impl RpcHandler {
+    fn auth_disconnect_response(&self, request_id: &str) -> EdgeHubPacket {
+        self.make_response_packet(request_id, "edge.authenticateUser", |response| {
+            response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                success: false,
+                reason: Some("Client disconnected during authentication".into()),
+                reject_type: Some(1),
+                ..Default::default()
+            });
+        })
+    }
+
+    async fn reject_stale_auth_connection(
+        &self,
+        request_id: &str,
+        edge_server_id: u32,
+        connection_id: u64,
+        session_id: u32,
+    ) -> Option<EdgeHubPacket> {
+        if self
+            .is_connection_active(edge_server_id, connection_id)
+            .await
+        {
+            return None;
+        }
+
+        warn!(
+            edge_id = edge_server_id,
+            connection_id,
+            session_id,
+            "Dropping authenticateUser result from stale edge connection after fresh takeover"
+        );
+        Some(self.auth_disconnect_response(request_id))
+    }
+
     pub(super) async fn handle_register(
         &self,
         request: &TypedRpcRequest,
@@ -204,6 +238,7 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
         edge_server_id: u32,
+        connection_id: u64,
     ) -> Result<EdgeHubPacket> {
         let params = request
             .edge_authenticate_user
@@ -542,21 +577,18 @@ impl RpcHandler {
                             "authenticate_user aborted for session {} (client disconnected during ext-service auth)",
                             params.session_id
                         );
-                        return Ok(self.make_response_packet(
+                        return Ok(self.auth_disconnect_response(request_id));
+                    }
+                    if let Some(packet) = self
+                        .reject_stale_auth_connection(
                             request_id,
-                            "edge.authenticateUser",
-                            |response| {
-                                response.edge_authenticate_user =
-                                    Some(EdgeAuthenticateUserResult {
-                                        success: false,
-                                        reason: Some(
-                                            "Client disconnected during authentication".into(),
-                                        ),
-                                        reject_type: Some(1),
-                                        ..Default::default()
-                                    });
-                            },
-                        ));
+                            edge_server_id,
+                            connection_id,
+                            params.session_id,
+                        )
+                        .await
+                    {
+                        return Ok(packet);
                     }
                     self.state.session_manager.add_session(session_info).await;
                     if cancel.load(Ordering::Relaxed) {
@@ -568,21 +600,7 @@ impl RpcHandler {
                             "authenticate_user (ext-service): session {} added then immediately reverted (client disconnected)",
                             params.session_id
                         );
-                        return Ok(self.make_response_packet(
-                            request_id,
-                            "edge.authenticateUser",
-                            |response| {
-                                response.edge_authenticate_user =
-                                    Some(EdgeAuthenticateUserResult {
-                                        success: false,
-                                        reason: Some(
-                                            "Client disconnected during authentication".into(),
-                                        ),
-                                        reject_type: Some(1),
-                                        ..Default::default()
-                                    });
-                            },
-                        ));
+                        return Ok(self.auth_disconnect_response(request_id));
                     }
 
                     info!(
@@ -830,21 +848,18 @@ impl RpcHandler {
                             "authenticate_user aborted for session {} (client disconnected during Lua auth)",
                             params.session_id
                         );
-                        return Ok(self.make_response_packet(
+                        return Ok(self.auth_disconnect_response(request_id));
+                    }
+                    if let Some(packet) = self
+                        .reject_stale_auth_connection(
                             request_id,
-                            "edge.authenticateUser",
-                            |response| {
-                                response.edge_authenticate_user =
-                                    Some(EdgeAuthenticateUserResult {
-                                        success: false,
-                                        reason: Some(
-                                            "Client disconnected during authentication".into(),
-                                        ),
-                                        reject_type: Some(1),
-                                        ..Default::default()
-                                    });
-                            },
-                        ));
+                            edge_server_id,
+                            connection_id,
+                            params.session_id,
+                        )
+                        .await
+                    {
+                        return Ok(packet);
                     }
                     self.state.session_manager.add_session(session_info).await;
                     if cancel.load(Ordering::Relaxed) {
@@ -856,21 +871,7 @@ impl RpcHandler {
                             "authenticate_user (lua): session {} added then immediately reverted (client disconnected)",
                             params.session_id
                         );
-                        return Ok(self.make_response_packet(
-                            request_id,
-                            "edge.authenticateUser",
-                            |response| {
-                                response.edge_authenticate_user =
-                                    Some(EdgeAuthenticateUserResult {
-                                        success: false,
-                                        reason: Some(
-                                            "Client disconnected during authentication".into(),
-                                        ),
-                                        reject_type: Some(1),
-                                        ..Default::default()
-                                    });
-                            },
-                        ));
+                        return Ok(self.auth_disconnect_response(request_id));
                     }
 
                     info!(
@@ -1074,21 +1075,18 @@ impl RpcHandler {
                             "authenticate_user aborted for session {} (client disconnected during HTTP auth)",
                             params.session_id
                         );
-                        return Ok(self.make_response_packet(
+                        return Ok(self.auth_disconnect_response(request_id));
+                    }
+                    if let Some(packet) = self
+                        .reject_stale_auth_connection(
                             request_id,
-                            "edge.authenticateUser",
-                            |response| {
-                                response.edge_authenticate_user =
-                                    Some(EdgeAuthenticateUserResult {
-                                        success: false,
-                                        reason: Some(
-                                            "Client disconnected during authentication".into(),
-                                        ),
-                                        reject_type: Some(1),
-                                        ..Default::default()
-                                    });
-                            },
-                        ));
+                            edge_server_id,
+                            connection_id,
+                            params.session_id,
+                        )
+                        .await
+                    {
+                        return Ok(packet);
                     }
                     self.state.session_manager.add_session(session_info).await;
                     if cancel.load(Ordering::Relaxed) {
@@ -1100,21 +1098,7 @@ impl RpcHandler {
                             "authenticate_user (http): session {} added then immediately reverted (client disconnected)",
                             params.session_id
                         );
-                        return Ok(self.make_response_packet(
-                            request_id,
-                            "edge.authenticateUser",
-                            |response| {
-                                response.edge_authenticate_user =
-                                    Some(EdgeAuthenticateUserResult {
-                                        success: false,
-                                        reason: Some(
-                                            "Client disconnected during authentication".into(),
-                                        ),
-                                        reject_type: Some(1),
-                                        ..Default::default()
-                                    });
-                            },
-                        ));
+                        return Ok(self.auth_disconnect_response(request_id));
                     }
 
                     info!(
@@ -1407,18 +1391,18 @@ impl RpcHandler {
                 "authenticate_user aborted for session {} (client disconnected during local DB auth)",
                 params.session_id
             );
-            return Ok(self.make_response_packet(
+            return Ok(self.auth_disconnect_response(request_id));
+        }
+        if let Some(packet) = self
+            .reject_stale_auth_connection(
                 request_id,
-                "edge.authenticateUser",
-                |response| {
-                    response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
-                        success: false,
-                        reason: Some("Client disconnected during authentication".into()),
-                        reject_type: Some(1),
-                        ..Default::default()
-                    });
-                },
-            ));
+                edge_server_id,
+                connection_id,
+                params.session_id,
+            )
+            .await
+        {
+            return Ok(packet);
         }
         self.state.session_manager.add_session(session_info).await;
         if cancel.load(Ordering::Relaxed) {
@@ -1430,18 +1414,7 @@ impl RpcHandler {
                 "authenticate_user (local db): session {} added then immediately reverted (client disconnected)",
                 params.session_id
             );
-            return Ok(self.make_response_packet(
-                request_id,
-                "edge.authenticateUser",
-                |response| {
-                    response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
-                        success: false,
-                        reason: Some("Client disconnected during authentication".into()),
-                        reject_type: Some(1),
-                        ..Default::default()
-                    });
-                },
-            ));
+            return Ok(self.auth_disconnect_response(request_id));
         }
 
         if self.state.geoip.is_available() && self.state.config.geoip.log_location {

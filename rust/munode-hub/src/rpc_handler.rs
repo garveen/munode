@@ -170,17 +170,31 @@ impl RpcHandler {
         keep_connection_id: u64,
     ) -> usize {
         let controls: Vec<crate::server::EdgeConnectionControl> = {
-            let controls = self.state.edge_connection_controls.read().await;
-            controls
-                .get(&server_id)
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .filter(|(connection_id, _)| **connection_id != keep_connection_id)
-                        .map(|(_, control)| control.clone())
-                        .collect()
-                })
-                .unwrap_or_default()
+            let mut controls = self.state.edge_connection_controls.write().await;
+            let mut detached = Vec::new();
+            let remove_server_entry = if let Some(entries) = controls.get_mut(&server_id) {
+                let stale_connection_ids: Vec<u64> = entries
+                    .keys()
+                    .copied()
+                    .filter(|connection_id| *connection_id != keep_connection_id)
+                    .collect();
+
+                for connection_id in stale_connection_ids {
+                    if let Some(control) = entries.remove(&connection_id) {
+                        detached.push(control);
+                    }
+                }
+
+                entries.is_empty()
+            } else {
+                false
+            };
+
+            if remove_server_entry {
+                controls.remove(&server_id);
+            }
+
+            detached
         };
 
         if controls.is_empty() {
@@ -198,6 +212,14 @@ impl RpcHandler {
         }
 
         controls.len()
+    }
+
+    pub(crate) async fn is_connection_active(&self, server_id: u32, connection_id: u64) -> bool {
+        let controls = self.state.edge_connection_controls.read().await;
+        controls
+            .get(&server_id)
+            .map(|entries| entries.contains_key(&connection_id))
+            .unwrap_or(false)
     }
 
     pub fn new(state: Arc<HubState>) -> Self {
@@ -250,6 +272,24 @@ impl RpcHandler {
             debug!("RPC request: {} (id={})", method, request_id);
         }
 
+        if method != "edge.register"
+            && edge_server_id != 0
+            && !self
+                .is_connection_active(edge_server_id, connection_id)
+                .await
+        {
+            warn!(
+                edge_id = edge_server_id,
+                connection_id,
+                method,
+                request_id,
+                "Ignoring RPC from stale edge connection after fresh takeover"
+            );
+            return Ok(self
+                .make_error_packet(&request_id, -1, "stale edge connection")
+                .encode_to_vec());
+        }
+
         let response = if method == "edge.relayVoiceViaTcp" {
             self.handle_relay_voice_via_tcp(request, &request_id).await
         } else {
@@ -259,11 +299,16 @@ impl RpcHandler {
                         .await
                 }
                 "edge.authenticateUser" => {
-                    self.handle_authenticate_user(&request, &request_id, edge_server_id)
-                        .await
+                    self.handle_authenticate_user(
+                        &request,
+                        &request_id,
+                        edge_server_id,
+                        connection_id,
+                    )
+                    .await
                 }
                 "edge.reportSession" => {
-                    self.handle_report_session(&request, &request_id, edge_server_id)
+                    self.handle_report_session(&request, &request_id, edge_server_id, connection_id)
                         .await
                 }
                 "edge.fullSync" => {

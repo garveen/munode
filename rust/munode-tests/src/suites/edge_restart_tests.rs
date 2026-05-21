@@ -53,6 +53,51 @@ async fn test_cluster_survives_edge_restart() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_edge_restart_does_not_leave_remote_ghost_sessions() -> Result<()> {
+    let mut env = standard_env().await?;
+
+    let first_clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    let observer_clients = create_clients(&env, &[ClientConfig::new("user2", 2)]).await?;
+    sleep_ms(800).await;
+
+    assert_eq!(
+        observer_clients[0]
+            .users()
+            .into_iter()
+            .filter(|user| user.name == "user1")
+            .count(),
+        1,
+        "observer should initially see exactly one Edge-1 user"
+    );
+
+    env.restart_edge(1).await?;
+    sleep_ms(2500).await;
+
+    let replacement_clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    sleep_ms(1200).await;
+
+    assert!(
+        observer_clients[0].is_connected(),
+        "observer on Edge 2 should remain connected across Edge 1 restart"
+    );
+
+    assert_eq!(
+        observer_clients[0]
+            .users()
+            .into_iter()
+            .filter(|user| user.name == "user1")
+            .count(),
+        1,
+        "observer must see exactly one Edge-1 user after restart"
+    );
+
+    cleanup_clients(first_clients).await;
+    cleanup_clients(replacement_clients).await;
+    cleanup_clients(observer_clients).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_two_edge_cluster_initial_state() -> Result<()> {
     // Sanity check matching the original TS "should establish cluster with 2 edges".
     let env = standard_env().await?;
