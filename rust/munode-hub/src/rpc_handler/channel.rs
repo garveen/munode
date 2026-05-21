@@ -220,6 +220,8 @@ impl RpcHandler {
             // Update existing channel
             let id = params.id.unwrap();
             if let Some(mut ch) = self.state.channel_store.get_channel(id).await {
+                let old_parent_id = ch.parent_id;
+                let old_inherit_acl = ch.inherit_acl;
                 if let Some(name) = &params.name {
                     // Check for duplicate sibling name (excluding the current channel itself).
                     let new_name = name.clone();
@@ -266,6 +268,10 @@ impl RpcHandler {
                     .update_and_persist(ch.clone())
                     .await
                     .context("Failed to update and persist channel")?;
+
+                if old_parent_id != ch.parent_id || old_inherit_acl != ch.inherit_acl {
+                    self.state.acl_manager.invalidate_channel(id).await;
+                }
 
                 // Broadcast channel updated
                 let proto = ChannelDataProto {
@@ -1001,5 +1007,132 @@ impl RpcHandler {
             })
             .await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth_service::AuthServiceHandle;
+    use crate::ban_store::BanStore;
+    use crate::blob_store::BlobStore;
+    use crate::server::{FailedAuthTracker, HubState};
+    use crate::session_manager::SessionManager;
+    use crate::topology_manager::TopologyManager;
+    use crate::user_store::UserStore;
+    use serde_json::json;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    fn channel(id: u32, parent_id: Option<u32>, name: &str) -> ChannelRecord {
+        ChannelRecord {
+            id,
+            name: name.to_string(),
+            parent_id,
+            description: String::new(),
+            position: 0,
+            max_users: 0,
+            temporary: false,
+            inherit_acl: true,
+            links: HashSet::new(),
+        }
+    }
+
+    async fn setup_handler() -> (tempfile::TempDir, Arc<HubState>, RpcHandler) {
+        let tempdir = tempdir().unwrap();
+        let mut config: munode_common::config::HubConfig =
+            serde_json::from_value(json!({})).unwrap();
+        config.database.path = tempdir.path().join("hub.sqlite").display().to_string();
+        config.blob_store.path = tempdir.path().join("blobs").display().to_string();
+        config.geoip.database_path.clear();
+
+        let database = Arc::new(crate::database::Database::open(&config.database.path).unwrap());
+        database.apply_migrations().unwrap();
+
+        let channel_store = Arc::new(crate::channel_store::ChannelStore::new(database.clone()));
+        let state = Arc::new(HubState {
+            config: config.clone(),
+            session_manager: SessionManager::new(),
+            channel_store: channel_store.clone(),
+            database: database.clone(),
+            acl_manager: crate::acl_manager::AclManager::new(database.clone(), channel_store),
+            user_store: UserStore::new(database.clone()),
+            ban_store: BanStore::new(database.clone()),
+            blob_store: Arc::new(BlobStore::open(&config.blob_store.path).unwrap()),
+            edge_connections: RwLock::new(HashMap::new()),
+            edge_connection_controls: RwLock::new(HashMap::new()),
+            next_edge_connection_id: AtomicU64::new(1),
+            edge_health: RwLock::new(HashMap::new()),
+            topology: RwLock::new(TopologyManager::new()),
+            edge_registry: RwLock::new(HashMap::new()),
+            auth_service: AuthServiceHandle::new(),
+            lua_engine: RwLock::new(None),
+            failed_auth_tracker: RwLock::new(FailedAuthTracker::default()),
+            geoip: Arc::new(crate::geoip::GeoIpService::new(&config.geoip.database_path)),
+            started_at: std::time::Instant::now(),
+            voice_targets: RwLock::new(HashMap::new()),
+            live_limits: RwLock::new(crate::rpc_handler::server_limits_from_config(&config)),
+            notification_seqs: std::sync::Mutex::new(HashMap::new()),
+            edge_notif_senders: RwLock::new(HashMap::new()),
+            pending_auths: RwLock::new(HashMap::new()),
+        });
+
+        for ch in [
+            channel(0, None, "Root"),
+            channel(1, Some(0), "OldParent"),
+            channel(2, Some(1), "Moved"),
+            channel(3, Some(0), "NewParent"),
+        ] {
+            state.channel_store.update_and_persist(ch).await.unwrap();
+        }
+
+        (tempdir, state.clone(), RpcHandler::new(state))
+    }
+
+    #[tokio::test]
+    async fn test_handle_save_channel_invalidates_acl_cache_on_parent_change() {
+        let (_tempdir, state, handler) = setup_handler().await;
+
+        state
+            .acl_manager
+            .save_acls(
+                1,
+                &[crate::acl_manager::AclEntry {
+                    channel_id: 1,
+                    user_id: None,
+                    group_name: Some("@all".to_string()),
+                    apply_here: true,
+                    apply_subs: true,
+                    allow: 0,
+                    deny: munode_common::permission::SPEAK,
+                }],
+            )
+            .await
+            .unwrap();
+
+        let before = state.acl_manager.calculate_permissions(-1, 2, &[]).await;
+        assert_eq!(before & munode_common::permission::SPEAK, 0);
+
+        let request = TypedRpcRequest {
+            method: "edge.saveChannel".to_string(),
+            request_id: "req-1".to_string(),
+            edge_save_channel: Some(EdgeSaveChannelParams {
+                id: Some(2),
+                parent_id: Some(3),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        handler
+            .handle_save_channel(&request, "req-1")
+            .await
+            .unwrap();
+
+        let after = state.acl_manager.calculate_permissions(-1, 2, &[]).await;
+        assert_ne!(after & munode_common::permission::SPEAK, 0);
     }
 }
