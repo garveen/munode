@@ -1027,6 +1027,9 @@ message TypedRPCRequest {
   required string request_id = 1;
   required string method = 2;
   optional uint32 timeout_ms = 3;
+  // Stable logical request identity used across retries.
+  // request_id still identifies a single transport attempt.
+  optional string stable_request_id = 4;
   
   // 根据 method 选择对应的 params
   optional EdgeRegisterParams edge_register = 10;

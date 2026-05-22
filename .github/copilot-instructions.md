@@ -8,6 +8,7 @@ MuNode is a distributed Mumble voice server. The server-side (Hub + Edge) is wri
 - When asked to fix one of the integration tests, do not run all tests — you must specify the file or use the `-t` parameter to run only that specific test. Do NOT use "--" for params, it's not needed.
 - This system is still in the pre-0.1 stage. Everything except `Mumble.proto` — including any protocols — may be modified freely.
 - **Do not optimize for minimal diff.** When making any change, choose the globally optimal solution — refactor, rename, restructure, or rewrite whatever is needed to produce the best overall result. Preserving existing code for the sake of a smaller diff is never a goal.
+- **For every Rust code change, you must run `cargo fmt` and `cargo clippy --all-targets --all-features` from `rust/` before considering the task complete.** Treat formatting or clippy failures as blockers unless the user explicitly tells you not to run them.
 - **Keep example configs in sync with the schema.** Whenever you modify `rust/munode-common/src/config.rs` (add/remove/rename a field, change a default), update the corresponding `rust/config/edge.example.toml` and/or `rust/config/hub.example.toml` in the same change so the example stays a valid, accurate reference.
 
 ## Tech Stack
@@ -293,6 +294,8 @@ All UI string translations in `packages/web-client/src/i18n/locales/` **must fol
 |------|-------|
 | Build (release) | `cd rust && cargo build --release` |
 | Build (debug, for integration tests) | `cd rust && cargo build` |
+| Rust formatting | `cd rust && cargo fmt` |
+| Rust lint | `cd rust && cargo clippy --all-targets --all-features` |
 | Rust unit tests | `cd rust && cargo test` |
 | Rust integration tests | `cd rust && cargo test -p munode-tests` |
 | TS integration tests | `pnpm test:integration <file>` |

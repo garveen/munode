@@ -441,12 +441,9 @@ pub async fn recompute_link_affected_voice_targets(
                 targets
                     .iter()
                     .filter(move |(_, voice_target)| {
-                        voice_target
-                            .channels
-                            .iter()
-                            .any(|config| {
-                                config.links && affected_link_channels.contains(&config.channel_id)
-                            })
+                        voice_target.channels.iter().any(|config| {
+                            config.links && affected_link_channels.contains(&config.channel_id)
+                        })
                     })
                     .map(move |(&target_id, voice_target)| {
                         (session_id, target_id, voice_target.channels.clone())
@@ -484,10 +481,11 @@ async fn recompute_voice_target_snapshots(
         if let Some(voice_target) = cache
             .get_mut(&session_id)
             .and_then(|targets| targets.get_mut(&target_id))
-            && voice_target.resolved_channels != resolved_channels {
-                voice_target.resolved_channels = resolved_channels;
-                touched_sessions.insert(session_id);
-            }
+            && voice_target.resolved_channels != resolved_channels
+        {
+            voice_target.resolved_channels = resolved_channels;
+            touched_sessions.insert(session_id);
+        }
     }
     if touched_sessions.is_empty() {
         return;

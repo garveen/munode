@@ -133,8 +133,9 @@ struct RuntimeFullSyncRequest {
     completion: Option<oneshot::Sender<Result<RuntimeFullSyncOutcome>>>,
 }
 
-/// Maximum time to wait for a missing (skipped) sequenced notification before
-/// declaring the connection stale and triggering a reconnect + fullsync.
+/// Maximum time to wait for a missing sequenced notification before attempting
+/// an online runtime full-sync. If that repair fails, the connection falls
+/// back to the existing reconnect + fullsync path.
 const NOTIFICATION_GAP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Grace period after a Hub cold-restart before sending `UserRemove` for
@@ -316,7 +317,11 @@ struct PendingRequest {
     /// Which pool slot this RPC was sent through.  Used to cancel in-flight
     /// requests when a specific slot disconnects, so the caller sees an
     /// immediate error instead of hanging for the 30-second timeout.
-    slot: usize,
+    ///
+    /// `None` means the request has been registered as pending but `send_raw`
+    /// has not yet committed it to a concrete slot. Fast Hub responses can
+    /// arrive in that window, so the pending entry must already exist.
+    slot: Option<usize>,
 }
 
 /// A control notification that failed to reach Hub and must be replayed after
@@ -581,7 +586,7 @@ impl HubClient {
         self: &Arc<Self>,
         sequencer: &mut NotificationSequencer,
         request: RuntimeFullSyncRequest,
-    ) {
+    ) -> bool {
         let _full_sync_guard = self.full_sync_lock.lock().await;
 
         info!(
@@ -616,6 +621,7 @@ impl HubClient {
                 if let Some(completion) = request.completion {
                     let _ = completion.send(Ok(outcome));
                 }
+                true
             }
             Err(e) => {
                 warn!(
@@ -627,8 +633,36 @@ impl HubClient {
                 if let Some(completion) = request.completion {
                     let _ = completion.send(Err(e));
                 }
+                false
             }
         }
+    }
+
+    async fn drain_ready_notifications(self: &Arc<Self>, sequencer: &mut NotificationSequencer) {
+        loop {
+            let ready = sequencer.drain_ready();
+            if ready.is_empty() {
+                break;
+            }
+            for notification in ready {
+                self.process_sequenced_notification(sequencer, notification)
+                    .await;
+            }
+        }
+    }
+
+    async fn execute_runtime_full_sync_request(
+        self: &Arc<Self>,
+        sequencer: &mut NotificationSequencer,
+        request: RuntimeFullSyncRequest,
+    ) -> bool {
+        let success = self
+            .handle_runtime_full_sync_request(sequencer, request)
+            .await;
+        if success {
+            self.drain_ready_notifications(sequencer).await;
+        }
+        success
     }
 
     /// Queue a control notification that failed to reach Hub.
@@ -743,6 +777,12 @@ impl HubClient {
     fn next_request_id(&self) -> String {
         let counter = self.request_counter.fetch_add(1, Ordering::Relaxed);
         format!("{}-{}", rpc::current_millis(), counter)
+    }
+
+    fn ensure_stable_request_id(request: &mut TypedRpcRequest) {
+        if request.stable_request_id.is_none() {
+            request.stable_request_id = Some(request.request_id.clone());
+        }
     }
 
     /// Connect to the Hub and run the main communication loop with reconnection.
@@ -880,14 +920,16 @@ impl HubClient {
             // kicking all clients while other slots remain healthy.
             if !unreachable_emitted
                 && let Some(since) = first_failure_at
-                    && since.elapsed() >= UNREACHABLE_TIMEOUT && !self.any_slot_alive().await {
-                        warn!(
-                            elapsed_secs = since.elapsed().as_secs(),
-                            "Hub unreachable — disconnecting all clients and refusing new connections"
-                        );
-                        self.edge_state.emit(EdgeEvent::HubUnreachable);
-                        unreachable_emitted = true;
-                    }
+                && since.elapsed() >= UNREACHABLE_TIMEOUT
+                && !self.any_slot_alive().await
+            {
+                warn!(
+                    elapsed_secs = since.elapsed().as_secs(),
+                    "Hub unreachable — disconnecting all clients and refusing new connections"
+                );
+                self.edge_state.emit(EdgeEvent::HubUnreachable);
+                unreachable_emitted = true;
+            }
             // Only manage global state transitions and events if no other slot
             // is still connected.  With peer-equal slots, a single slot going
             // down should not affect the whole client while others are alive.
@@ -1105,11 +1147,31 @@ impl HubClient {
                                 n = notif_rx.recv() => n,
                                 _ = tokio::time::sleep(remaining) => {
                                     if sequencer.is_gap_expired() {
+                                        warn!(
+                                            expected = sequencer.expected_seq,
+                                            buffered = sequencer.reorder_buffer.len(),
+                                            "Notification gap not resolved in {:?} — triggering runtime full-sync",
+                                            NOTIFICATION_GAP_TIMEOUT,
+                                        );
+                                        let repaired = notif_self
+                                            .execute_runtime_full_sync_request(
+                                                &mut sequencer,
+                                                RuntimeFullSyncRequest {
+                                                    reason: "notification gap timeout".to_string(),
+                                                    trigger_seq: None,
+                                                    emit_hub_registered: true,
+                                                    completion: None,
+                                                },
+                                            )
+                                            .await;
+                                        if repaired {
+                                            continue;
+                                        }
+
                                         error!(
                                             expected = sequencer.expected_seq,
                                             buffered = sequencer.reorder_buffer.len(),
-                                            "Notification gap not resolved in {:?} — triggering reconnect",
-                                            NOTIFICATION_GAP_TIMEOUT,
+                                            "Notification gap runtime full-sync failed — disconnecting",
                                         );
                                         gap_disconnect.notify_one();
                                         // Clear notification_tx so the next connection
@@ -1134,20 +1196,7 @@ impl HubClient {
                                         notif_self
                                             .process_sequenced_notification(&mut sequencer, n)
                                             .await;
-                                        loop {
-                                            let ready = sequencer.drain_ready();
-                                            if ready.is_empty() {
-                                                break;
-                                            }
-                                            for n in ready {
-                                                notif_self
-                                                    .process_sequenced_notification(
-                                                        &mut sequencer,
-                                                        n,
-                                                    )
-                                                    .await;
-                                            }
-                                        }
+                                        notif_self.drain_ready_notifications(&mut sequencer).await;
                                     }
                                     SequenceAction::Unsequenced(n) => {
                                         notif_self.handle_notification(n).await;
@@ -1157,7 +1206,7 @@ impl HubClient {
                             }
                             NotificationProcessorInput::RuntimeFullSync(request) => {
                                 notif_self
-                                    .handle_runtime_full_sync_request(&mut sequencer, request)
+                                    .execute_runtime_full_sync_request(&mut sequencer, request)
                                     .await;
                             }
                         }
@@ -1534,7 +1583,7 @@ impl HubClient {
         let mut pending = self.pending.lock().await;
         let cancelled: Vec<String> = pending
             .iter()
-            .filter(|(_, p)| p.slot == slot)
+            .filter(|(_, p)| p.slot.is_none() || p.slot == Some(slot))
             .map(|(id, _)| id.clone())
             .collect();
         for id in &cancelled {
@@ -1554,10 +1603,12 @@ impl HubClient {
     async fn rpc_call_on_slot(
         &self,
         slot: usize,
-        request: TypedRpcRequest,
+        mut request: TypedRpcRequest,
     ) -> Result<TypedRpcResponse> {
+        Self::ensure_stable_request_id(&mut request);
         let method = request.method.clone();
         let request_id = request.request_id.clone();
+        let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(30000) as u64);
         let (tx, rx) = oneshot::channel();
 
         let packet = EdgeHubPacket {
@@ -1567,16 +1618,20 @@ impl HubClient {
         };
         let data = packet.encode_to_vec();
 
-        self.send_on_slot(slot, data)
-            .await
-            .with_context(|| format!("failed to send RPC {} on pool slot {}", method, slot))?;
+        self.pending.lock().await.insert(
+            request_id.clone(),
+            PendingRequest {
+                tx,
+                slot: Some(slot),
+            },
+        );
 
-        self.pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest { tx, slot });
+        if let Err(error) = self.send_on_slot(slot, data).await {
+            self.pending.lock().await.remove(&request_id);
+            return Err(error)
+                .with_context(|| format!("failed to send RPC {} on pool slot {}", method, slot));
+        }
 
-        let timeout = Duration::from_secs(30);
         match time::timeout(timeout, rx).await {
             Ok(Ok(Ok(response))) => Ok(response),
             Ok(Ok(Err(err_msg))) => anyhow::bail!("RPC {} error: {}", method, err_msg),
@@ -1597,14 +1652,18 @@ impl HubClient {
     /// most common failure mode: a slot disconnects mid-flight.
     async fn rpc_call(&self, mut request: TypedRpcRequest) -> Result<TypedRpcResponse> {
         let method = request.method.clone();
-        // Allow one retry when a slot dies mid-flight.  Two attempts total.
-        for attempt in 0_u32..=1 {
+        Self::ensure_stable_request_id(&mut request);
+        let stable_request_id = request.stable_request_id.clone().unwrap_or_default();
+        let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(30000) as u64);
+
+        // Allow bounded retries across slot loss and timeout while preserving the
+        // same stable_request_id so Hub can dedupe or replay the first completion.
+        for attempt in 0_u32..3 {
             if attempt > 0 {
-                // Assign a new request_id so the retry doesn't collide with any
-                // stale response the Hub might still send for the original request.
                 request.request_id = self.next_request_id();
                 debug!(
-                    "RPC {} retrying after slot failure (attempt {})",
+                    stable_request_id,
+                    "RPC {} retrying stable request (attempt {})",
                     method,
                     attempt + 1
                 );
@@ -1620,15 +1679,20 @@ impl HubClient {
             };
             let data = packet.encode_to_vec();
 
+            self.pending
+                .lock()
+                .await
+                .insert(request_id.clone(), PendingRequest { tx, slot: None });
+
             let used_slot = match self.send_raw(data).await {
                 Ok(s) => s,
                 Err(e) => {
-                    if attempt == 0 {
+                    self.pending.lock().await.remove(&request_id);
+                    if attempt < 2 {
                         // No registered slot — this typically means a failover is in
                         // progress (direct closed, relay not yet established, or a
                         // newly connected slot has not finished registering yet).
-                        // Wait up to 10 s for any slot to reconnect, then retry
-                        // once rather than immediately returning an error.
+                        // Wait up to 10 s for any slot to reconnect, then retry.
                         const WAIT_FOR_SLOT: Duration = Duration::from_secs(10);
                         const POLL_INTERVAL: Duration = Duration::from_millis(250);
                         warn!(
@@ -1649,21 +1713,16 @@ impl HubClient {
                         }
                         continue; // retry with attempt 1
                     } else {
-                        return Err(e.context(format!("RPC {} failed after retry", method)));
+                        return Err(e.context(format!("RPC {} failed after retries", method)));
                     }
                 }
             };
 
-            self.pending.lock().await.insert(
-                request_id.clone(),
-                PendingRequest {
-                    tx,
-                    slot: used_slot,
-                },
-            );
+            if let Some(pending) = self.pending.lock().await.get_mut(&request_id) {
+                pending.slot = Some(used_slot);
+            }
 
             // Wait for response with timeout
-            let timeout = Duration::from_secs(30);
             match time::timeout(timeout, rx).await {
                 Ok(Ok(Ok(response))) => return Ok(response),
                 Ok(Ok(Err(err_msg))) => {
@@ -1671,27 +1730,33 @@ impl HubClient {
                     anyhow::bail!("RPC {} error: {}", method, err_msg);
                 }
                 Ok(Err(_)) => {
-                    // Slot died mid-flight (cancel_pending_for_slot dropped the sender).
-                    // Retry once on a different slot.
-                    if attempt == 0 {
+                    if attempt < 2 {
                         warn!(
+                            stable_request_id,
                             "RPC {} cancelled (pool slot {} died mid-flight), retrying",
-                            method, used_slot
+                            method,
+                            used_slot
                         );
                         continue;
                     } else {
-                        anyhow::bail!("RPC {} cancelled after retry", method);
+                        anyhow::bail!("RPC {} cancelled after retries", method);
                     }
                 }
                 Err(_) => {
-                    // 30-second timeout — Hub may or may not have processed the request;
-                    // do not retry to avoid duplicate state mutations.
                     self.pending.lock().await.remove(&request_id);
-                    anyhow::bail!("RPC {} timed out", method);
+                    if attempt < 2 {
+                        warn!(
+                            stable_request_id,
+                            "RPC {} timed out waiting {:?}, retrying stable request",
+                            method,
+                            timeout
+                        );
+                        continue;
+                    }
+                    anyhow::bail!("RPC {} timed out after retries", method);
                 }
             }
         }
-        // Unreachable: the loop above always returns.
         anyhow::bail!("RPC {} failed (exhausted retries)", method)
     }
 
@@ -1853,12 +1918,13 @@ impl HubClient {
         if !result.success {
             // Check if we need HMAC challenge-response
             if let Some(challenge) = &result.challenge
-                && let Some(hmac_secret) = &self.config.hmac_secret {
-                    info!("Received HMAC challenge, sending response");
-                    return self
-                        .do_register_with_challenge(slot, challenge, hmac_secret, fresh_process)
-                        .await;
-                }
+                && let Some(hmac_secret) = &self.config.hmac_secret
+            {
+                info!("Received HMAC challenge, sending response");
+                return self
+                    .do_register_with_challenge(slot, challenge, hmac_secret, fresh_process)
+                    .await;
+            }
             anyhow::bail!("Registration failed: {:?}", result.error);
         }
 
@@ -2472,13 +2538,19 @@ impl HubClient {
 #[cfg(test)]
 mod tests {
     use super::HubClient;
+    use super::{NotificationSequencer, RuntimeFullSyncRequest, SequencedNotification};
     use crate::channel_manager::ChannelManager;
     use crate::client::ClientManager;
-    use crate::state::EdgeState;
+    use crate::state::{EdgeEvent, EdgeState};
     use munode_common::config::{
         EdgeConfig, EdgeVoiceRoutingConfig, EdgeWebApiConfig, HubServerConfig, NetworkConfig,
         ServerConfig, TlsConfig, WebtransportConfig,
     };
+    use munode_protocol::hubedge::{
+        EdgeFullSyncResult, EdgeHubPacket, PacketType, TypedRpcNotification, TypedRpcRequest,
+        TypedRpcResponse,
+    };
+    use prost::Message;
     use std::sync::Arc;
     use tokio::sync::mpsc;
 
@@ -2556,6 +2628,120 @@ mod tests {
         assert!(
             rx0.try_recv().is_err(),
             "unregistered slot should stay idle"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_full_sync_request_drains_ready_buffered_notifications() {
+        let hub = test_hub_client(1);
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4);
+        *hub.pool_senders[0].lock().await = Some(tx);
+        hub.set_slot_registered(0, true);
+
+        let mut event_rx = hub.edge_state.subscribe_events();
+        let hub_for_reply = hub.clone();
+        let reply_task = tokio::spawn(async move {
+            let data = rx.recv().await.expect("full sync request should be sent");
+            let packet = EdgeHubPacket::decode(data.as_slice()).expect("decode request packet");
+            let request = packet.rpc_request.expect("rpc request");
+            assert_eq!(request.method, "edge.fullSync");
+
+            let response = TypedRpcResponse {
+                request_id: request.request_id,
+                edge_full_sync: Some(EdgeFullSyncResult {
+                    channels: vec![],
+                    channel_links: vec![],
+                    acls: vec![],
+                    bans: vec![],
+                    sessions: vec![],
+                    timestamp: 0,
+                    sequence: 20,
+                    edges: vec![],
+                    hub_was_empty: Some(false),
+                }),
+                ..Default::default()
+            };
+            let response_packet = EdgeHubPacket {
+                r#type: PacketType::RpcResponse as i32,
+                rpc_response: Some(response),
+                ..Default::default()
+            };
+            hub_for_reply
+                .handle_incoming_slot(&response_packet.encode_to_vec())
+                .await
+                .expect("handle response packet");
+        });
+
+        let mut sequencer = NotificationSequencer::new(10);
+        let buffered_a = sequencer.feed(SequencedNotification {
+            seq: Some(21),
+            notification: TypedRpcNotification {
+                method: "test.readyA".to_string(),
+                ..Default::default()
+            },
+        });
+        let buffered_b = sequencer.feed(SequencedNotification {
+            seq: Some(22),
+            notification: TypedRpcNotification {
+                method: "test.readyB".to_string(),
+                ..Default::default()
+            },
+        });
+        assert!(matches!(buffered_a, super::SequenceAction::Buffered));
+        assert!(matches!(buffered_b, super::SequenceAction::Buffered));
+
+        let success = hub
+            .execute_runtime_full_sync_request(
+                &mut sequencer,
+                RuntimeFullSyncRequest {
+                    reason: "test runtime full-sync".to_string(),
+                    trigger_seq: None,
+                    emit_hub_registered: true,
+                    completion: None,
+                },
+            )
+            .await;
+
+        assert!(success, "runtime full-sync should succeed");
+        assert_eq!(sequencer.expected_seq, 23);
+        assert!(sequencer.reorder_buffer.is_empty());
+        assert!(sequencer.gap_since.is_none());
+
+        let event = event_rx
+            .recv()
+            .await
+            .expect("HubRegistered event should be emitted");
+        assert!(matches!(
+            event,
+            EdgeEvent::HubRegistered {
+                disappeared_session_ids,
+            } if disappeared_session_ids.is_empty()
+        ));
+
+        reply_task.await.expect("reply task should finish");
+    }
+
+    #[test]
+    fn ensure_stable_request_id_preserves_logical_request_identity() {
+        let mut request = TypedRpcRequest {
+            request_id: "attempt-1".to_string(),
+            method: "edge.userMoved".to_string(),
+            ..Default::default()
+        };
+
+        HubClient::ensure_stable_request_id(&mut request);
+        assert_eq!(request.stable_request_id.as_deref(), Some("attempt-1"));
+
+        request.request_id = "attempt-2".to_string();
+        HubClient::ensure_stable_request_id(&mut request);
+        assert_eq!(request.stable_request_id.as_deref(), Some("attempt-1"));
+
+        request.stable_request_id = Some("manual-stable-id".to_string());
+        request.request_id = "attempt-3".to_string();
+        HubClient::ensure_stable_request_id(&mut request);
+        assert_eq!(
+            request.stable_request_id.as_deref(),
+            Some("manual-stable-id")
         );
     }
 }

@@ -127,22 +127,23 @@ impl PeerVoiceTcpPool {
         for i in 0..n {
             let idx = (start + i) % n;
             if let Ok(mut slot) = self.senders[idx].lock()
-                && let Some(tx) = slot.as_ref() {
-                    match tx.try_send(remaining) {
-                        Ok(()) => return true,
-                        Err(tokio::sync::mpsc::error::TrySendError::Closed(f)) => {
-                            // Connection dead — prune immediately so future sends skip it
-                            // rather than waiting for the slot reconnect task to clear it.
-                            *slot = None;
-                            remaining = f;
-                        }
-                        Err(tokio::sync::mpsc::error::TrySendError::Full(f)) => {
-                            // Channel buffer full — skip to next slot.
-                            remaining = f;
-                        }
+                && let Some(tx) = slot.as_ref()
+            {
+                match tx.try_send(remaining) {
+                    Ok(()) => return true,
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(f)) => {
+                        // Connection dead — prune immediately so future sends skip it
+                        // rather than waiting for the slot reconnect task to clear it.
+                        *slot = None;
+                        remaining = f;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(f)) => {
+                        // Channel buffer full — skip to next slot.
+                        remaining = f;
                     }
                 }
-                // slot is None (reconnecting) — fall through to next slot
+            }
+            // slot is None (reconnecting) — fall through to next slot
             // mutex poisoned — skip this slot
         }
         false

@@ -879,9 +879,10 @@ impl HubClient {
                         .dissemination_route_epoch
                         .swap(incoming_route_epoch, Ordering::Relaxed);
                     if previous_route_epoch != incoming_route_epoch
-                        && let Ok(mut windows) = self.edge_state.dissemination_dedupe.lock() {
-                            windows.clear();
-                        }
+                        && let Ok(mut windows) = self.edge_state.dissemination_dedupe.lock()
+                    {
+                        windows.clear();
+                    }
 
                     let mut new_routes: HashMap<u32, DisseminationSourceState> = HashMap::new();
                     for source in &params.sources {
@@ -944,9 +945,10 @@ impl HubClient {
                         for &sid in target_sessions {
                             if let Some(sender) =
                                 self.edge_state.client_manager.get_sender(sid).await
-                                && !sender.try_send_raw(data.clone()) {
-                                    warn!("Dropped ContextActionModify for slow session {}", sid);
-                                }
+                                && !sender.try_send_raw(data.clone())
+                            {
+                                warn!("Dropped ContextActionModify for slow session {}", sid);
+                            }
                         }
                         debug!(
                             "ContextActionModify sent to {} client(s): action={:?}",
@@ -967,47 +969,47 @@ impl HubClient {
                 } else if method == "hub.aclUpdated" {
                     if let Some(json_str) = &notification.unknown_params_json
                         && let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str)
-                            && let Some(channel_id) = val.get("channel_id").and_then(|v| v.as_u64())
-                            {
-                                let is_enter_restricted = val
-                                    .get("is_enter_restricted")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
-                                self.edge_state
-                                    .permission_cache
-                                    .retain(|&(_, ch), _| ch != channel_id as u32);
-                                self.edge_state.clear_all_cached_whisper_routes();
-                                debug!(
-                                    "ACL updated for channel {}, is_enter_restricted={}",
-                                    channel_id, is_enter_restricted
-                                );
-                                self.edge_state.emit(crate::state::EdgeEvent::AclUpdated {
-                                    channel_id: channel_id as u32,
-                                    is_enter_restricted,
-                                });
-                            }
+                        && let Some(channel_id) = val.get("channel_id").and_then(|v| v.as_u64())
+                    {
+                        let is_enter_restricted = val
+                            .get("is_enter_restricted")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        self.edge_state
+                            .permission_cache
+                            .retain(|&(_, ch), _| ch != channel_id as u32);
+                        self.edge_state.clear_all_cached_whisper_routes();
+                        debug!(
+                            "ACL updated for channel {}, is_enter_restricted={}",
+                            channel_id, is_enter_restricted
+                        );
+                        self.edge_state.emit(crate::state::EdgeEvent::AclUpdated {
+                            channel_id: channel_id as u32,
+                            is_enter_restricted,
+                        });
+                    }
                 // Check for hub.ninjaConfig (uses unknown_params_json)
                 } else if method == "hub.ninjaConfig" {
                     if let Some(json_str) = &notification.unknown_params_json
                         && let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str)
-                            && val
-                                .get("enabled")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                let channels: Vec<u32> = val
-                                    .get("ninja_channels")
-                                    .and_then(|v| v.as_array())
-                                    .map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-                                let mut nc = self.edge_state.ninja_channels.write().await;
-                                *nc = channels;
-                                debug!("Ninja channels updated from Hub: {:?}", &*nc);
-                            }
+                        && val
+                            .get("enabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    {
+                        let channels: Vec<u32> = val
+                            .get("ninja_channels")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_u64().map(|n| n as u32))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let mut nc = self.edge_state.ninja_channels.write().await;
+                        *nc = channels;
+                        debug!("Ninja channels updated from Hub: {:?}", &*nc);
+                    }
                 } else {
                     debug!("Unhandled notification: {}", method);
                 }
@@ -1050,17 +1052,19 @@ impl HubClient {
             std::sync::atomic::Ordering::Relaxed,
         );
         if let Some(v) = limits.listeners_per_user
-            && v > 0 {
-                self.edge_state
-                    .listeners_per_user
-                    .store(v, std::sync::atomic::Ordering::Relaxed);
-            }
+            && v > 0
+        {
+            self.edge_state
+                .listeners_per_user
+                .store(v, std::sync::atomic::Ordering::Relaxed);
+        }
         if let Some(v) = limits.listeners_per_channel
-            && v > 0 {
-                self.edge_state
-                    .listeners_per_channel
-                    .store(v, std::sync::atomic::Ordering::Relaxed);
-            }
+            && v > 0
+        {
+            self.edge_state
+                .listeners_per_channel
+                .store(v, std::sync::atomic::Ordering::Relaxed);
+        }
         *self.edge_state.hub_limits.write().await = Some(limits);
     }
 }

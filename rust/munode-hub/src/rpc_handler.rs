@@ -12,6 +12,7 @@ use flate2::write::ZlibEncoder;
 use prost::Message;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
 
@@ -32,6 +33,193 @@ use crate::topology_manager::{
 
 type EdgeRouteTable = Vec<(u32, u32, Vec<u32>, f32)>;
 type RouteTablePushWork = (u32, EdgeRouteTable, Vec<SourceDisseminationPlan>);
+
+const STABLE_RPC_REPLY_TTL: Duration = Duration::from_secs(300);
+const STABLE_RPC_MAX_COMPLETED_PER_EDGE: usize = 4096;
+
+#[derive(Clone)]
+enum StableRpcReply {
+    Response(TypedRpcResponse),
+    Error(RpcError),
+}
+
+enum StableRpcLedgerEntry {
+    InFlight {
+        method: String,
+        started_at: Instant,
+        notify: Arc<Notify>,
+    },
+    Completed {
+        method: String,
+        completed_at: Instant,
+        reply: StableRpcReply,
+    },
+}
+
+#[derive(Default)]
+pub(crate) struct StableRpcLedger {
+    entries: HashMap<u32, HashMap<String, StableRpcLedgerEntry>>,
+}
+
+enum StableRequestAction {
+    Execute(StableRequestExecutionGuard),
+    Wait(Arc<Notify>),
+    Replay(StableRpcReply),
+}
+
+struct StableRequestExecutionGuard {
+    ledger: Arc<std::sync::Mutex<StableRpcLedger>>,
+    edge_id: u32,
+    stable_request_id: String,
+    notify: Arc<Notify>,
+    completed: bool,
+}
+
+impl StableRequestExecutionGuard {
+    fn complete(&mut self, method: &str, reply: StableRpcReply) {
+        let mut ledger = self.ledger.lock().unwrap();
+        let edge_entries = ledger.entries.entry(self.edge_id).or_default();
+        edge_entries.insert(
+            self.stable_request_id.clone(),
+            StableRpcLedgerEntry::Completed {
+                method: method.to_string(),
+                completed_at: Instant::now(),
+                reply,
+            },
+        );
+        prune_stable_rpc_entries(edge_entries);
+        self.completed = true;
+        self.notify.notify_waiters();
+    }
+}
+
+impl Drop for StableRequestExecutionGuard {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+
+        let mut ledger = self.ledger.lock().unwrap();
+        let remove_edge = if let Some(edge_entries) = ledger.entries.get_mut(&self.edge_id) {
+            let should_remove = matches!(
+                edge_entries.get(&self.stable_request_id),
+                Some(StableRpcLedgerEntry::InFlight { notify, .. })
+                    if Arc::ptr_eq(notify, &self.notify)
+            );
+            if should_remove {
+                edge_entries.remove(&self.stable_request_id);
+            }
+            edge_entries.is_empty()
+        } else {
+            false
+        };
+
+        if remove_edge {
+            ledger.entries.remove(&self.edge_id);
+        }
+
+        self.notify.notify_waiters();
+    }
+}
+
+fn prune_stable_rpc_entries(entries: &mut HashMap<String, StableRpcLedgerEntry>) {
+    let now = Instant::now();
+    entries.retain(|_, entry| match entry {
+        StableRpcLedgerEntry::InFlight { started_at, .. } => {
+            now.duration_since(*started_at) <= STABLE_RPC_REPLY_TTL
+        }
+        StableRpcLedgerEntry::Completed { completed_at, .. } => {
+            now.duration_since(*completed_at) <= STABLE_RPC_REPLY_TTL
+        }
+    });
+
+    if entries.len() <= STABLE_RPC_MAX_COMPLETED_PER_EDGE {
+        return;
+    }
+
+    let mut completed: Vec<_> = entries
+        .iter()
+        .filter_map(|(stable_request_id, entry)| match entry {
+            StableRpcLedgerEntry::Completed { completed_at, .. } => {
+                Some((stable_request_id.clone(), *completed_at))
+            }
+            StableRpcLedgerEntry::InFlight { .. } => None,
+        })
+        .collect();
+    completed.sort_by_key(|(_, completed_at)| *completed_at);
+
+    let mut overflow = entries
+        .len()
+        .saturating_sub(STABLE_RPC_MAX_COMPLETED_PER_EDGE);
+    for (stable_request_id, _) in completed {
+        if overflow == 0 {
+            break;
+        }
+        if entries.remove(&stable_request_id).is_some() {
+            overflow -= 1;
+        }
+    }
+}
+
+fn begin_stable_request(
+    ledger: &Arc<std::sync::Mutex<StableRpcLedger>>,
+    edge_id: u32,
+    stable_request_id: &str,
+    method: &str,
+) -> Result<StableRequestAction> {
+    let mut ledger_guard = ledger.lock().unwrap();
+    let edge_entries = ledger_guard.entries.entry(edge_id).or_default();
+    prune_stable_rpc_entries(edge_entries);
+
+    match edge_entries.get(stable_request_id) {
+        Some(StableRpcLedgerEntry::Completed {
+            method: existing_method,
+            reply,
+            ..
+        }) => {
+            anyhow::ensure!(
+                existing_method == method,
+                "stable_request_id {} was reused across methods ({} vs {})",
+                stable_request_id,
+                existing_method,
+                method
+            );
+            Ok(StableRequestAction::Replay(reply.clone()))
+        }
+        Some(StableRpcLedgerEntry::InFlight {
+            method: existing_method,
+            notify,
+            ..
+        }) => {
+            anyhow::ensure!(
+                existing_method == method,
+                "stable_request_id {} was reused across methods ({} vs {})",
+                stable_request_id,
+                existing_method,
+                method
+            );
+            Ok(StableRequestAction::Wait(Arc::clone(notify)))
+        }
+        None => {
+            let notify = Arc::new(Notify::new());
+            edge_entries.insert(
+                stable_request_id.to_string(),
+                StableRpcLedgerEntry::InFlight {
+                    method: method.to_string(),
+                    started_at: Instant::now(),
+                    notify: Arc::clone(&notify),
+                },
+            );
+            Ok(StableRequestAction::Execute(StableRequestExecutionGuard {
+                ledger: Arc::clone(ledger),
+                edge_id,
+                stable_request_id: stable_request_id.to_string(),
+                notify,
+                completed: false,
+            }))
+        }
+    }
+}
 
 mod admin;
 mod auth;
@@ -171,6 +359,216 @@ pub struct RpcHandler {
 }
 
 impl RpcHandler {
+    fn build_http_client(auth_url: Option<&str>) -> reqwest::Client {
+        let builder = if auth_url.is_some_and(auth_url_uses_loopback) {
+            reqwest::Client::builder().no_proxy()
+        } else {
+            reqwest::Client::builder()
+        };
+
+        builder.build().unwrap_or_else(|error| {
+            warn!("Failed to build HTTP auth client: {}", error);
+            reqwest::Client::new()
+        })
+    }
+
+    fn stable_request_edge_id(request: &TypedRpcRequest, edge_server_id: u32) -> Option<u32> {
+        if request
+            .stable_request_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            return None;
+        }
+
+        if request.method == "edge.register" {
+            request
+                .edge_register
+                .as_ref()
+                .map(|params| params.server_id)
+        } else if edge_server_id != 0 {
+            Some(edge_server_id)
+        } else {
+            None
+        }
+    }
+
+    fn stable_reply_from_packet(packet: &EdgeHubPacket) -> Option<StableRpcReply> {
+        match PacketType::try_from(packet.r#type).ok()? {
+            PacketType::RpcResponse => packet.rpc_response.clone().map(StableRpcReply::Response),
+            PacketType::RpcError => packet.rpc_error.clone().map(StableRpcReply::Error),
+            _ => None,
+        }
+    }
+
+    fn packet_from_stable_reply(request_id: &str, reply: StableRpcReply) -> EdgeHubPacket {
+        match reply {
+            StableRpcReply::Response(mut response) => {
+                response.request_id = request_id.to_string();
+                EdgeHubPacket {
+                    r#type: PacketType::RpcResponse as i32,
+                    rpc_response: Some(response),
+                    ..Default::default()
+                }
+            }
+            StableRpcReply::Error(mut error) => {
+                error.request_id = request_id.to_string();
+                EdgeHubPacket {
+                    r#type: PacketType::RpcError as i32,
+                    rpc_error: Some(error),
+                    ..Default::default()
+                }
+            }
+        }
+    }
+
+    async fn encode_packet(packet: EdgeHubPacket) -> Vec<u8> {
+        let data = packet.encode_to_vec();
+        tokio::task::spawn_blocking(move || maybe_compress(data))
+            .await
+            .unwrap_or_else(|error| {
+                warn!("Compression task panicked: {}", error);
+                vec![]
+            })
+    }
+
+    async fn handle_request_packet(
+        &self,
+        request: TypedRpcRequest,
+        edge_server_id: u32,
+        connection_id: u64,
+        request_id: &str,
+        method: &str,
+    ) -> EdgeHubPacket {
+        macro_rules! boxed_handler {
+            ($expr:expr) => {
+                Box::pin($expr).await
+            };
+        }
+
+        let response = if method == "edge.relayVoiceViaTcp" {
+            boxed_handler!(self.handle_relay_voice_via_tcp(request, request_id))
+        } else {
+            match method {
+                "edge.register" => {
+                    boxed_handler!(self.handle_register(&request, request_id, connection_id))
+                }
+                "edge.authenticateUser" => {
+                    boxed_handler!(self.handle_authenticate_user(
+                        &request,
+                        request_id,
+                        edge_server_id,
+                        connection_id,
+                    ))
+                }
+                "edge.reportSession" => {
+                    boxed_handler!(self.handle_report_session(
+                        &request,
+                        request_id,
+                        edge_server_id,
+                        connection_id,
+                    ))
+                }
+                "edge.fullSync" => {
+                    boxed_handler!(self.handle_full_sync(&request, request_id, edge_server_id))
+                }
+                "edge.handlePermissionQuery" => {
+                    boxed_handler!(self.handle_permission_query(&request, request_id))
+                }
+                "edge.batchPermissionQuery" => {
+                    boxed_handler!(self.handle_batch_permission_query(&request, request_id))
+                }
+                "edge.syncVoiceTarget" => {
+                    boxed_handler!(self.handle_sync_voice_target(&request, request_id))
+                }
+                "edge.getVoiceTargets" => boxed_handler!(self.handle_get_voice_targets(request_id)),
+                "edge.saveChannel" => {
+                    boxed_handler!(self.handle_save_channel(&request, request_id))
+                }
+                "edge.handleACL" => boxed_handler!(self.handle_acl(&request, request_id)),
+                "edge.getBanList" => boxed_handler!(self.handle_get_ban_list(&request, request_id)),
+                "edge.updateBanList" => {
+                    boxed_handler!(self.handle_update_ban_list(&request, request_id))
+                }
+                "edge.getUserList" => boxed_handler!(self.handle_get_user_list(request_id)),
+                "edge.updateUserList" => {
+                    boxed_handler!(self.handle_update_user_list(&request, request_id))
+                }
+                "edge.saveChannelListeners" => {
+                    boxed_handler!(self.handle_save_channel_listeners(&request, request_id))
+                }
+                "edge.loadChannelListeners" => {
+                    boxed_handler!(self.handle_load_channel_listeners(&request, request_id))
+                }
+                "blob.put" => boxed_handler!(self.handle_blob_put(&request, request_id)),
+                "blob.get" => boxed_handler!(self.handle_blob_get(&request, request_id)),
+                "blob.getUserTexture" => {
+                    boxed_handler!(self.handle_blob_get_user_texture(&request, request_id))
+                }
+                "blob.getUserComment" => {
+                    boxed_handler!(self.handle_blob_get_user_comment(&request, request_id))
+                }
+                "blob.setUserTexture" => {
+                    boxed_handler!(self.handle_blob_set_user_texture(&request, request_id))
+                }
+                "blob.setUserComment" => {
+                    boxed_handler!(self.handle_blob_set_user_comment(&request, request_id))
+                }
+                "edge.join" => {
+                    boxed_handler!(self.handle_cluster_join(&request, request_id, edge_server_id))
+                }
+                "edge.joinComplete" => {
+                    boxed_handler!(self.handle_cluster_join_complete(&request, request_id))
+                }
+                "edge.reportPeerDisconnect" => {
+                    boxed_handler!(self.handle_report_peer_disconnect(&request, request_id))
+                }
+                "edge.reportQuality" => {
+                    boxed_handler!(self.handle_report_quality(&request, request_id))
+                }
+                "cluster.getStatus" => boxed_handler!(self.handle_cluster_get_status(request_id)),
+                "edge.userLeft" => {
+                    boxed_handler!(self.handle_user_left_rpc(&request, request_id, edge_server_id))
+                }
+                "edge.userMoved" => {
+                    boxed_handler!(self.handle_user_moved_rpc(&request, request_id, edge_server_id))
+                }
+                "edge.userStateChanged" => {
+                    boxed_handler!(self.handle_user_state_changed_rpc(
+                        &request,
+                        request_id,
+                        edge_server_id
+                    ))
+                }
+                "edge.channelState" => {
+                    boxed_handler!(self.handle_channel_state_rpc(&request, request_id))
+                }
+                "edge.channelRemove" => {
+                    boxed_handler!(self.handle_channel_remove_rpc(&request, request_id))
+                }
+                "edge.userRemove" => {
+                    boxed_handler!(self.handle_user_remove_rpc(&request, request_id))
+                }
+                _ => {
+                    warn!("Unknown RPC method: {}", method);
+                    Ok(self.make_error_packet(
+                        request_id,
+                        -1,
+                        &format!("Unknown method: {}", method),
+                    ))
+                }
+            }
+        };
+
+        match response {
+            Ok(packet) => packet,
+            Err(error) => {
+                warn!("RPC handler error for {}: {}", method, error);
+                self.make_error_packet(request_id, -1, &error.to_string())
+            }
+        }
+    }
+
     pub(crate) async fn disconnect_edge_connections_for_fresh_register(
         &self,
         server_id: u32,
@@ -255,11 +653,12 @@ impl RpcHandler {
                     None
                 }
             });
+        let http_client = Self::build_http_client(state.config.auth.http_url.as_deref());
         Self {
             state,
             username_regex,
             channel_name_regex,
-            http_client: reqwest::Client::new(),
+            http_client,
         }
     }
 
@@ -297,131 +696,69 @@ impl RpcHandler {
                 .encode_to_vec());
         }
 
-        let response = if method == "edge.relayVoiceViaTcp" {
-            self.handle_relay_voice_via_tcp(request, &request_id).await
-        } else {
-            match method.as_str() {
-                "edge.register" => {
-                    self.handle_register(&request, &request_id, connection_id)
-                        .await
-                }
-                "edge.authenticateUser" => {
-                    self.handle_authenticate_user(
-                        &request,
-                        &request_id,
-                        edge_server_id,
-                        connection_id,
-                    )
-                    .await
-                }
-                "edge.reportSession" => {
-                    self.handle_report_session(&request, &request_id, edge_server_id, connection_id)
-                        .await
-                }
-                "edge.fullSync" => {
-                    self.handle_full_sync(&request, &request_id, edge_server_id)
-                        .await
-                }
-                "edge.handlePermissionQuery" => {
-                    self.handle_permission_query(&request, &request_id).await
-                }
-                "edge.batchPermissionQuery" => {
-                    self.handle_batch_permission_query(&request, &request_id)
-                        .await
-                }
-                "edge.syncVoiceTarget" => {
-                    self.handle_sync_voice_target(&request, &request_id).await
-                }
-                "edge.getVoiceTargets" => self.handle_get_voice_targets(&request_id).await,
-                "edge.saveChannel" => self.handle_save_channel(&request, &request_id).await,
-                "edge.handleACL" => self.handle_acl(&request, &request_id).await,
-                "edge.getBanList" => self.handle_get_ban_list(&request, &request_id).await,
-                "edge.updateBanList" => self.handle_update_ban_list(&request, &request_id).await,
-                "edge.getUserList" => self.handle_get_user_list(&request_id).await,
-                "edge.updateUserList" => self.handle_update_user_list(&request, &request_id).await,
-                "edge.saveChannelListeners" => {
-                    self.handle_save_channel_listeners(&request, &request_id)
-                        .await
-                }
-                "edge.loadChannelListeners" => {
-                    self.handle_load_channel_listeners(&request, &request_id)
-                        .await
-                }
-                "blob.put" => self.handle_blob_put(&request, &request_id).await,
-                "blob.get" => self.handle_blob_get(&request, &request_id).await,
-                "blob.getUserTexture" => {
-                    self.handle_blob_get_user_texture(&request, &request_id)
-                        .await
-                }
-                "blob.getUserComment" => {
-                    self.handle_blob_get_user_comment(&request, &request_id)
-                        .await
-                }
-                "blob.setUserTexture" => {
-                    self.handle_blob_set_user_texture(&request, &request_id)
-                        .await
-                }
-                "blob.setUserComment" => {
-                    self.handle_blob_set_user_comment(&request, &request_id)
-                        .await
-                }
-                "edge.join" => {
-                    self.handle_cluster_join(&request, &request_id, edge_server_id)
-                        .await
-                }
-                "edge.joinComplete" => {
-                    self.handle_cluster_join_complete(&request, &request_id)
-                        .await
-                }
-                "edge.reportPeerDisconnect" => {
-                    self.handle_report_peer_disconnect(&request, &request_id)
-                        .await
-                }
-                "edge.reportQuality" => self.handle_report_quality(&request, &request_id).await,
-                "cluster.getStatus" => self.handle_cluster_get_status(&request_id).await,
-                "edge.userLeft" => {
-                    self.handle_user_left_rpc(&request, &request_id, edge_server_id)
-                        .await
-                }
-                "edge.userMoved" => {
-                    self.handle_user_moved_rpc(&request, &request_id, edge_server_id)
-                        .await
-                }
-                "edge.userStateChanged" => {
-                    self.handle_user_state_changed_rpc(&request, &request_id, edge_server_id)
-                        .await
-                }
-                "edge.channelState" => self.handle_channel_state_rpc(&request, &request_id).await,
-                "edge.channelRemove" => self.handle_channel_remove_rpc(&request, &request_id).await,
-                "edge.userRemove" => self.handle_user_remove_rpc(&request, &request_id).await,
-                _ => {
-                    warn!("Unknown RPC method: {}", method);
-                    Ok(self.make_error_packet(
-                        &request_id,
-                        -1,
-                        &format!("Unknown method: {}", method),
-                    ))
-                }
-            }
-        };
+        if let Some(stable_request_id) = request.stable_request_id.clone()
+            && let Some(stable_edge_id) = Self::stable_request_edge_id(&request, edge_server_id)
+        {
+            loop {
+                let action = match begin_stable_request(
+                    &self.state.stable_rpc_requests,
+                    stable_edge_id,
+                    &stable_request_id,
+                    &method,
+                ) {
+                    Ok(action) => action,
+                    Err(error) => {
+                        return Ok(self
+                            .make_error_packet(&request_id, -1, &error.to_string())
+                            .encode_to_vec());
+                    }
+                };
 
-        match response {
-            Ok(packet) => {
-                let data = packet.encode_to_vec();
-                let compressed = tokio::task::spawn_blocking(move || maybe_compress(data))
-                    .await
-                    .unwrap_or_else(|error| {
-                        warn!("Compression task panicked: {}", error);
-                        vec![]
-                    });
-                Ok(compressed)
-            }
-            Err(error) => {
-                warn!("RPC handler error for {}: {}", method, error);
-                let packet = self.make_error_packet(&request_id, -1, &error.to_string());
-                Ok(packet.encode_to_vec())
+                match action {
+                    StableRequestAction::Replay(reply) => {
+                        debug!(
+                            edge_id = stable_edge_id,
+                            stable_request_id, method, "Replaying cached stable RPC reply"
+                        );
+                        let packet = Self::packet_from_stable_reply(&request_id, reply);
+                        return Ok(Self::encode_packet(packet).await);
+                    }
+                    StableRequestAction::Wait(notify) => {
+                        debug!(
+                            edge_id = stable_edge_id,
+                            stable_request_id, method, "Waiting for in-flight stable RPC"
+                        );
+                        notify.notified().await;
+                    }
+                    StableRequestAction::Execute(mut guard) => {
+                        // Box the large dispatch future so the tokio worker stack does not
+                        // need to hold every RPC branch state inline.
+                        let packet = self.handle_request_packet(
+                            request.clone(),
+                            edge_server_id,
+                            connection_id,
+                            &request_id,
+                            &method,
+                        );
+                        let packet = Box::pin(packet).await;
+                        if let Some(reply) = Self::stable_reply_from_packet(&packet) {
+                            guard.complete(&method, reply);
+                        }
+                        return Ok(Self::encode_packet(packet).await);
+                    }
+                }
             }
         }
+
+        let packet = self.handle_request_packet(
+            request,
+            edge_server_id,
+            connection_id,
+            &request_id,
+            &method,
+        );
+        let packet = Box::pin(packet).await;
+        Ok(Self::encode_packet(packet).await)
     }
 
     /// Handle a notification from an edge.
@@ -909,6 +1246,107 @@ impl RpcHandler {
                 server_id
             );
         }
+    }
+}
+
+fn auth_url_uses_loopback(auth_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(auth_url) else {
+        return false;
+    };
+
+    match url.host_str() {
+        Some("localhost") => true,
+        Some(host) => host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false),
+        None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn response_reply(method: &str) -> StableRpcReply {
+        StableRpcReply::Response(TypedRpcResponse {
+            request_id: "attempt-1".to_string(),
+            method: Some(method.to_string()),
+            processing_time_ms: Some(1),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn stable_request_replays_completed_reply_with_new_attempt_id() {
+        let ledger = Arc::new(std::sync::Mutex::new(StableRpcLedger::default()));
+        let mut guard = match begin_stable_request(&ledger, 7, "stable-1", "edge.fullSync")
+            .expect("begin should succeed")
+        {
+            StableRequestAction::Execute(guard) => guard,
+            _ => panic!("first request should execute"),
+        };
+
+        guard.complete("edge.fullSync", response_reply("edge.fullSync"));
+
+        let replay = match begin_stable_request(&ledger, 7, "stable-1", "edge.fullSync")
+            .expect("replay lookup should succeed")
+        {
+            StableRequestAction::Replay(reply) => reply,
+            _ => panic!("completed request should replay"),
+        };
+
+        let packet = RpcHandler::packet_from_stable_reply("attempt-2", replay);
+        let response = packet.rpc_response.expect("cached response packet");
+        assert_eq!(response.request_id, "attempt-2");
+        assert_eq!(response.method.as_deref(), Some("edge.fullSync"));
+    }
+
+    #[test]
+    fn stable_request_cleans_inflight_entry_when_execution_drops() {
+        let ledger = Arc::new(std::sync::Mutex::new(StableRpcLedger::default()));
+        let guard = match begin_stable_request(&ledger, 9, "stable-2", "edge.userMoved")
+            .expect("begin should succeed")
+        {
+            StableRequestAction::Execute(guard) => guard,
+            _ => panic!("first request should execute"),
+        };
+
+        assert!(matches!(
+            begin_stable_request(&ledger, 9, "stable-2", "edge.userMoved")
+                .expect("duplicate begin should succeed"),
+            StableRequestAction::Wait(_)
+        ));
+
+        drop(guard);
+
+        assert!(matches!(
+            begin_stable_request(&ledger, 9, "stable-2", "edge.userMoved")
+                .expect("begin after drop should succeed"),
+            StableRequestAction::Execute(_)
+        ));
+    }
+
+    #[test]
+    fn stable_request_rejects_method_reuse() {
+        let ledger = Arc::new(std::sync::Mutex::new(StableRpcLedger::default()));
+        let mut guard = match begin_stable_request(&ledger, 11, "stable-3", "edge.userMoved")
+            .expect("begin should succeed")
+        {
+            StableRequestAction::Execute(guard) => guard,
+            _ => panic!("first request should execute"),
+        };
+        guard.complete("edge.userMoved", response_reply("edge.userMoved"));
+
+        let error = match begin_stable_request(&ledger, 11, "stable-3", "edge.userStateChanged") {
+            Ok(_) => panic!("reusing stable id across methods must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("stable_request_id stable-3 was reused across methods")
+        );
     }
 }
 

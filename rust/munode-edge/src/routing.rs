@@ -253,9 +253,10 @@ pub async fn compute_voice_targets(
                     continue;
                 };
                 if let Some(groups) = group_filter
-                    && !slot_matches_any_group(slot, groups) {
-                        continue;
-                    }
+                    && !slot_matches_any_group(slot, groups)
+                {
+                    continue;
+                }
                 channel_sessions.push(target);
             }
         }

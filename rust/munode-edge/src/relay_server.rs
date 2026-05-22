@@ -390,10 +390,11 @@ async fn handle_voice_connection(
 ) {
     // Challenge-response auth before any voice traffic.
     if let Some(secret) = hmac_secret
-        && let Err(e) = relay_auth_server(&mut ws, secret).await {
-            warn!("Voice TCP auth failed for {}: {}", peer_addr, e);
-            return;
-        }
+        && let Err(e) = relay_auth_server(&mut ws, secret).await
+    {
+        warn!("Voice TCP auth failed for {}: {}", peer_addr, e);
+        return;
+    }
 
     let (mut _write, mut read) = ws.split();
 

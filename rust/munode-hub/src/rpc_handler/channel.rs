@@ -1007,6 +1007,7 @@ mod tests {
     use crate::auth_service::AuthServiceHandle;
     use crate::ban_store::BanStore;
     use crate::blob_store::BlobStore;
+    use crate::rpc_handler::StableRpcLedger;
     use crate::server::{FailedAuthTracker, HubState};
     use crate::session_manager::SessionManager;
     use crate::topology_manager::TopologyManager;
@@ -1069,6 +1070,7 @@ mod tests {
             notification_seqs: std::sync::Mutex::new(HashMap::new()),
             edge_notif_senders: RwLock::new(HashMap::new()),
             pending_auths: RwLock::new(HashMap::new()),
+            stable_rpc_requests: Arc::new(std::sync::Mutex::new(StableRpcLedger::default())),
         });
 
         for ch in [

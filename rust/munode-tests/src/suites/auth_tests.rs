@@ -493,7 +493,7 @@ async fn try_connect_capture_reject(
     .await;
 
     let _ = handle.await;
-    
+
     *captured.lock().await
 }
 

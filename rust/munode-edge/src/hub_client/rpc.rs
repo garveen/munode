@@ -424,12 +424,13 @@ impl HubClient {
         match self.rpc_call(request).await {
             Ok(resp) => {
                 if let Some(result) = resp.edge_save_channel_listeners
-                    && !result.success {
-                        warn!(
-                            "Hub rejected channel listeners save for user {}: {:?}",
-                            user_id, result.error
-                        );
-                    }
+                    && !result.success
+                {
+                    warn!(
+                        "Hub rejected channel listeners save for user {}: {:?}",
+                        user_id, result.error
+                    );
+                }
             }
             Err(e) => warn!(
                 "Failed to save channel listeners for user {}: {}",

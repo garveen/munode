@@ -59,19 +59,18 @@ impl RpcHandler {
         if let Some(hmac_secret) = &self.state.config.registry.hmac_secret {
             if params.challenge_response.is_none() {
                 let challenge = generate_challenge()?;
-                return Ok(
-                    self.make_response_packet(request_id, "edge.register", |response| {
-                        response.edge_register = Some(EdgeRegisterResult {
-                            success: false,
-                            hub_server_id: None,
-                            edge_list: vec![],
-                            challenge: Some(challenge),
-                            challenge_timeout: Some(30000),
-                            error: None,
-                            server_limits: None,
-                        });
-                    }),
-                );
+                let packet = self.make_response_packet(request_id, "edge.register", |response| {
+                    response.edge_register = Some(EdgeRegisterResult {
+                        success: false,
+                        hub_server_id: None,
+                        edge_list: vec![],
+                        challenge: Some(challenge),
+                        challenge_timeout: Some(30000),
+                        error: None,
+                        server_limits: None,
+                    });
+                });
+                return Ok(packet);
             }
 
             if let (Some(challenge), Some(response)) =

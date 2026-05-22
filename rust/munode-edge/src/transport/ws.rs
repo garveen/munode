@@ -400,7 +400,7 @@ async fn dispatch_http<W: AsyncWrite + Unpin>(
 fn is_ws_upgrade(head_str: &str) -> bool {
     head_str
         .lines()
-    .any(|line| line.trim().eq_ignore_ascii_case("upgrade: websocket"))
+        .any(|line| line.trim().eq_ignore_ascii_case("upgrade: websocket"))
 }
 
 /// Repeatedly peek the TCP socket until the HTTP header terminator (`\r\n\r\n`)
@@ -432,10 +432,7 @@ async fn peek_http_head(stream: &TcpStream) -> io::Result<Vec<u8>> {
 /// terminator (`\r\n\r\n`) is found or `buf` is full.  Unlike `peek_http_head`,
 /// this *consumes* the bytes.  Used in native-TLS mode where the TLS layer
 /// decrypts data; peeking on the underlying `TcpStream` would return ciphertext.
-async fn read_http_head<R: AsyncRead + Unpin>(
-    stream: &mut R,
-    buf: &mut [u8],
-) -> io::Result<usize> {
+async fn read_http_head<R: AsyncRead + Unpin>(stream: &mut R, buf: &mut [u8]) -> io::Result<usize> {
     let mut total = 0usize;
     let cap = buf.len();
     loop {

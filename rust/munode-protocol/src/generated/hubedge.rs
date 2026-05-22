@@ -2171,6 +2171,10 @@ pub struct TypedRpcRequest {
     pub method: ::prost::alloc::string::String,
     #[prost(uint32, optional, tag = "3")]
     pub timeout_ms: ::core::option::Option<u32>,
+    /// Stable logical request identity used across retries.
+    /// request_id still identifies a single transport attempt.
+    #[prost(string, optional, tag = "4")]
+    pub stable_request_id: ::core::option::Option<::prost::alloc::string::String>,
     /// 根据 method 选择对应的 params
     #[prost(message, optional, tag = "10")]
     pub edge_register: ::core::option::Option<EdgeRegisterParams>,

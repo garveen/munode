@@ -26,7 +26,7 @@ use futures_util::SinkExt;
 use tokio::net::{TcpListener, UdpSocket};
 
 use munode_common::config::{
-    EdgeConfig, EdgeWebApiConfig, EdgeVoiceRoutingConfig, HubServerConfig, NetworkConfig,
+    EdgeConfig, EdgeVoiceRoutingConfig, EdgeWebApiConfig, HubServerConfig, NetworkConfig,
     ServerConfig, TlsConfig, WebtransportConfig,
 };
 use munode_edge::channel_manager::ChannelManager;
@@ -34,9 +34,7 @@ use munode_edge::client::ClientManager;
 use munode_edge::hub_client::HubClient;
 use munode_edge::peer_registry::{PeerEdgeInfo, PeerRegistry};
 use munode_edge::relay_server::{connect_peer_voice_tcp, run_edge_ws_server_with_listener};
-use munode_edge::state::{
-    EdgeState, EdgeStateConfig, HopTransport, RouteCandidate, RouteDecision,
-};
+use munode_edge::state::{EdgeState, EdgeStateConfig, HopTransport, RouteCandidate, RouteDecision};
 use munode_edge::udp::{test_route_to_edge, test_send_relay_packet};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -365,7 +363,10 @@ async fn direct_tcp_voice_handshake_registers_incoming_connection() {
     .await
     .unwrap_or(false);
 
-    assert!(registered, "server must register one incoming voice TCP connection");
+    assert!(
+        registered,
+        "server must register one incoming voice TCP connection"
+    );
 }
 
 /// `connect_peer_voice_tcp` must register a sender in `EdgeState::voice_tcp_conns`
@@ -391,7 +392,9 @@ async fn connect_peer_voice_tcp_registers_sender_in_state() {
         loop {
             {
                 let conns = client_state.voice_tcp_conns.load();
-                if let Some(pool) = conns.get(&peer_edge_id) && pool.has_live_sender() {
+                if let Some(pool) = conns.get(&peer_edge_id)
+                    && pool.has_live_sender()
+                {
                     return true;
                 }
             }
@@ -426,7 +429,9 @@ async fn voice_tcp_conn_send_keeps_connection_alive() {
     let registered = tokio::time::timeout(tokio::time::Duration::from_secs(2), async {
         loop {
             let conns = client_state.voice_tcp_conns.load();
-            if let Some(pool) = conns.get(&peer_edge_id) && pool.has_live_sender() {
+            if let Some(pool) = conns.get(&peer_edge_id)
+                && pool.has_live_sender()
+            {
                 return true;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;

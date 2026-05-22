@@ -326,10 +326,11 @@ async fn forward_logical_frame(
     };
 
     if let Some(control) = parsed.control
-        && control & LOGICAL_CONTROL_EMERGENCY_FLOOD != 0 {
-            forward_emergency_flood(frame, ingress_peer, state, hub_client).await;
-            return;
-        }
+        && control & LOGICAL_CONTROL_EMERGENCY_FLOOD != 0
+    {
+        forward_emergency_flood(frame, ingress_peer, state, hub_client).await;
+        return;
+    }
 
     let hub_escape_targets: Vec<u32> = fallback_target_edges
         .unwrap_or(&[])

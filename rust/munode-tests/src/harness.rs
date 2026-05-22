@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use munode_client::{ConnectOptions, MumbleClient};
+use munode_client::{ClientError, ConnectOptions, MumbleClient};
 use serde_json::{Value, json};
 
 use crate::auth::{AuthServerHandle, start_auth_server};
@@ -284,6 +284,88 @@ pub fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
             bail!("Timed out waiting for port {} to be ready", port);
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Wait until an Edge can complete a real client login, not just accept TCP.
+/// This avoids returning from the harness while the Edge is still waiting to
+/// finish Hub registration, which would otherwise cause the first test clients
+/// to be rejected with "Server not ready".
+pub async fn wait_for_edge_login_ready(port: u16, timeout: Duration) -> Result<()> {
+    ensure_crypto_provider();
+
+    let admin = find_user("admin").ok_or_else(|| anyhow!("missing admin test user"))?;
+    let deadline = Instant::now() + timeout;
+    let mut last_error: Option<String> = None;
+
+    loop {
+        let client = MumbleClient::new();
+        match client
+            .connect(ConnectOptions {
+                host: "127.0.0.1".into(),
+                port,
+                username: admin.username.to_string(),
+                password: Some(admin.password.to_string()),
+                reject_unauthorized: false,
+                force_tcp_voice: true,
+                connect_timeout: Duration::from_secs(2),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(()) => {
+                let _ = client.disconnect().await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                return Ok(());
+            }
+            Err(error) => {
+                let Some(client_error) = error.downcast_ref::<ClientError>() else {
+                    return Err(anyhow!(
+                        "edge on port {} failed readiness probe: {}",
+                        port,
+                        error
+                    ));
+                };
+
+                match client_error {
+                    ClientError::AuthRejected { reason } if reason.contains("Server not ready") => {
+                        last_error = Some(reason.clone());
+                    }
+                    ClientError::AuthRejected { reason }
+                        if reason == "Authentication failed"
+                            || reason == "Authentication denied" =>
+                    {
+                        last_error = Some(reason.clone());
+                    }
+                    ClientError::AuthRejected { .. } => {
+                        return Ok(());
+                    }
+                    ClientError::Io { detail } | ClientError::Protocol { detail } => {
+                        last_error = Some(detail.clone());
+                    }
+                    ClientError::Timeout { secs } => {
+                        last_error = Some(format!("connection timed out after {}s", secs));
+                    }
+                    _ => {
+                        return Err(anyhow!(
+                            "edge on port {} failed readiness probe: {}",
+                            port,
+                            error
+                        ));
+                    }
+                }
+            }
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "Timed out waiting for edge {} login readiness: {}",
+                port,
+                last_error.unwrap_or_else(|| "unknown error".to_string())
+            );
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -648,7 +730,16 @@ impl TestEnvironment {
         self._hub = ServerProcess::new(proc, format!("Hub({})", self.control_port));
         wait_for_port(self.control_port, Duration::from_secs(15))
             .context("Hub control port not ready after restart")?;
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        for edge in &self.edges {
+            wait_for_edge_login_ready(edge.client_port, Duration::from_secs(15))
+                .await
+                .with_context(|| {
+                    format!(
+                        "Edge on port {} not login-ready after Hub restart",
+                        edge.client_port
+                    )
+                })?;
+        }
         Ok(())
     }
 
@@ -684,7 +775,11 @@ impl TestEnvironment {
         self._edges[i] = ServerProcess::new(proc, format!("Edge{}({})", index, port));
         wait_for_port(port, Duration::from_secs(15))
             .with_context(|| format!("Edge{} port {} not ready after restart", index, port))?;
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        wait_for_edge_login_ready(port, Duration::from_secs(15))
+            .await
+            .with_context(|| {
+                format!("Edge{} port {} not login-ready after restart", index, port)
+            })?;
         Ok(())
     }
 }
@@ -924,6 +1019,11 @@ impl TestEnvBuilder {
 
             wait_for_port(client_port, Duration::from_secs(15))
                 .with_context(|| format!("Edge{} not ready on port {}", i + 1, client_port))?;
+            wait_for_edge_login_ready(client_port, Duration::from_secs(15))
+                .await
+                .with_context(|| {
+                    format!("Edge{} not login-ready on port {}", i + 1, client_port)
+                })?;
 
             edge_ports.push(EdgePorts {
                 client_port,
@@ -931,9 +1031,6 @@ impl TestEnvBuilder {
                 udp_port: client_port,
             });
         }
-
-        // Wait for edges to register with the Hub
-        tokio::time::sleep(Duration::from_millis(500)).await;
 
         Ok(TestEnvironment {
             auth_port,

@@ -557,17 +557,17 @@ impl<'a> LoginHandler<'a> {
             .get_channel(target_channel_id)
             .await
             && let Some(parent_id) = ch.parent_id
-                && let Some(parent_permissions) = self
-                    .query_login_channel_permissions(session_id, parent_id)
-                    .await
-                {
-                    let pq = mumbleproto::PermissionQuery {
-                        channel_id: Some(parent_id),
-                        permissions: Some(parent_permissions),
-                        flush: Some(false),
-                    };
-                    self.send(MessageType::PermissionQuery, &pq).await?;
-                }
+            && let Some(parent_permissions) = self
+                .query_login_channel_permissions(session_id, parent_id)
+                .await
+        {
+            let pq = mumbleproto::PermissionQuery {
+                channel_id: Some(parent_id),
+                permissions: Some(parent_permissions),
+                flush: Some(false),
+            };
+            self.send(MessageType::PermissionQuery, &pq).await?;
+        }
 
         Ok(())
     }

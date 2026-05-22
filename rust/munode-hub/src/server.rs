@@ -21,7 +21,7 @@ use crate::channel_store::ChannelStore;
 use crate::database::Database;
 use crate::edge_connection::EdgeConnection;
 use crate::lua_auth::LuaAuthEngine;
-use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
+use crate::rpc_handler::{EdgeSenderPool, RpcHandler, StableRpcLedger};
 use crate::session_manager::SessionManager;
 use crate::topology_manager::TopologyManager;
 use crate::user_store::UserStore;
@@ -216,6 +216,8 @@ pub struct HubState {
     /// preventing ghost sessions when `handleUserLeft` is sent immediately on
     /// TCP disconnect.
     pub pending_auths: RwLock<HashMap<u32, PendingEdgeAuth>>,
+    /// Stable request ledger keyed by `(edge_id, stable_request_id)`.
+    pub(crate) stable_rpc_requests: Arc<StdMutex<StableRpcLedger>>,
 }
 
 /// The main Hub server.
@@ -335,6 +337,7 @@ impl HubServer {
             notification_seqs: StdMutex::new(HashMap::new()),
             edge_notif_senders: RwLock::new(HashMap::new()),
             pending_auths: RwLock::new(HashMap::new()),
+            stable_rpc_requests: Arc::new(StdMutex::new(StableRpcLedger::default())),
         });
 
         // Load channels from database

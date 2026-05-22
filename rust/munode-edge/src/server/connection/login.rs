@@ -307,7 +307,7 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     {
         Ok(result) => result,
         Err(e) => {
-            error!("Authentication RPC failed: {}", e);
+            error!("Authentication RPC failed: {:#}", e);
             client_sender
                 .send_raw(
                     handler::encode_reject(
@@ -573,7 +573,8 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     // notify Hub and peer Edges about the correct suppress value.  Without this, the Hub session
     // would keep suppress=false (the auth-time value) and other edges would show this user as
     // unsuppressed even though they cannot speak.
-    if client.suppress && !auth_result.suppress.unwrap_or(false)
+    if client.suppress
+        && !auth_result.suppress.unwrap_or(false)
         && let Err(e) = hub_client
             .rpc_user_state_changed(crate::hub_client::UserStateChangeRequest {
                 session_id: sid,
@@ -589,12 +590,12 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
                 actor_session: None,
             })
             .await
-        {
-            warn!(
-                "Failed to report suppress=true to Hub for session {}: {:#}",
-                sid, e
-            );
-        }
+    {
+        warn!(
+            "Failed to report suppress=true to Hub for session {}: {:#}",
+            sid, e
+        );
+    }
 
     // Load persisted channel listeners for registered users.  Restoration is
     // deferred to the outer loop (after the client transitions to `Ready`) so

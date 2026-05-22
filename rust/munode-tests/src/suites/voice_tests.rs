@@ -316,9 +316,10 @@ async fn test_voice_not_received_by_different_channel_user() -> Result<()> {
     let mut received = false;
     while let Ok(ev) = rx.try_recv() {
         if let ClientEvent::Voice(v) = ev
-            && v.session == sender_session {
-                received = true;
-            }
+            && v.session == sender_session
+        {
+            received = true;
+        }
     }
 
     assert!(
@@ -595,9 +596,10 @@ async fn test_deaf_user_does_not_receive_voice() -> Result<()> {
     let mut received = false;
     while let Ok(ev) = rx.try_recv() {
         if let ClientEvent::Voice(v) = ev
-            && v.session == sender_session {
-                received = true;
-            }
+            && v.session == sender_session
+        {
+            received = true;
+        }
     }
 
     // Note: self-deaf means the client won't send audio, but the server may still route it.
@@ -722,18 +724,20 @@ async fn test_whisper_to_specific_channel() -> Result<()> {
     let mut target_got = false;
     while let Ok(ev) = target_rx.try_recv() {
         if let ClientEvent::Voice(v) = ev
-            && v.session == sender_session {
-                target_got = true;
-            }
+            && v.session == sender_session
+        {
+            target_got = true;
+        }
     }
 
     // Non-target should NOT receive
     let mut non_target_got = false;
     while let Ok(ev) = non_target_rx.try_recv() {
         if let ClientEvent::Voice(v) = ev
-            && v.session == sender_session {
-                non_target_got = true;
-            }
+            && v.session == sender_session
+        {
+            non_target_got = true;
+        }
     }
 
     assert!(target_got, "Whisper target should receive voice");
@@ -1971,9 +1975,10 @@ async fn test_receiver_does_not_hear_previous_channel_after_move() -> Result<()>
     let mut leaked = false;
     while let Ok(ev) = rx_after.try_recv() {
         if let ClientEvent::Voice(v) = ev
-            && v.session == sender_session {
-                leaked = true;
-            }
+            && v.session == sender_session
+        {
+            leaked = true;
+        }
     }
     assert!(
         !leaked,
@@ -2028,9 +2033,10 @@ async fn test_receiver_does_not_hear_previous_channel_after_move_cross_edge() ->
     let mut leaked = false;
     while let Ok(ev) = rx_after.try_recv() {
         if let ClientEvent::Voice(v) = ev
-            && v.session == sender_session {
-                leaked = true;
-            }
+            && v.session == sender_session
+        {
+            leaked = true;
+        }
     }
     assert!(
         !leaked,
@@ -2086,9 +2092,10 @@ async fn test_listeners_in_previous_channel_stop_hearing_after_sender_moves() ->
     let mut leaked = false;
     while let Ok(ev) = rx_after.try_recv() {
         if let ClientEvent::Voice(v) = ev
-            && v.session == sender_session {
-                leaked = true;
-            }
+            && v.session == sender_session
+        {
+            leaked = true;
+        }
     }
     assert!(
         !leaked,

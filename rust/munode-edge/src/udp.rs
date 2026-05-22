@@ -193,12 +193,12 @@ impl UdpServer {
             && sender
                 .send_message(MessageType::CryptSetup, &mumbleproto::CryptSetup::default())
                 .await
-            {
-                debug!(
-                    session_id,
-                    "requested CryptSetup resync after UDP decrypt failure"
-                );
-            }
+        {
+            debug!(
+                session_id,
+                "requested CryptSetup resync after UDP decrypt failure"
+            );
+        }
     }
 
     /// Main receive loop.  Polls both the client socket and the edge socket.
@@ -1177,14 +1177,16 @@ fn bind_session_addr(
     }
 
     if let Some(previous_addr) = session_to_addr.insert(session_id, addr)
-        && previous_addr != addr {
-            addr_to_session.remove(&previous_addr);
-        }
+        && previous_addr != addr
+    {
+        addr_to_session.remove(&previous_addr);
+    }
 
     if let Some(previous_session) = addr_to_session.insert(addr, session_id)
-        && previous_session != session_id {
-            session_to_addr.remove(&previous_session);
-        }
+        && previous_session != session_id
+    {
+        session_to_addr.remove(&previous_session);
+    }
 }
 
 /// Parse a Mumble UDP protobuf `Ping` payload (the bytes after the `0x01` header).
@@ -1325,10 +1327,11 @@ fn increment_hop_failure_by(
     // Fast path: key exists — just increment.
     {
         if let Ok(map) = failures.read()
-            && let Some(counter) = map.get(&edge_id) {
-                counter.fetch_add(amount, Ordering::Relaxed);
-                return;
-            }
+            && let Some(counter) = map.get(&edge_id)
+        {
+            counter.fetch_add(amount, Ordering::Relaxed);
+            return;
+        }
     }
     // Slow path: first time we try to reach this edge.  Insert atomically.
     if let Ok(mut map) = failures.write() {
@@ -1351,9 +1354,10 @@ fn reset_hop_failure(
         return;
     }
     if let Ok(map) = failures.read()
-        && let Some(counter) = map.get(&edge_id) {
-            counter.store(0, std::sync::atomic::Ordering::Relaxed);
-        }
+        && let Some(counter) = map.get(&edge_id)
+    {
+        counter.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Batch-send multiple UDP datagrams via a single `sendmmsg(2)` syscall (Linux only).

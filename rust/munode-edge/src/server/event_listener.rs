@@ -157,66 +157,61 @@ pub(crate) async fn hub_event_listener(
                         if state.client_manager.get_client(session_id).await.is_none()
                             && let Some(user) =
                                 state.channel_manager.get_remote_user(session_id).await
-                            {
-                                // When announcing a newly-joined user we must NOT include Some(false)
-                                // for boolean fields – the Mumble client interprets every present bool
-                                // field as "this just changed to that value", triggering spurious
-                                // notifications ("user unmuted", "user stopped recording", etc.).
-                                // Only include a field when it is true (non-default).
-                                // Also: only include user_id for registered users (user_id > 0);
-                                // sending user_id=0 wrongly marks the guest as SuperUser.
-                                let msg = mumbleproto::UserState {
-                                    session: Some(user.session_id),
-                                    user_id: if user.user_id > 0 {
-                                        Some(user.user_id)
-                                    } else {
-                                        None
-                                    },
-                                    name: Some(user.username.clone()),
-                                    channel_id: Some(user.channel_id),
-                                    mute: if user.mute { Some(true) } else { None },
-                                    deaf: if user.deaf { Some(true) } else { None },
-                                    suppress: if user.suppress { Some(true) } else { None },
-                                    self_mute: if user.self_mute { Some(true) } else { None },
-                                    self_deaf: if user.self_deaf { Some(true) } else { None },
-                                    priority_speaker: if user.priority_speaker {
-                                        Some(true)
-                                    } else {
-                                        None
-                                    },
-                                    recording: if user.recording { Some(true) } else { None },
-                                    hash: user.cert_hash.clone(),
-                                    ..Default::default()
-                                };
-                                if is_ninja {
-                                    // Channel Ninja: only send to clients who have Enter permission
-                                    // Clients lacking both Enter+Listen permission won't see the user
-                                    let local_clients =
-                                        state.client_manager.get_all_clients().await;
-                                    let visible_cache = state.ninja_visible_to.read().await;
-                                    for client in local_clients {
-                                        let can_see = visible_cache
-                                            .get(&client.session)
-                                            .map(|set| set.contains(&channel_id))
-                                            .unwrap_or(false);
-                                        if can_see {
-                                            state
-                                                .client_manager
-                                                .send_to(
-                                                    client.session,
-                                                    MessageType::UserState,
-                                                    &msg,
-                                                )
-                                                .await;
-                                        }
-                                    }
+                        {
+                            // When announcing a newly-joined user we must NOT include Some(false)
+                            // for boolean fields – the Mumble client interprets every present bool
+                            // field as "this just changed to that value", triggering spurious
+                            // notifications ("user unmuted", "user stopped recording", etc.).
+                            // Only include a field when it is true (non-default).
+                            // Also: only include user_id for registered users (user_id > 0);
+                            // sending user_id=0 wrongly marks the guest as SuperUser.
+                            let msg = mumbleproto::UserState {
+                                session: Some(user.session_id),
+                                user_id: if user.user_id > 0 {
+                                    Some(user.user_id)
                                 } else {
-                                    state
-                                        .client_manager
-                                        .broadcast(MessageType::UserState, &msg, None)
-                                        .await;
+                                    None
+                                },
+                                name: Some(user.username.clone()),
+                                channel_id: Some(user.channel_id),
+                                mute: if user.mute { Some(true) } else { None },
+                                deaf: if user.deaf { Some(true) } else { None },
+                                suppress: if user.suppress { Some(true) } else { None },
+                                self_mute: if user.self_mute { Some(true) } else { None },
+                                self_deaf: if user.self_deaf { Some(true) } else { None },
+                                priority_speaker: if user.priority_speaker {
+                                    Some(true)
+                                } else {
+                                    None
+                                },
+                                recording: if user.recording { Some(true) } else { None },
+                                hash: user.cert_hash.clone(),
+                                ..Default::default()
+                            };
+                            if is_ninja {
+                                // Channel Ninja: only send to clients who have Enter permission
+                                // Clients lacking both Enter+Listen permission won't see the user
+                                let local_clients = state.client_manager.get_all_clients().await;
+                                let visible_cache = state.ninja_visible_to.read().await;
+                                for client in local_clients {
+                                    let can_see = visible_cache
+                                        .get(&client.session)
+                                        .map(|set| set.contains(&channel_id))
+                                        .unwrap_or(false);
+                                    if can_see {
+                                        state
+                                            .client_manager
+                                            .send_to(client.session, MessageType::UserState, &msg)
+                                            .await;
+                                    }
                                 }
+                            } else {
+                                state
+                                    .client_manager
+                                    .broadcast(MessageType::UserState, &msg, None)
+                                    .await;
                             }
+                        }
                         debug!(
                             "Broadcast remote user joined: {} (session {}, channel {}, ninja={})",
                             username, session_id, channel_id, is_ninja

@@ -1032,10 +1032,10 @@ impl EdgeState {
             test_network_faults,
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
             peer_quality_sample_window_size: AtomicU32::new(
-                config.peer_quality_sample_window_size.max(1) as u32
+                config.peer_quality_sample_window_size.max(1) as u32,
             ),
             peer_quality_probe_timeout_secs: AtomicU32::new(
-                config.peer_quality_probe_timeout_secs.max(1) as u32
+                config.peer_quality_probe_timeout_secs.max(1) as u32,
             ),
             accepting_connections: AtomicBool::new(true),
             edge_crypto,

@@ -80,15 +80,27 @@ impl EdgeServer {
             client_manager,
             crate::state::EdgeStateConfig {
                 enable_hub_tcp_fallback: self.config.voice_routing.enable_hub_tcp_fallback,
-                consecutive_failure_threshold: self.config.voice_routing.consecutive_failure_threshold,
+                consecutive_failure_threshold: self
+                    .config
+                    .voice_routing
+                    .consecutive_failure_threshold,
                 listeners_per_user: self.config.server.listeners_per_user,
                 listeners_per_channel: self.config.server.listeners_per_channel,
                 allow_ping: self.config.server.allow_ping,
                 rolling_stats_window: self.config.server.rolling_stats_window,
                 hmac_secret: self.config.hub_server.hmac_secret.as_deref(),
-                peer_voice_tcp_pool_size: self.config.voice_routing.peer_voice_tcp_pool_size as usize,
-                peer_quality_sample_window_size: self.config.voice_routing.quality.sample_window_size,
-                peer_quality_probe_timeout_secs: self.config.voice_routing.quality.probe_timeout_secs,
+                peer_voice_tcp_pool_size: self.config.voice_routing.peer_voice_tcp_pool_size
+                    as usize,
+                peer_quality_sample_window_size: self
+                    .config
+                    .voice_routing
+                    .quality
+                    .sample_window_size,
+                peer_quality_probe_timeout_secs: self
+                    .config
+                    .voice_routing
+                    .quality
+                    .probe_timeout_secs,
             },
         );
 
