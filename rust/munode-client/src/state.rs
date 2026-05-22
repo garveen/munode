@@ -254,13 +254,13 @@ impl ClientState {
         self.users.insert(session, user.clone());
 
         // Mirror session state if this is "us"
-        if let Some(sess) = &mut self.session {
-            if sess.session == session {
-                sess.channel_id = user.channel_id;
-                sess.self_mute = user.self_mute;
-                sess.self_deaf = user.self_deaf;
-                sess.listening_channels = user.listening_channels.clone();
-            }
+        if let Some(sess) = &mut self.session
+            && sess.session == session
+        {
+            sess.channel_id = user.channel_id;
+            sess.self_mute = user.self_mute;
+            sess.self_deaf = user.self_deaf;
+            sess.listening_channels = user.listening_channels.clone();
         }
 
         is_new

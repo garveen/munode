@@ -584,20 +584,17 @@ pub(crate) async fn run_connection_inner(
                             break 'outer;
                         }
                         Err(_) => {
-                            if client_state != ClientState::Ready {
-                                if let Some(deadline) = auth_deadline {
-                                    if tokio::time::Instant::now() >= deadline {
+                            if client_state != ClientState::Ready
+                                && let Some(deadline) = auth_deadline
+                                    && tokio::time::Instant::now() >= deadline {
                                         info!("Client {} auth timeout — closing unauthenticated connection", peer_addr);
                                         let reject = mumbleproto::Reject {
                                             r#type: Some(mumbleproto::reject::RejectType::None as i32),
                                             reason: Some("Authentication timed out".to_string()),
-                                            ..Default::default()
                                         };
                                         client_sender.send_message(MessageType::Reject, &reject).await;
                                         break 'outer;
                                     }
-                                }
-                            }
                             info!("Client {} idle timeout — closing connection", peer_addr);
                             break 'outer;
                         }
@@ -887,12 +884,11 @@ pub(crate) async fn run_connection_inner(
                         // Apply shared control rate limit (Murmur RATELIMIT).  Silently
                         // drop excess messages — UserState mutations have no protocol
                         // ack the client expects, mirroring Murmur's `return`.
-                        if let Some(ref mut rl) = control_rate_limiter {
-                            if !rl.try_consume() {
+                        if let Some(ref mut rl) = control_rate_limiter
+                            && !rl.try_consume() {
                                 debug!("Session {} UserState rate limited", sid);
                                 continue;
                             }
-                        }
                         // Any UserState targeting another session is an admin-style operation.
                         // Field-based prefiltering is lossy: it can drop valid mutations like
                         // priority_speaker and causes source-edge behavior to diverge from the
@@ -961,8 +957,8 @@ pub(crate) async fn run_connection_inner(
                             continue;
                         }
                         // Apply rate limiting (shared control bucket)
-                        if let Some(ref mut rl) = control_rate_limiter {
-                            if !rl.try_consume() {
+                        if let Some(ref mut rl) = control_rate_limiter
+                            && !rl.try_consume() {
                                 warn!("Session {} text message rate limited", sid);
                                 let reject = mumbleproto::PermissionDenied {
                                     r#type: Some(
@@ -976,7 +972,6 @@ pub(crate) async fn run_connection_inner(
                                     .await;
                                 continue;
                             }
-                        }
                         debug!("TextMessage from session {}: {:?}", sid, text_msg.message);
                         // Strip HTML if not allowed
                         let mut text_msg =
@@ -1150,19 +1145,14 @@ pub(crate) async fn run_connection_inner(
                         debug!("VoiceTarget from session {}: id={}", sid, target_id);
 
                         // Convert Mumble VoiceTarget to Hub config
-                        if target_id >= 1 && target_id <= 30 {
+                        if (1..=30).contains(&target_id) {
                             let config = mumble_voice_target_to_proto(&vt);
 
-                            apply_voice_target_proto(
-                                &edge_state,
-                                sid,
-                                target_id as u32,
-                                config.clone(),
-                            )
-                            .await;
+                            apply_voice_target_proto(&edge_state, sid, target_id, config.clone())
+                                .await;
 
                             if let Err(e) = hub_client
-                                .sync_voice_target(sid, target_id as u32, config)
+                                .sync_voice_target(sid, target_id, config)
                                 .await
                             {
                                 warn!("Failed to sync VoiceTarget: {}", e);
@@ -1176,12 +1166,11 @@ pub(crate) async fn run_connection_inner(
                     };
                     if let Some(requester_sid) = session_id {
                         // Apply shared control rate limit (Murmur RATELIMIT).
-                        if let Some(ref mut rl) = control_rate_limiter {
-                            if !rl.try_consume() {
+                        if let Some(ref mut rl) = control_rate_limiter
+                            && !rl.try_consume() {
                                 debug!("Session {} UserStats rate limited", requester_sid);
                                 continue;
                             }
-                        }
                         debug!("UserStats request for session {:?}", stats.session);
                         if let Some(target_session) = stats.session {
                             let is_stats_only = stats.stats_only.unwrap_or(false);
@@ -1204,8 +1193,8 @@ pub(crate) async fn run_connection_inner(
                             // Non-extended users requesting stats for users in channels they
                             // cannot enter are denied — even for stats_only=true.
                             // (Mirrors Murmur: if !extended && !HasPermission(target.Channel(), EnterPermission))
-                            if !is_extended {
-                                if let Some(target) =
+                            if !is_extended
+                                && let Some(target) =
                                     edge_state.client_manager.get_client(target_session).await
                                 {
                                     let can_enter = get_perm_cached(
@@ -1235,7 +1224,6 @@ pub(crate) async fn run_connection_inner(
                                         continue;
                                     }
                                 }
-                            }
 
                             // Full stats (stats_only=false) for a *different* user expose the IP
                             // address and other sensitive fields.  Require extended access
@@ -1367,7 +1355,6 @@ pub(crate) async fn run_connection_inner(
                                             },
                                         }),
                                         certificates: target.client_cert_chain.clone(),
-                                        ..Default::default()
                                     }
                                 };
                                 client_sender
@@ -1394,8 +1381,8 @@ pub(crate) async fn run_connection_inner(
                         let sender = client_sender.clone();
                         let state_pq = Arc::clone(&edge_state);
                         tokio::spawn(async move {
-                            let perms =
-                                get_perm_cached(&hub, &*state_pq, sid, channel_id, true).await;
+                            let perms = get_perm_cached(&hub, &state_pq, sid, channel_id, true)
+                                .await;
                             let response = mumbleproto::PermissionQuery {
                                 channel_id: Some(channel_id),
                                 permissions: Some(perms),
@@ -1419,15 +1406,14 @@ pub(crate) async fn run_connection_inner(
                     );
                     if let Some(sid) = session_id {
                         // Update decrypt IV if client provided their new nonce
-                        if let Some(ref nonce_vec) = crypt.client_nonce {
-                            if nonce_vec.len() == 16 {
+                        if let Some(ref nonce_vec) = crypt.client_nonce
+                            && nonce_vec.len() == 16 {
                                 let nonce: [u8; 16] = nonce_vec.as_slice().try_into().unwrap();
                                 edge_state
                                     .client_manager
                                     .update_decrypt_iv(sid, &nonce)
                                     .await;
                             }
-                        }
                         // Respond with current server nonce
                         let server_nonce = edge_state.client_manager.get_encrypt_iv(sid).await;
                         let response = mumbleproto::CryptSetup {
@@ -1446,8 +1432,8 @@ pub(crate) async fn run_connection_inner(
                     else {
                         continue;
                     };
-                    if let Some(sid) = session_id {
-                        if let Some(client) = edge_state.client_manager.get_client(sid).await {
+                    if let Some(sid) = session_id
+                        && let Some(client) = edge_state.client_manager.get_client(sid).await {
                             debug!(
                                 "UserRemove from session {} targeting session {}",
                                 sid, user_remove.session
@@ -1474,7 +1460,6 @@ pub(crate) async fn run_connection_inner(
                                 }
                             });
                         }
-                    }
                 }
                 MessageType::ChannelState if client_state == ClientState::Ready => {
                     // Client requesting channel create/edit - forward to Hub
@@ -1488,12 +1473,11 @@ pub(crate) async fn run_connection_inner(
 
                     if let Some(sid) = session_id {
                         // Apply shared control rate limit (Murmur RATELIMIT).
-                        if let Some(ref mut rl) = control_rate_limiter {
-                            if !rl.try_consume() {
+                        if let Some(ref mut rl) = control_rate_limiter
+                            && !rl.try_consume() {
                                 debug!("Session {} ChannelState rate limited", sid);
                                 continue;
                             }
-                        }
                         let hub = hub_client.clone();
                         let has_links =
                             !ch_state.links_add.is_empty() || !ch_state.links_remove.is_empty();
@@ -1637,8 +1621,8 @@ pub(crate) async fn run_connection_inner(
                             // (moving a channel into one of its own descendants creates a cycle).
                             // Walk up the parent chain of the proposed new parent; if we encounter
                             // the channel being moved, the reparent would create a loop.
-                            if !is_new {
-                                if let (Some(ch_id), Some(new_parent_id)) =
+                            if !is_new
+                                && let (Some(ch_id), Some(new_parent_id)) =
                                     (ch_state.channel_id, ch_state.parent)
                                 {
                                     let mut iter_id = Some(new_parent_id);
@@ -1669,22 +1653,21 @@ pub(crate) async fn run_connection_inner(
                                         continue;
                                     }
                                 }
-                            }
 
                             let sender_for_spawn = client_sender.clone();
                             let creator_session = if is_new { Some(sid) } else { None };
                             tokio::spawn(async move {
                                 match hub
-                                    .save_channel(
-                                        ch_state.channel_id,
-                                        ch_state.parent,
-                                        ch_state.name.as_deref(),
-                                        ch_state.description.as_deref(),
-                                        ch_state.position,
-                                        ch_state.max_users,
-                                        if is_new { ch_state.temporary } else { None },
+                                    .save_channel(crate::hub_client::SaveChannelRequest {
+                                        channel_id: ch_state.channel_id,
+                                        parent_id: ch_state.parent,
+                                        name: ch_state.name.as_deref(),
+                                        description: ch_state.description.as_deref(),
+                                        position: ch_state.position,
+                                        max_users: ch_state.max_users,
+                                        temporary: if is_new { ch_state.temporary } else { None },
                                         creator_session,
-                                    )
+                                    })
                                     .await
                                 {
                                     Ok(result) if !result.success => {
@@ -1894,11 +1877,9 @@ pub(crate) async fn run_connection_inner(
                         if let Some(raw_data) = hub
                             .rpc_handle_acl(sid, uid, &uname, ch_id, is_query, &raw)
                             .await
-                        {
-                            if let Ok(acl_resp) = mumbleproto::Acl::decode(raw_data.as_slice()) {
+                            && let Ok(acl_resp) = mumbleproto::Acl::decode(raw_data.as_slice()) {
                                 sender.send_message(MessageType::Acl, &acl_resp).await;
                             }
-                        }
                     });
                 }
                 MessageType::PluginDataTransmission if client_state == ClientState::Ready => {
@@ -1926,12 +1907,11 @@ pub(crate) async fn run_connection_inner(
                     // Per-session plugin-message rate limit (Murmur's
                     // `m_pluginMessageBucket`).  Silently drop excess messages,
                     // matching Murmur's behaviour for bucket overflow.
-                    if let Some(ref mut rl) = plugin_rate_limiter {
-                        if !rl.try_consume() {
+                    if let Some(ref mut rl) = plugin_rate_limiter
+                        && !rl.try_consume() {
                             debug!("PluginData from {} rate limited", peer_addr);
                             continue;
                         }
-                    }
 
                     // Deduplicate the receiver list (mirrors Murmur's
                     // `uniqueReceivers QSet` in msgPluginDataTransmission).
@@ -2025,20 +2005,18 @@ pub(crate) async fn run_connection_inner(
                     let mut seen = std::collections::HashSet::new();
                     let all_clients = edge_state.client_manager.get_all_clients().await;
                     for req_id in &query.ids {
-                        if let Some(client) = all_clients.iter().find(|c| c.user_id == *req_id) {
-                            if seen.insert(client.user_id) {
+                        if let Some(client) = all_clients.iter().find(|c| c.user_id == *req_id)
+                            && seen.insert(client.user_id) {
                                 result_ids.push(client.user_id);
                                 result_names.push(client.username.clone());
                             }
-                        }
                     }
                     for req_name in &query.names {
-                        if let Some(client) = all_clients.iter().find(|c| c.username == *req_name) {
-                            if seen.insert(client.user_id) {
+                        if let Some(client) = all_clients.iter().find(|c| c.username == *req_name)
+                            && seen.insert(client.user_id) {
                                 result_ids.push(client.user_id);
                                 result_names.push(client.username.clone());
                             }
-                        }
                     }
                     let response = mumbleproto::QueryUsers {
                         ids: result_ids,
@@ -2062,9 +2040,9 @@ pub(crate) async fn run_connection_inner(
                     );
                     // Send empty responses for channel descriptions that were requested
                     for &channel_id in &blob.channel_description {
-                        if let Some(ch) = edge_state.channel_manager.get_channel(channel_id).await {
-                            if let Some(desc) = &ch.description {
-                                if !desc.is_empty() {
+                        if let Some(ch) = edge_state.channel_manager.get_channel(channel_id).await
+                            && let Some(desc) = &ch.description
+                                && !desc.is_empty() {
                                     let msg = mumbleproto::ChannelState {
                                         channel_id: Some(channel_id),
                                         description: Some(desc.clone()),
@@ -2074,16 +2052,13 @@ pub(crate) async fn run_connection_inner(
                                         .send_message(MessageType::ChannelState, &msg)
                                         .await;
                                 }
-                            }
-                        }
                     }
                     // Send user texture blobs
                     for &target_session in &blob.session_texture {
                         if let Some(target_client) =
                             edge_state.client_manager.get_client(target_session).await
-                        {
-                            if target_client.user_id > 0 {
-                                if let Some((_hash, data)) = hub_client
+                            && target_client.user_id > 0
+                                && let Some((_hash, data)) = hub_client
                                     .blob_get_user_texture(target_client.user_id)
                                     .await
                                 {
@@ -2096,20 +2071,16 @@ pub(crate) async fn run_connection_inner(
                                         .send_message(MessageType::UserState, &msg)
                                         .await;
                                 }
-                            }
-                        }
                     }
                     // Send user comment blobs
                     for &target_session in &blob.session_comment {
                         if let Some(target_client) =
                             edge_state.client_manager.get_client(target_session).await
-                        {
-                            if target_client.user_id > 0 {
-                                if let Some((_hash, data)) = hub_client
+                            && target_client.user_id > 0
+                                && let Some((_hash, data)) = hub_client
                                     .blob_get_user_comment(target_client.user_id)
                                     .await
-                                {
-                                    if let Ok(comment_str) = String::from_utf8(data) {
+                                    && let Ok(comment_str) = String::from_utf8(data) {
                                         let msg = mumbleproto::UserState {
                                             session: Some(target_session),
                                             comment: Some(comment_str),
@@ -2119,9 +2090,6 @@ pub(crate) async fn run_connection_inner(
                                             .send_message(MessageType::UserState, &msg)
                                             .await;
                                     }
-                                }
-                            }
-                        }
                     }
                 }
                 MessageType::UserList if client_state == ClientState::Ready => {
@@ -2151,14 +2119,13 @@ pub(crate) async fn run_connection_inner(
                         }
                         if msg.users.is_empty() {
                             // Query: send full registered user list from Hub
-                            if let Some(raw) = hub_client.rpc_get_user_list().await {
-                                if let Ok(user_list) = mumbleproto::UserList::decode(raw.as_slice())
+                            if let Some(raw) = hub_client.rpc_get_user_list().await
+                                && let Ok(user_list) = mumbleproto::UserList::decode(raw.as_slice())
                                 {
                                     client_sender
                                         .send_message(MessageType::UserList, &user_list)
                                         .await;
                                 }
-                            }
                         } else {
                             // Update: forward to Hub (Hub enforces permissions server-side)
                             use prost::Message as _;
@@ -2189,12 +2156,11 @@ pub(crate) async fn run_connection_inner(
                     };
                     if let Some(sid) = session_id {
                         // Apply shared control rate limit (Murmur RATELIMIT for ContextActionModify).
-                        if let Some(ref mut rl) = control_rate_limiter {
-                            if !rl.try_consume() {
+                        if let Some(ref mut rl) = control_rate_limiter
+                            && !rl.try_consume() {
                                 debug!("Session {} ContextAction rate limited", sid);
                                 continue;
                             }
-                        }
                         debug!(
                             session = sid,
                             action = ca.action.as_str(),
@@ -2228,13 +2194,12 @@ pub(crate) async fn run_connection_inner(
         // Save channel listeners before removing the client (so we still have access to the data).
         // Always persist even when the list is empty, so that a user who explicitly cleared all
         // listeners has that "no listeners" state saved (overwriting any previously stored state).
-        if let Some(client) = edge_state.client_manager.get_client(sid).await {
-            if client.user_id > 0 {
+        if let Some(client) = edge_state.client_manager.get_client(sid).await
+            && client.user_id > 0 {
                 let user_id = client.user_id;
                 let channels = client.listening_channels.clone();
                 hub_client.save_channel_listeners(user_id, channels).await;
             }
-        }
 
         // remove_client returns the ClientInfo so we can use it for ninja filtering
         // below WITHOUT a second get_client call (which would always return None since

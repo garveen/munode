@@ -93,6 +93,12 @@ pub struct EdgeHealth {
     pub uptime_seconds: u64,
 }
 
+impl Default for EdgeHealth {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EdgeHealth {
     pub fn new() -> Self {
         Self {
@@ -674,13 +680,13 @@ pub async fn notify(state: &HubState, edge_id: u32, data: Vec<u8>) {
         let edges = state.edge_connections.read().await;
         edges.get(&edge_id).cloned()
     };
-    if let Some(pool) = pool {
-        if !pool.try_send(data) {
-            tracing::warn!(
-                "Failed to notify edge {}: all senders closed or full",
-                edge_id
-            );
-        }
+    if let Some(pool) = pool
+        && !pool.try_send(data)
+    {
+        tracing::warn!(
+            "Failed to notify edge {}: all senders closed or full",
+            edge_id
+        );
     }
 }
 

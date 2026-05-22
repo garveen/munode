@@ -214,8 +214,10 @@ fn failed_link_is_excluded_from_dijkstra_path() {
     topo.add_edge(make_edge(2));
     topo.add_edge(make_edge(3));
 
-    let mut cfg = HubVoiceRoutingConfig::default();
-    cfg.failed_packet_loss = 0.5;
+    let cfg = HubVoiceRoutingConfig {
+        failed_packet_loss: 0.5,
+        ..Default::default()
+    };
 
     topo.report_quality(1, 2, make_quality(20.0, 0.60)); // FAILED: above 50%
     topo.report_quality(1, 3, make_quality(10.0, 0.01));
@@ -246,8 +248,10 @@ fn high_rtt_link_excluded_by_failed_rtt_threshold() {
     topo.add_edge(make_edge(2));
     topo.add_edge(make_edge(3));
 
-    let mut cfg = HubVoiceRoutingConfig::default();
-    cfg.failed_rtt_ms = 100.0; // anything above 100ms is considered failed
+    let cfg = HubVoiceRoutingConfig {
+        failed_rtt_ms: 100.0, // anything above 100ms is considered failed
+        ..Default::default()
+    };
 
     // Direct 1→2: RTT=200ms (zero loss but RTT > failed_rtt_ms) → failed
     topo.report_quality(1, 2, make_quality(200.0, 0.0));
@@ -292,8 +296,10 @@ fn relay_hop_penalty_discourages_longer_chains() {
     topo.report_quality(3, 2, make_quality(5.0, 0.0));
     topo.report_quality(2, 3, make_quality(5.0, 0.0));
 
-    let mut cfg = HubVoiceRoutingConfig::default();
-    cfg.relay_hop_penalty_ms = 30.0; // Large penalty per hop
+    let cfg = HubVoiceRoutingConfig {
+        relay_hop_penalty_ms: 30.0, // Large penalty per hop
+        ..Default::default()
+    };
 
     let path = topo.find_best_path(1, 2);
     // With default find_best_path (no per-hop penalty), relay might look cheaper.
@@ -459,8 +465,10 @@ fn route_table_has_relay_chain_for_three_edge_topology() {
     topo.add_edge(make_edge(2)); // B — target
     topo.add_edge(make_edge(3)); // C — relay
 
-    let mut cfg = HubVoiceRoutingConfig::default();
-    cfg.failed_packet_loss = 0.5;
+    let cfg = HubVoiceRoutingConfig {
+        failed_packet_loss: 0.5,
+        ..Default::default()
+    };
 
     // A→B direct link is failed
     topo.report_quality(1, 2, make_quality(20.0, 0.60));
@@ -492,9 +500,11 @@ fn relay_chain_exceeding_hop_limit_falls_back_to_hub_tcp() {
         topo.add_edge(make_edge(i));
     }
 
-    let mut cfg = HubVoiceRoutingConfig::default();
-    cfg.failed_packet_loss = 0.5;
-    cfg.max_relay_hops = 2;
+    let cfg = HubVoiceRoutingConfig {
+        failed_packet_loss: 0.5,
+        max_relay_hops: 2,
+        ..Default::default()
+    };
 
     // Direct 1→5 is failed; only path is via the chain.
     topo.report_quality(1, 5, make_quality(500.0, 0.90));

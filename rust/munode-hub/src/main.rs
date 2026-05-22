@@ -306,7 +306,7 @@ async fn main() -> Result<()> {
                     eprintln!("❌ Error listing users: {}", e);
                     std::process::exit(1);
                 });
-                println!("{:<6} {:<30} {}", "ID", "Username", "Last Channel");
+                println!("{:<6} {:<30} Last Channel", "ID", "Username");
                 println!("{}", "-".repeat(50));
                 for u in &users {
                     println!("{:<6} {:<30} {}", u.id, u.username, u.last_channel);
@@ -318,7 +318,7 @@ async fn main() -> Result<()> {
                     eprintln!("❌ Error listing channels: {}", e);
                     std::process::exit(1);
                 });
-                println!("{:<6} {:<6} {:<30} {}", "ID", "Parent", "Name", "MaxUsers");
+                println!("{:<6} {:<6} {:<30} MaxUsers", "ID", "Parent", "Name");
                 println!("{}", "-".repeat(60));
                 for c in &channels {
                     let parent = c
@@ -334,7 +334,7 @@ async fn main() -> Result<()> {
                     eprintln!("❌ Error listing bans: {}", e);
                     std::process::exit(1);
                 });
-                println!("{:<6} {:<20} {:<30} {}", "ID", "IP", "Name", "Reason");
+                println!("{:<6} {:<20} {:<30} Reason", "ID", "IP", "Name");
                 println!("{}", "-".repeat(80));
                 for b in &bans {
                     let ip = format_ip(&b.address);

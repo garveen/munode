@@ -79,7 +79,7 @@ impl PeerVoiceTcpPool {
     pub fn has_live_sender(&self) -> bool {
         self.senders
             .iter()
-            .any(|m| m.lock().ok().map_or(false, |g| g.is_some()))
+            .any(|m| m.lock().ok().is_some_and(|g| g.is_some()))
     }
 
     /// Capture a read-only snapshot of the current pool state for diagnostics.
@@ -87,7 +87,7 @@ impl PeerVoiceTcpPool {
         let slot_states: Vec<bool> = self
             .senders
             .iter()
-            .map(|slot| slot.lock().ok().map_or(false, |guard| guard.is_some()))
+            .map(|slot| slot.lock().ok().is_some_and(|guard| guard.is_some()))
             .collect();
         let live_slots = slot_states.iter().filter(|connected| **connected).count();
         let all_disconnected_since_ms = self
@@ -126,8 +126,8 @@ impl PeerVoiceTcpPool {
         let mut remaining = frame;
         for i in 0..n {
             let idx = (start + i) % n;
-            if let Ok(mut slot) = self.senders[idx].lock() {
-                if let Some(tx) = slot.as_ref() {
+            if let Ok(mut slot) = self.senders[idx].lock()
+                && let Some(tx) = slot.as_ref() {
                     match tx.try_send(remaining) {
                         Ok(()) => return true,
                         Err(tokio::sync::mpsc::error::TrySendError::Closed(f)) => {
@@ -143,7 +143,6 @@ impl PeerVoiceTcpPool {
                     }
                 }
                 // slot is None (reconnecting) — fall through to next slot
-            }
             // mutex poisoned — skip this slot
         }
         false

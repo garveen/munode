@@ -148,13 +148,13 @@ impl EdgeConnection {
         }
         request_tasks.abort_all();
         while let Some(joined) = request_tasks.join_next().await {
-            if let Err(e) = joined {
-                if !e.is_cancelled() {
-                    warn!(
-                        "Edge connection {} request task ended unexpectedly: {}",
-                        self.connection_id, e
-                    );
-                }
+            if let Err(e) = joined
+                && !e.is_cancelled()
+            {
+                warn!(
+                    "Edge connection {} request task ended unexpectedly: {}",
+                    self.connection_id, e
+                );
             }
         }
 
@@ -166,7 +166,7 @@ impl EdgeConnection {
         if let Some(server_id) = self.server_id {
             self.unregister_connection_control().await;
             let should_cleanup = if let Some(our_sender) = &self.own_sender {
-                let pool_is_empty = {
+                {
                     let mut connections = self.state.edge_connections.write().await;
                     let empty = connections
                         .get(&server_id)
@@ -176,8 +176,7 @@ impl EdgeConnection {
                         connections.remove(&server_id);
                     }
                     empty
-                };
-                pool_is_empty
+                }
             } else {
                 // Never completed registration — nothing to clean up.
                 false
@@ -215,7 +214,7 @@ impl EdgeConnection {
     async fn ensure_edge_notif_processor(&self, edge_id: u32, reset: bool) {
         let needs_new = reset || {
             let senders = self.state.edge_notif_senders.read().await;
-            senders.get(&edge_id).map_or(true, |tx| tx.is_closed())
+            senders.get(&edge_id).is_none_or(|tx| tx.is_closed())
         };
         if needs_new {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<EdgeNotifEnvelope>();
@@ -347,11 +346,11 @@ impl EdgeConnection {
         match PacketType::try_from(packet.r#type) {
             Ok(PacketType::RpcRequest) => {
                 if let Some(request) = packet.rpc_request {
-                    if request.method == "edge.register" {
-                        if let Some(params) = &request.edge_register {
-                            self.server_id = Some(params.server_id);
-                            self.register_connection_control(params.server_id).await;
-                        }
+                    if request.method == "edge.register"
+                        && let Some(params) = &request.edge_register
+                    {
+                        self.server_id = Some(params.server_id);
+                        self.register_connection_control(params.server_id).await;
                     }
 
                     let edge_id = self.server_id.unwrap_or(0);

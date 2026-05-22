@@ -126,9 +126,9 @@ async fn test_admin_has_full_permissions() -> Result<()> {
         loop {
             match rx.recv().await {
                 Ok(ClientEvent::PermissionQuery {
-                    channel_id,
+                    channel_id: 0,
                     permissions,
-                }) if channel_id == 0 => {
+                }) => {
                     break Some(permissions);
                 }
                 Ok(_) => continue,
@@ -221,9 +221,9 @@ async fn test_non_admin_lacks_kick_permission() -> Result<()> {
         loop {
             match rx.recv().await {
                 Ok(ClientEvent::PermissionQuery {
-                    channel_id,
+                    channel_id: 0,
                     permissions,
-                }) if channel_id == 0 => {
+                }) => {
                     break Some(permissions);
                 }
                 Ok(_) => continue,

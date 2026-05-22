@@ -1,7 +1,7 @@
 //! Peer relay tests for Edge diagnose output and static-peer fallback.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
@@ -146,7 +146,7 @@ fn write_bootstrap_edge_cfg(
     })
 }
 
-fn run_diagnose(cfg_path: &PathBuf) -> Result<(String, i32)> {
+fn run_diagnose(cfg_path: &Path) -> Result<(String, i32)> {
     let bin = find_binary("munode-edge")?;
     let out = Command::new(&bin)
         .args(["diagnose", &cfg_path.to_string_lossy()])

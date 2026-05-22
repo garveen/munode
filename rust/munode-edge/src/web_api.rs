@@ -1929,9 +1929,9 @@ pub async fn run_web_api(
     let addr = format!("{}:{}", host, port);
     let bound: std::net::IpAddr = host
         .parse()
-        .unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
     let public_bind = !bound.is_loopback();
-    if public_bind && api_token.as_deref().map_or(true, |t| t.is_empty()) {
+    if public_bind && api_token.as_deref().is_none_or(str::is_empty) {
         warn!(
             "Edge Web API is enabled on a non-loopback address ({}) without \
              web_api.api_token; session metadata, peer topology, and local UDP \

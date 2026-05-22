@@ -284,20 +284,20 @@ impl MumbleClient {
         // Send pre-connect UserState (self_mute / self_deaf) right after
         // Authenticate, mirroring the C++ Mumble client. The session is not
         // yet known so the server fills it in from the connection identity.
-        if let Some(pcs) = options.pre_connect_state.as_ref() {
-            if pcs.self_mute.is_some() || pcs.self_deaf.is_some() {
-                let us = mumbleproto::UserState {
-                    self_mute: pcs.self_mute,
-                    self_deaf: pcs.self_deaf,
-                    ..Default::default()
-                };
-                let mut buf = BytesMut::new();
-                encode_message(MessageType::UserState, &us, &mut buf);
-                write_half
-                    .write_all(&buf)
-                    .await
-                    .context("send pre-connect UserState")?;
-            }
+        if let Some(pcs) = options.pre_connect_state.as_ref()
+            && (pcs.self_mute.is_some() || pcs.self_deaf.is_some())
+        {
+            let us = mumbleproto::UserState {
+                self_mute: pcs.self_mute,
+                self_deaf: pcs.self_deaf,
+                ..Default::default()
+            };
+            let mut buf = BytesMut::new();
+            encode_message(MessageType::UserState, &us, &mut buf);
+            write_half
+                .write_all(&buf)
+                .await
+                .context("send pre-connect UserState")?;
         }
 
         // Set up TCP write channel
@@ -1371,12 +1371,12 @@ pub(crate) async fn dispatch_frame(
                     let _ = event_tx.send(ClientEvent::CryptResyncRequested);
                 } else if let Some(sn) = msg.server_nonce.as_deref() {
                     // Refreshed server_nonce only.
-                    if let Ok(arr) = <[u8; 16]>::try_from(sn) {
-                        if let Some(mut crypt) = crypt_tx.borrow().as_ref().cloned() {
-                            crypt.decrypt_iv = arr;
-                            crypt.resync = crypt.resync.wrapping_add(1);
-                            let _ = crypt_tx.send(Some(crypt));
-                        }
+                    if let Ok(arr) = <[u8; 16]>::try_from(sn)
+                        && let Some(mut crypt) = crypt_tx.borrow().as_ref().cloned()
+                    {
+                        crypt.decrypt_iv = arr;
+                        crypt.resync = crypt.resync.wrapping_add(1);
+                        let _ = crypt_tx.send(Some(crypt));
                     }
                 }
             }

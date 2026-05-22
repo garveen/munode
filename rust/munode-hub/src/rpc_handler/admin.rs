@@ -6,43 +6,41 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        if let Some(params) = request.edge_handle_acl.as_ref() {
-            if params.actor_user_id > 0 {
-                let actor_groups = self
-                    .state
-                    .session_manager
-                    .get_session(params.actor_session)
-                    .await
-                    .map(|session| session.groups.clone())
-                    .unwrap_or_default();
-                let allowed = self
-                    .state
-                    .acl_manager
-                    .has_permission(
-                        params.actor_user_id as i32,
-                        0,
-                        &actor_groups,
-                        permission::WRITE,
-                    )
-                    .await;
-                if !allowed {
-                    debug!(
-                        "getBanList denied: actor_session={} actor_user_id={}: no WRITE on root channel",
-                        params.actor_session, params.actor_user_id
-                    );
-                    return Ok(self.make_response_packet(
-                        request_id,
-                        "edge.getBanList",
-                        |response| {
-                            response.edge_handle_acl = Some(EdgeHandleAclResult {
-                                success: false,
-                                permission_denied: Some(true),
-                                error: Some("permission denied".to_string()),
-                                ..Default::default()
-                            });
-                        },
-                    ));
-                }
+        if let Some(params) = request.edge_handle_acl.as_ref()
+            && params.actor_user_id > 0
+        {
+            let actor_groups = self
+                .state
+                .session_manager
+                .get_session(params.actor_session)
+                .await
+                .map(|session| session.groups.clone())
+                .unwrap_or_default();
+            let allowed = self
+                .state
+                .acl_manager
+                .has_permission(
+                    params.actor_user_id as i32,
+                    0,
+                    &actor_groups,
+                    permission::WRITE,
+                )
+                .await;
+            if !allowed {
+                debug!(
+                    "getBanList denied: actor_session={} actor_user_id={}: no WRITE on root channel",
+                    params.actor_session, params.actor_user_id
+                );
+                return Ok(
+                    self.make_response_packet(request_id, "edge.getBanList", |response| {
+                        response.edge_handle_acl = Some(EdgeHandleAclResult {
+                            success: false,
+                            permission_denied: Some(true),
+                            error: Some("permission denied".to_string()),
+                            ..Default::default()
+                        });
+                    }),
+                );
             }
         }
 

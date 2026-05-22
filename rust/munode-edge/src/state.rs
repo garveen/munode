@@ -18,6 +18,19 @@ const TEST_EDGE_UDP_DROP_RATE_ENV: &str = "MUNODE_TEST_EDGE_UDP_DROP_RATE";
 const TEST_EDGE_UDP_BLOCK_PEERS_ENV: &str = "MUNODE_TEST_EDGE_UDP_BLOCK_PEERS";
 const TEST_EDGE_VOICE_TCP_BLOCK_PEERS_ENV: &str = "MUNODE_TEST_EDGE_VOICE_TCP_BLOCK_PEERS";
 
+pub struct EdgeStateConfig<'a> {
+    pub enable_hub_tcp_fallback: bool,
+    pub consecutive_failure_threshold: u32,
+    pub listeners_per_user: u32,
+    pub listeners_per_channel: u32,
+    pub allow_ping: bool,
+    pub rolling_stats_window: u32,
+    pub hmac_secret: Option<&'a str>,
+    pub peer_voice_tcp_pool_size: usize,
+    pub peer_quality_sample_window_size: usize,
+    pub peer_quality_probe_timeout_secs: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TestNetworkFaults {
     udp_drop_rate: u32,
@@ -346,10 +359,7 @@ impl PeerQualityState {
         let mut diffs = 0.0;
         let mut count = 0usize;
         let mut iter = rtt_samples.into_iter();
-        let mut previous = match iter.next() {
-            Some(value) => value,
-            None => return None,
-        };
+        let mut previous = iter.next()?;
 
         for current in iter {
             diffs += (current - previous).abs();
@@ -566,7 +576,7 @@ pub struct RollingDedupeWindow {
 
 impl RollingDedupeWindow {
     pub fn new(window_size: u16) -> Self {
-        let words = ((window_size as usize) + 63) / 64;
+        let words = (window_size as usize).div_ceil(64);
         Self {
             seq_hi: 0,
             bits: vec![0u64; words.max(1)].into_boxed_slice(),
@@ -980,19 +990,13 @@ impl EdgeState {
     pub fn new_with_full_config(
         channel_manager: Arc<ChannelManager>,
         client_manager: Arc<ClientManager>,
-        enable_hub_tcp_fallback: bool,
-        consecutive_failure_threshold: u32,
-        listeners_per_user: u32,
-        listeners_per_channel: u32,
-        allow_ping: bool,
-        rolling_stats_window: u32,
-        hmac_secret: Option<&str>,
-        peer_voice_tcp_pool_size: usize,
-        peer_quality_sample_window_size: usize,
-        peer_quality_probe_timeout_secs: u64,
+        config: EdgeStateConfig<'_>,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(4096);
-        let edge_crypto = hmac_secret.and_then(EdgeCrypto::from_secret).map(Arc::new);
+        let edge_crypto = config
+            .hmac_secret
+            .and_then(EdgeCrypto::from_secret)
+            .map(Arc::new);
         let test_network_faults = TestNetworkFaults::from_env();
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
@@ -1002,14 +1006,14 @@ impl EdgeState {
             event_tx,
             voice_targets: RwLock::new(HashMap::new()),
             peer_registry: ArcSwap::new(Arc::new(PeerRegistry::default())),
-            enable_hub_tcp_fallback,
-            consecutive_failure_threshold,
+            enable_hub_tcp_fallback: config.enable_hub_tcp_fallback,
+            consecutive_failure_threshold: config.consecutive_failure_threshold,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
-            listeners_per_user: AtomicU32::new(listeners_per_user),
-            listeners_per_channel: AtomicU32::new(listeners_per_channel),
-            allow_ping: AtomicBool::new(allow_ping),
-            rolling_stats_window: AtomicU32::new(rolling_stats_window),
+            listeners_per_user: AtomicU32::new(config.listeners_per_user),
+            listeners_per_channel: AtomicU32::new(config.listeners_per_channel),
+            allow_ping: AtomicBool::new(config.allow_ping),
+            rolling_stats_window: AtomicU32::new(config.rolling_stats_window),
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
@@ -1020,7 +1024,7 @@ impl EdgeState {
             voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
             incoming_voice_tcp_connections: std::sync::RwLock::new(HashMap::new()),
             voice_tcp_peers: RwLock::new(HashSet::new()),
-            peer_voice_tcp_pool_size: peer_voice_tcp_pool_size.max(1),
+            peer_voice_tcp_pool_size: config.peer_voice_tcp_pool_size.max(1),
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
@@ -1028,10 +1032,10 @@ impl EdgeState {
             test_network_faults,
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
             peer_quality_sample_window_size: AtomicU32::new(
-                peer_quality_sample_window_size.max(1) as u32
+                config.peer_quality_sample_window_size.max(1) as u32
             ),
             peer_quality_probe_timeout_secs: AtomicU32::new(
-                peer_quality_probe_timeout_secs.max(1) as u32
+                config.peer_quality_probe_timeout_secs.max(1) as u32
             ),
             accepting_connections: AtomicBool::new(true),
             edge_crypto,

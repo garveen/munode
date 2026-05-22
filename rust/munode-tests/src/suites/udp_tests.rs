@@ -128,7 +128,6 @@ async fn test_multiple_udp_clients_simultaneously() -> Result<()> {
 
     let mut handles = Vec::new();
     for username in &["user1", "user2", "user3"] {
-        let port = port;
         let username = username.to_string();
         handles.push(tokio::spawn(async move {
             let client = MumbleClient::new();

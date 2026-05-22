@@ -129,12 +129,10 @@ async fn test_request_user_comment_returns_full_text() -> Result<()> {
             .users()
             .into_iter()
             .find(|u| u.session == admin_session)
-        {
-            if u.comment.as_deref() == Some(long_comment.as_str()) {
+            && u.comment.as_deref() == Some(long_comment.as_str()) {
                 got = u.comment.clone();
                 break;
             }
-        }
         sleep_ms(100).await;
     }
     assert_eq!(got.as_deref(), Some(long_comment.as_str()));

@@ -58,12 +58,19 @@ pub struct HotVoiceTarget {
 /// Maps `target_id` (1..=30) → `HotVoiceTarget`.
 pub type HotVoiceTargetMap = HashMap<u32, Arc<HotVoiceTarget>>;
 
-/// Cache-line-aligned (64-byte) per-session hot data used by the voice routing
-/// hot path.
-///
-/// The struct is stored in a global static array indexed by
-/// `session_id % HOT_SLOT_COUNT`.  Every field is either an atomic primitive or
-/// an `ArcSwap`, enabling reads with **zero lock acquisitions**.
+pub(crate) struct HotSlotRegistration {
+    pub session_id: u32,
+    pub channel_id: u32,
+    pub deaf: bool,
+    pub self_deaf: bool,
+    pub suppress: bool,
+    pub mute: bool,
+    pub self_mute: bool,
+    pub sender: mpsc::Sender<Bytes>,
+    pub bandwidth: Arc<Mutex<BandwidthRecord>>,
+    pub groups: Arc<Vec<String>>,
+    pub plugin_context: Arc<Vec<u8>>,
+}
 
 /// Broadcast route cache: pre-computed set of local session IDs and remote Edge IDs
 /// that should receive a broadcast voice packet from the owning session.
@@ -80,6 +87,12 @@ pub struct BroadcastCache {
 }
 
 #[repr(C, align(64))]
+/// Cache-line-aligned (64-byte) per-session hot data used by the voice routing
+/// hot path.
+///
+/// The struct is stored in a global static array indexed by
+/// `session_id % HOT_SLOT_COUNT`. Every field is either an atomic primitive or
+/// an `ArcSwap`, enabling reads with **zero lock acquisitions**.
 pub struct HotSlot {
     /// Whether this slot is currently occupied by an active session.
     /// Set **last** (Release) on `register`, cleared **first** (Release) on `clear`.
@@ -147,32 +160,24 @@ impl HotSlot {
     /// All fields except `active` are written with `Relaxed` ordering; `active`
     /// is written **last** with `Release` so that any reader that observes
     /// `active == true` (via `Acquire`) is guaranteed to see all other fields.
-    pub fn register(
-        &self,
-        session_id: u32,
-        channel_id: u32,
-        deaf: bool,
-        self_deaf: bool,
-        suppress: bool,
-        mute: bool,
-        self_mute: bool,
-        sender: mpsc::Sender<Bytes>,
-        bandwidth: Arc<Mutex<BandwidthRecord>>,
-        groups: Arc<Vec<String>>,
-        plugin_context: Arc<Vec<u8>>,
-    ) {
-        self.session_id.store(session_id, Ordering::Relaxed);
-        self.channel_id.store(channel_id, Ordering::Relaxed);
-        self.deaf.store(deaf, Ordering::Relaxed);
-        self.self_deaf.store(self_deaf, Ordering::Relaxed);
-        self.suppress.store(suppress, Ordering::Relaxed);
-        self.mute.store(mute, Ordering::Relaxed);
-        self.self_mute.store(self_mute, Ordering::Relaxed);
+    pub(crate) fn register(&self, registration: HotSlotRegistration) {
+        self.session_id
+            .store(registration.session_id, Ordering::Relaxed);
+        self.channel_id
+            .store(registration.channel_id, Ordering::Relaxed);
+        self.deaf.store(registration.deaf, Ordering::Relaxed);
+        self.self_deaf
+            .store(registration.self_deaf, Ordering::Relaxed);
+        self.suppress
+            .store(registration.suppress, Ordering::Relaxed);
+        self.mute.store(registration.mute, Ordering::Relaxed);
+        self.self_mute
+            .store(registration.self_mute, Ordering::Relaxed);
         self.crypt_state.store(Arc::new(None));
-        self.sender.store(Arc::new(Some(sender)));
-        self.groups.store(groups);
-        self.plugin_context.store(plugin_context);
-        self.bandwidth.store(Arc::new(Some(bandwidth)));
+        self.sender.store(Arc::new(Some(registration.sender)));
+        self.groups.store(registration.groups);
+        self.plugin_context.store(registration.plugin_context);
+        self.bandwidth.store(Arc::new(Some(registration.bandwidth)));
         self.voice_targets.store(Arc::new(None));
         self.broadcast_cache.store(Arc::new(None));
         self.broadcast_cache_version.store(0, Ordering::Relaxed);

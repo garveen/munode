@@ -375,11 +375,10 @@ impl AclManager {
             .enumerate()
             .filter(|(_, (cid, inherit))| **cid != 0 && !**inherit)
             .map(|(idx, _)| idx)
-            .last()
+            .next_back()
             .unwrap_or(0);
 
-        for idx in effective_start..chain.len() {
-            let cid = chain[idx];
+        for &cid in &chain[effective_start..] {
             let is_target = cid == channel_id;
             if let Some(acls) = acl_snapshot.get(&cid) {
                 for acl in acls {
@@ -512,10 +511,11 @@ impl AclManager {
         while changed {
             changed = false;
             for ch in &all_channels {
-                if let Some(parent) = ch.parent_id {
-                    if affected.contains(&parent) && affected.insert(ch.id) {
-                        changed = true;
-                    }
+                if let Some(parent) = ch.parent_id
+                    && affected.contains(&parent)
+                    && affected.insert(ch.id)
+                {
+                    changed = true;
                 }
             }
         }
@@ -557,10 +557,11 @@ impl AclManager {
     /// Check if an ACL entry applies to a specific user.
     pub(crate) fn acl_matches_user(acl: &AclEntry, user_id: i32, groups: &[String]) -> bool {
         // Match by user_id
-        if let Some(acl_user_id) = acl.user_id {
-            if acl_user_id > 0 && acl_user_id == user_id {
-                return true;
-            }
+        if let Some(acl_user_id) = acl.user_id
+            && acl_user_id > 0
+            && acl_user_id == user_id
+        {
+            return true;
         }
 
         // Match by group

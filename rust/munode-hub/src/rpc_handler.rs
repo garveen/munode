@@ -30,6 +30,9 @@ use crate::topology_manager::{
     ArbitrationResult, LinkQuality, SourceDisseminationPlan, TopologyEdge,
 };
 
+type EdgeRouteTable = Vec<(u32, u32, Vec<u32>, f32)>;
+type RouteTablePushWork = (u32, EdgeRouteTable, Vec<SourceDisseminationPlan>);
+
 mod admin;
 mod auth;
 mod blob;
@@ -111,6 +114,10 @@ impl EdgeSenderPool {
     /// Number of active senders currently in the pool.
     pub fn len(&self) -> usize {
         self.senders.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.senders.lock().unwrap().is_empty()
     }
 
     /// Try to send `data` non-blocking. Falls back to the next sender if the
@@ -452,17 +459,17 @@ impl RpcHandler {
                 self.on_plugin_data(&notification, edge_server_id).await;
             }
             "hub.contextAction" => {
-                if let Some(context_action) = &notification.context_action {
-                    if let Some(ref action) = context_action.action {
-                        debug!(
-                            edge_id = edge_server_id,
-                            session_id = context_action.session_id,
-                            action = action.action.as_str(),
-                            actor = action.session.unwrap_or(0),
-                            channel = action.channel_id.unwrap_or(0),
-                            "ContextAction received from edge (no Hub-side processing yet)"
-                        );
-                    }
+                if let Some(context_action) = &notification.context_action
+                    && let Some(ref action) = context_action.action
+                {
+                    debug!(
+                        edge_id = edge_server_id,
+                        session_id = context_action.session_id,
+                        action = action.action.as_str(),
+                        actor = action.session.unwrap_or(0),
+                        channel = action.channel_id.unwrap_or(0),
+                        "ContextAction received from edge (no Hub-side processing yet)"
+                    );
                 }
             }
             _ => {
@@ -473,20 +480,18 @@ impl RpcHandler {
 
     /// Save user's last channel when they disconnect (for auto-restore on reconnect).
     async fn save_user_last_channel(&self, session_id: u32) {
-        if let Some(session) = self.state.session_manager.get_session(session_id).await {
-            if session.user_id > 0 {
-                if let Err(e) = self
-                    .state
-                    .user_store
-                    .save_last_channel(session.user_id, session.channel_id)
-                    .await
-                {
-                    warn!(
-                        "Failed to save last channel for user {}: {}",
-                        session.user_id, e
-                    );
-                }
-            }
+        if let Some(session) = self.state.session_manager.get_session(session_id).await
+            && session.user_id > 0
+            && let Err(e) = self
+                .state
+                .user_store
+                .save_last_channel(session.user_id, session.channel_id)
+                .await
+        {
+            warn!(
+                "Failed to save last channel for user {}: {}",
+                session.user_id, e
+            );
         }
     }
 
@@ -744,12 +749,8 @@ impl RpcHandler {
         // fine since this is a shared read lock — only topology writers are briefly
         // paused.  For typical cluster sizes (2–20 edges) the total computation time
         // is well under a millisecond.
-        let route_epoch = current_millis() as u64;
-        let edge_data: Vec<(
-            u32,
-            Vec<(u32, u32, Vec<u32>, f32)>,
-            Vec<SourceDisseminationPlan>,
-        )> = {
+        let route_epoch = current_millis();
+        let edge_data: Vec<RouteTablePushWork> = {
             let topo = self.state.topology.read().await;
             let config = &self.state.config.voice_routing;
             topo.get_all_edges()

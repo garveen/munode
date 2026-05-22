@@ -132,10 +132,7 @@ async fn main() -> Result<()> {
         );
         // The combined relay/voice WebSocket server always listens on edge_port.
         let edge_port = cfg.network.edge_port.unwrap_or(cfg.network.port + 1);
-        println!(
-            "   {:<22} {} (port {})",
-            "control_relay:", "enabled", edge_port
-        );
+        println!("   {:<22} enabled (port {})", "control_relay:", edge_port);
         if !cfg.hub_server.static_peers.is_empty() {
             let peers: Vec<String> = cfg
                 .hub_server

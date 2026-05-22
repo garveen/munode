@@ -116,7 +116,7 @@ pub async fn compute_voice_targets(
     let my_edge_id = edge_state.get_edge_id();
     let current_version = edge_state.topology_version.load(Ordering::Acquire);
 
-    if voice_target >= 1 && voice_target <= 30 {
+    if (1..=30).contains(&voice_target) {
         // ── Whisper / shout targeting ────────────────────────────────────────
         if let Some(cached) =
             edge_state.get_cached_whisper_route(sender_session, voice_target, current_version)
@@ -252,11 +252,10 @@ pub async fn compute_voice_targets(
                 let Some(slot) = local_session_can_receive(target) else {
                     continue;
                 };
-                if let Some(groups) = group_filter {
-                    if !slot_matches_any_group(slot, groups) {
+                if let Some(groups) = group_filter
+                    && !slot_matches_any_group(slot, groups) {
                         continue;
                     }
-                }
                 channel_sessions.push(target);
             }
         }

@@ -556,9 +556,8 @@ impl<'a> LoginHandler<'a> {
             .channel_manager
             .get_channel(target_channel_id)
             .await
-        {
-            if let Some(parent_id) = ch.parent_id {
-                if let Some(parent_permissions) = self
+            && let Some(parent_id) = ch.parent_id
+                && let Some(parent_permissions) = self
                     .query_login_channel_permissions(session_id, parent_id)
                     .await
                 {
@@ -569,8 +568,6 @@ impl<'a> LoginHandler<'a> {
                     };
                     self.send(MessageType::PermissionQuery, &pq).await?;
                 }
-            }
-        }
 
         Ok(())
     }
@@ -893,6 +890,6 @@ mod tests {
         assert_eq!(msg.name(), "Test Channel");
         assert_eq!(msg.parent(), 0);
         assert_eq!(msg.position(), 3);
-        assert_eq!(msg.temporary(), true);
+        assert!(msg.temporary());
     }
 }

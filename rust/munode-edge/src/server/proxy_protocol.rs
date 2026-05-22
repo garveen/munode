@@ -96,16 +96,14 @@ pub(super) fn peer_is_trusted_proxy(peer: IpAddr, allow_list: Option<&[TrustedPe
                     return true;
                 }
                 // Also match IPv4 addresses tunnelled through IPv6 (`::ffff:1.2.3.4`).
-                if let (IpAddr::V6(v6), IpAddr::V4(v4)) = (peer, *ip) {
-                    if v6.to_ipv4_mapped() == Some(v4) {
+                if let (IpAddr::V6(v6), IpAddr::V4(v4)) = (peer, *ip)
+                    && v6.to_ipv4_mapped() == Some(v4) {
                         return true;
                     }
-                }
-                if let (IpAddr::V6(v6), IpAddr::V4(v4)) = (*ip, peer) {
-                    if v6.to_ipv4_mapped() == Some(v4) {
+                if let (IpAddr::V6(v6), IpAddr::V4(v4)) = (*ip, peer)
+                    && v6.to_ipv4_mapped() == Some(v4) {
                         return true;
                     }
-                }
             }
             TrustedPeer::Cidr { network, prefix } => {
                 let masked = mask_addr(peer, *prefix);
@@ -120,13 +118,11 @@ pub(super) fn peer_is_trusted_proxy(peer: IpAddr, allow_list: Option<&[TrustedPe
                         return true;
                     }
                 }
-                if let (IpAddr::V6(v6), IpAddr::V4(_v4)) = (peer, *network) {
-                    if let Some(v4) = v6.to_ipv4_mapped() {
-                        if mask_addr(IpAddr::V4(v4), *prefix) == *network {
+                if let (IpAddr::V6(v6), IpAddr::V4(_v4)) = (peer, *network)
+                    && let Some(v4) = v6.to_ipv4_mapped()
+                        && mask_addr(IpAddr::V4(v4), *prefix) == *network {
                             return true;
                         }
-                    }
-                }
             }
         }
     }

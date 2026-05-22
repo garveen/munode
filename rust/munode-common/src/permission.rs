@@ -1,11 +1,11 @@
-/// Mumble protocol permission bit flags.
-///
-/// These constants are shared between the Hub (ACL evaluation) and the Edge
-/// (permission checks on the hot path).  Keeping them in one place ensures
-/// both crates always agree on the bit layout.
-///
-/// The values mirror the Mumble protocol's `PermissionDenied.Permission` enum
-/// and must not be changed without updating the protobuf definition too.
+//! Mumble protocol permission bit flags.
+//!
+//! These constants are shared between the Hub (ACL evaluation) and the Edge
+//! (permission checks on the hot path). Keeping them in one place ensures
+//! both crates always agree on the bit layout.
+//!
+//! The values mirror the Mumble protocol's `PermissionDenied.Permission` enum
+//! and must not be changed without updating the protobuf definition too.
 
 /// No permissions.
 pub const NONE: u32 = 0x0;

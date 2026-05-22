@@ -814,16 +814,16 @@ impl TestEnvBuilder {
             verbose,
         });
         let mut hub_cfg = hub_cfg;
-        if let Some(auth_override) = &self.hub_auth_override {
-            if let Some(obj) = hub_cfg.as_object_mut() {
-                obj.insert("auth".to_string(), auth_override.clone());
-            }
+        if let Some(auth_override) = &self.hub_auth_override
+            && let Some(obj) = hub_cfg.as_object_mut()
+        {
+            obj.insert("auth".to_string(), auth_override.clone());
         }
-        if let Some(patch) = &self.hub_config_patch {
-            if let (Some(obj), Some(p)) = (hub_cfg.as_object_mut(), patch.as_object()) {
-                for (k, v) in p {
-                    obj.insert(k.clone(), v.clone());
-                }
+        if let Some(patch) = &self.hub_config_patch
+            && let (Some(obj), Some(p)) = (hub_cfg.as_object_mut(), patch.as_object())
+        {
+            for (k, v) in p {
+                obj.insert(k.clone(), v.clone());
             }
         }
         let hub_cfg_path = tmp_path.join("hub.json");
@@ -873,18 +873,18 @@ impl TestEnvBuilder {
                 hub_control_port,
                 verbose,
             });
-            if let Some(patch) = &self.edge_config_patch {
-                if let (Some(dst), Some(src)) = (edge_cfg.as_object_mut(), patch.as_object()) {
-                    for (k, v) in src {
-                        match (dst.get_mut(k), v) {
-                            (Some(Value::Object(d)), Value::Object(s)) => {
-                                for (sk, sv) in s {
-                                    d.insert(sk.clone(), sv.clone());
-                                }
+            if let Some(patch) = &self.edge_config_patch
+                && let (Some(dst), Some(src)) = (edge_cfg.as_object_mut(), patch.as_object())
+            {
+                for (k, v) in src {
+                    match (dst.get_mut(k), v) {
+                        (Some(Value::Object(d)), Value::Object(s)) => {
+                            for (sk, sv) in s {
+                                d.insert(sk.clone(), sv.clone());
                             }
-                            _ => {
-                                dst.insert(k.clone(), v.clone());
-                            }
+                        }
+                        _ => {
+                            dst.insert(k.clone(), v.clone());
                         }
                     }
                 }

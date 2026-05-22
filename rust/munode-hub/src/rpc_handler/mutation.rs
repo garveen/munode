@@ -204,28 +204,25 @@ impl RpcHandler {
             .channel_store
             .get_channel(params.channel_id)
             .await
+            && target_channel.max_users > 0
         {
-            if target_channel.max_users > 0 {
-                let count = self
-                    .state
-                    .session_manager
-                    .get_all_sessions()
-                    .await
-                    .iter()
-                    .filter(|session| session.channel_id == params.channel_id)
-                    .count();
-                if count as u32 >= target_channel.max_users {
-                    return Ok(self.make_response_packet(
-                        request_id,
-                        "edge.userMoved",
-                        |response| {
-                            response.edge_user_moved = Some(EdgeUserMovedResult {
-                                success: false,
-                                error: Some("Channel is full".into()),
-                            });
-                        },
-                    ));
-                }
+            let count = self
+                .state
+                .session_manager
+                .get_all_sessions()
+                .await
+                .iter()
+                .filter(|session| session.channel_id == params.channel_id)
+                .count();
+            if count as u32 >= target_channel.max_users {
+                return Ok(
+                    self.make_response_packet(request_id, "edge.userMoved", |response| {
+                        response.edge_user_moved = Some(EdgeUserMovedResult {
+                            success: false,
+                            error: Some("Channel is full".into()),
+                        });
+                    }),
+                );
             }
         }
 
@@ -455,7 +452,7 @@ impl RpcHandler {
             .as_ref()
             .context("Missing edge_channel_remove params")?;
         let notification = TypedRpcNotification {
-            handle_channel_remove: Some(params.clone()),
+            handle_channel_remove: Some(*params),
             ..Default::default()
         };
         self.on_channel_remove(&notification).await;

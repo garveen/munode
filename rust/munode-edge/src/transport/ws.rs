@@ -400,7 +400,7 @@ async fn dispatch_http<W: AsyncWrite + Unpin>(
 fn is_ws_upgrade(head_str: &str) -> bool {
     head_str
         .lines()
-        .any(|line| line.trim().to_ascii_lowercase() == "upgrade: websocket")
+    .any(|line| line.trim().eq_ignore_ascii_case("upgrade: websocket"))
 }
 
 /// Repeatedly peek the TCP socket until the HTTP header terminator (`\r\n\r\n`)
@@ -434,7 +434,7 @@ async fn peek_http_head(stream: &TcpStream) -> io::Result<Vec<u8>> {
 /// decrypts data; peeking on the underlying `TcpStream` would return ciphertext.
 async fn read_http_head<R: AsyncRead + Unpin>(
     stream: &mut R,
-    buf: &mut Vec<u8>,
+    buf: &mut [u8],
 ) -> io::Result<usize> {
     let mut total = 0usize;
     let cap = buf.len();
@@ -460,7 +460,7 @@ async fn read_http_head<R: AsyncRead + Unpin>(
 fn build_edge_info_json(config: &EdgeConfig) -> String {
     let wt = &config.webtransport;
     let ws_port = wt.effective_ws_port(config.network.port);
-    let ws_host = wt.external_host.as_deref().unwrap_or_else(|| {
+    let ws_host = wt.external_host.as_deref().unwrap_or({
         if !config.network.external_host.is_empty() {
             config.network.external_host.as_str()
         } else {
@@ -512,7 +512,7 @@ async fn write_json_response<W: AsyncWrite + Unpin>(
          {body}",
         status = status,
         reason = reason,
-        len = body.as_bytes().len(),
+        len = body.len(),
         body = body,
     );
     stream.write_all(resp.as_bytes()).await?;

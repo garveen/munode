@@ -1,5 +1,15 @@
 use super::*;
 
+pub(super) struct HttpAuthCall<'a> {
+    username: &'a str,
+    password: &'a str,
+    tokens: &'a [String],
+    server_id: u32,
+    session_id: u32,
+    client_info: Option<&'a ClientInfo>,
+    timeout_ms: u64,
+}
+
 impl RpcHandler {
     fn auth_disconnect_response(&self, request_id: &str) -> EdgeHubPacket {
         self.make_response_packet(request_id, "edge.authenticateUser", |response| {
@@ -272,42 +282,40 @@ impl RpcHandler {
             },
         );
 
-        if let Some(re) = &self.username_regex {
-            if !re.is_match(username) {
-                warn!(
-                    "Rejecting username '{}': does not match configured username_regex",
-                    username
-                );
-                return Ok(self.make_response_packet(
-                    request_id,
-                    "edge.authenticateUser",
-                    |response| {
-                        response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
-                            success: false,
-                            user_id: None,
-                            username: None,
-                            display_name: None,
-                            groups: vec![],
-                            reason: Some(format!(
-                                "Invalid username: '{}' does not meet naming requirements",
-                                username
-                            )),
-                            reject_type: Some(
-                                mumbleproto::reject::RejectType::InvalidUsername as u32,
-                            ),
-                            channel_id: None,
-                            mute: None,
-                            deaf: None,
-                            suppress: None,
-                            self_mute: None,
-                            self_deaf: None,
-                            priority_speaker: None,
-                            recording: None,
-                            cert_required: None,
-                        });
-                    },
-                ));
-            }
+        if let Some(re) = &self.username_regex
+            && !re.is_match(username)
+        {
+            warn!(
+                "Rejecting username '{}': does not match configured username_regex",
+                username
+            );
+            return Ok(self.make_response_packet(
+                request_id,
+                "edge.authenticateUser",
+                |response| {
+                    response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                        success: false,
+                        user_id: None,
+                        username: None,
+                        display_name: None,
+                        groups: vec![],
+                        reason: Some(format!(
+                            "Invalid username: '{}' does not meet naming requirements",
+                            username
+                        )),
+                        reject_type: Some(mumbleproto::reject::RejectType::InvalidUsername as u32),
+                        channel_id: None,
+                        mute: None,
+                        deaf: None,
+                        suppress: None,
+                        self_mute: None,
+                        self_deaf: None,
+                        priority_speaker: None,
+                        recording: None,
+                        cert_required: None,
+                    });
+                },
+            ));
         }
 
         let client_ip = params
@@ -322,37 +330,37 @@ impl RpcHandler {
                 .await
                 .purge_stale(config.auto_ban.time_window);
 
-            if let Some(ip_bytes) = parse_ip_to_bytes(&client_ip) {
-                if let Some(ban) = self.state.ban_store.check_ip_banned(&ip_bytes) {
-                    warn!(
-                        "Rejecting connection from banned IP {}: {}",
-                        client_ip, ban.reason
-                    );
-                    return Ok(self.make_response_packet(
-                        request_id,
-                        "edge.authenticateUser",
-                        |response| {
-                            response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
-                                success: false,
-                                user_id: None,
-                                username: None,
-                                display_name: None,
-                                groups: vec![],
-                                reason: Some(format!("You are banned: {}", ban.reason)),
-                                reject_type: Some(2),
-                                channel_id: None,
-                                mute: None,
-                                deaf: None,
-                                suppress: None,
-                                self_mute: None,
-                                self_deaf: None,
-                                priority_speaker: None,
-                                recording: None,
-                                cert_required: None,
-                            });
-                        },
-                    ));
-                }
+            if let Some(ip_bytes) = parse_ip_to_bytes(&client_ip)
+                && let Some(ban) = self.state.ban_store.check_ip_banned(&ip_bytes)
+            {
+                warn!(
+                    "Rejecting connection from banned IP {}: {}",
+                    client_ip, ban.reason
+                );
+                return Ok(self.make_response_packet(
+                    request_id,
+                    "edge.authenticateUser",
+                    |response| {
+                        response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None,
+                            username: None,
+                            display_name: None,
+                            groups: vec![],
+                            reason: Some(format!("You are banned: {}", ban.reason)),
+                            reject_type: Some(2),
+                            channel_id: None,
+                            mute: None,
+                            deaf: None,
+                            suppress: None,
+                            self_mute: None,
+                            self_deaf: None,
+                            priority_speaker: None,
+                            recording: None,
+                            cert_required: None,
+                        });
+                    },
+                ));
             }
         }
 
@@ -985,13 +993,15 @@ impl RpcHandler {
             let http_result = self
                 .authenticate_via_http(
                     http_url,
-                    username,
-                    password,
-                    &params.tokens,
-                    params.server_id,
-                    params.session_id,
-                    params.client_info.as_ref(),
-                    config.auth.http_timeout_ms,
+                    HttpAuthCall {
+                        username,
+                        password,
+                        tokens: &params.tokens,
+                        server_id: params.server_id,
+                        session_id: params.session_id,
+                        client_info: params.client_info.as_ref(),
+                        timeout_ms: config.auth.http_timeout_ms,
+                    },
                 )
                 .await;
 
@@ -1244,34 +1254,35 @@ impl RpcHandler {
             }
         }
 
-        if let Some(server_password) = &config.auth.server_password {
-            if !server_password.is_empty() && password != server_password {
-                self.record_auth_failure(&client_ip).await;
-                return Ok(self.make_response_packet(
-                    request_id,
-                    "edge.authenticateUser",
-                    |response| {
-                        response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
-                            success: false,
-                            user_id: None,
-                            username: None,
-                            display_name: None,
-                            groups: vec![],
-                            reason: Some("Invalid server password".to_string()),
-                            reject_type: Some(4),
-                            channel_id: None,
-                            mute: None,
-                            deaf: None,
-                            suppress: None,
-                            self_mute: None,
-                            self_deaf: None,
-                            priority_speaker: None,
-                            recording: None,
-                            cert_required: None,
-                        });
-                    },
-                ));
-            }
+        if let Some(server_password) = &config.auth.server_password
+            && !server_password.is_empty()
+            && password != server_password
+        {
+            self.record_auth_failure(&client_ip).await;
+            return Ok(self.make_response_packet(
+                request_id,
+                "edge.authenticateUser",
+                |response| {
+                    response.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                        success: false,
+                        user_id: None,
+                        username: None,
+                        display_name: None,
+                        groups: vec![],
+                        reason: Some("Invalid server password".to_string()),
+                        reject_type: Some(4),
+                        channel_id: None,
+                        mute: None,
+                        deaf: None,
+                        suppress: None,
+                        self_mute: None,
+                        self_deaf: None,
+                        priority_speaker: None,
+                        recording: None,
+                        cert_required: None,
+                    });
+                },
+            ));
         }
 
         if !config.auth.allow_guest {
@@ -1520,66 +1531,58 @@ impl RpcHandler {
     pub(super) async fn authenticate_via_http(
         &self,
         url: &str,
-        username: &str,
-        password: &str,
-        tokens: &[String],
-        server_id: u32,
-        session_id: u32,
-        client_info: Option<&ClientInfo>,
-        timeout_ms: u64,
+        request: HttpAuthCall<'_>,
     ) -> Result<Option<HttpAuthResponse>> {
         let body = HttpAuthRequest {
-            username: username.to_string(),
-            password: password.to_string(),
-            tokens: tokens.to_vec(),
-            server_id,
-            session_id,
-            ip: client_info
+            username: request.username.to_string(),
+            password: request.password.to_string(),
+            tokens: request.tokens.to_vec(),
+            server_id: request.server_id,
+            session_id: request.session_id,
+            ip: request
+                .client_info
                 .map(|client| client.ip_address.clone())
                 .unwrap_or_default(),
-            ip_version: client_info
+            ip_version: request
+                .client_info
                 .map(|client| client.ip_version.clone())
                 .unwrap_or_default(),
-            release: client_info
+            release: request
+                .client_info
                 .map(|client| client.release.clone())
                 .unwrap_or_default(),
-            version: client_info.and_then(|client| client.version),
-            os: client_info
+            version: request.client_info.and_then(|client| client.version),
+            os: request
+                .client_info
                 .map(|client| client.os.clone())
                 .unwrap_or_default(),
-            osversion: client_info
+            osversion: request
+                .client_info
                 .map(|client| client.os_version.clone())
                 .unwrap_or_default(),
-            certificate_hash: client_info.and_then(|client| client.certificate_hash.clone()),
+            certificate_hash: request
+                .client_info
+                .and_then(|client| client.certificate_hash.clone()),
         };
 
         let response = self
             .http_client
             .post(url)
-            .timeout(std::time::Duration::from_millis(timeout_ms))
+            .timeout(std::time::Duration::from_millis(request.timeout_ms))
             .json(&body)
             .send()
             .await;
 
         match response {
             Ok(resp) => {
-                let status = resp.status();
                 let mut auth_resp: HttpAuthResponse = resp.json().await?;
                 if !auth_resp.success && auth_resp.reject_type.is_none() {
-                    auth_resp.reject_type = Some(
-                        if status == reqwest::StatusCode::UNAUTHORIZED
-                            || status == reqwest::StatusCode::FORBIDDEN
-                        {
-                            3
-                        } else {
-                            3
-                        },
-                    );
+                    auth_resp.reject_type = Some(3);
                 }
                 Ok(Some(auth_resp))
             }
             Err(error) if error.is_timeout() => {
-                warn!("HTTP auth timeout for user '{}'", username);
+                warn!("HTTP auth timeout for user '{}'", request.username);
                 Ok(None)
             }
             Err(error) => Err(error.into()),

@@ -256,11 +256,11 @@ struct SessionEntry {
 /// Manages all connected clients and their message senders.
 ///
 /// Internal layout:
-/// - `sessions`         — full per-session state (info, crypto, bw, close-signal)
-/// - `sender_registry`  — lightweight send-only registry; `broadcast` reads this
-///                        exclusively, so it never competes with `sessions` writes
-/// - `channel_users`    — channel_id → member session IDs
-/// - `listening_index`  — channel_id → listening session IDs
+/// - `sessions` — full per-session state (info, crypto, bw, close-signal)
+/// - `sender_registry` — lightweight send-only registry; `broadcast` reads this
+///   exclusively, so it never competes with `sessions` writes
+/// - `channel_users` — channel_id → member session IDs
+/// - `listening_index` — channel_id → listening session IDs
 pub struct ClientManager {
     /// Full per-session state.  Only mutated on connect/disconnect/state-change.
     sessions: RwLock<HashMap<u32, SessionEntry>>,
@@ -310,10 +310,10 @@ impl ClientManager {
     /// This is used for kick/ban scenarios. Regular `remove_client` (used for
     /// channel moves and natural disconnects) does NOT fire this signal.
     pub async fn send_close_signal(&self, session: u32) {
-        if let Some(entry) = self.sessions.write().await.get_mut(&session) {
-            if let Some(tx) = entry.close_signal.take() {
-                let _ = tx.send(());
-            }
+        if let Some(entry) = self.sessions.write().await.get_mut(&session)
+            && let Some(tx) = entry.close_signal.take()
+        {
+            let _ = tx.send(());
         }
     }
 
@@ -363,19 +363,19 @@ impl ClientManager {
 
         // Register in HotSlot for lock-free voice-routing reads.
         // bandwidth is stored before active=true so the hot path always finds it.
-        crate::hot_slot::get_hot_slot(session).register(
-            session,
+        crate::hot_slot::get_hot_slot(session).register(crate::hot_slot::HotSlotRegistration {
+            session_id: session,
             channel_id,
             deaf,
             self_deaf,
             suppress,
             mute,
             self_mute,
-            sender.clone_voice_sender(),
-            bw_arc,
-            client_groups,
+            sender: sender.clone_voice_sender(),
+            bandwidth: bw_arc,
+            groups: client_groups,
             plugin_context,
-        );
+        });
 
         // Register in channel membership index.
         self.channel_users
@@ -444,10 +444,10 @@ impl ClientManager {
         if old_listening != new_listening {
             let mut idx = self.listening_index.write().await;
             for ch in &old_listening {
-                if !new_listening.contains(ch) {
-                    if let Some(sessions) = idx.get_mut(ch) {
-                        sessions.remove(&session);
-                    }
+                if !new_listening.contains(ch)
+                    && let Some(sessions) = idx.get_mut(ch)
+                {
+                    sessions.remove(&session);
                 }
             }
             for ch in &new_listening {
@@ -627,10 +627,10 @@ impl ClientManager {
             // Step 2: Mirror the add into sessions.listening_channels so that a later
             // update_client call sees old == new and does not attempt to re-sync the index.
             let mut sess = self.sessions.write().await;
-            if let Some(entry) = sess.get_mut(&session) {
-                if !entry.info.listening_channels.contains(&channel) {
-                    entry.info.listening_channels.push(channel);
-                }
+            if let Some(entry) = sess.get_mut(&session)
+                && !entry.info.listening_channels.contains(&channel)
+            {
+                entry.info.listening_channels.push(channel);
             }
         }
 

@@ -86,8 +86,43 @@ pub(crate) struct RuntimeFullSyncOutcome {
     pub hub_seq: u64,
 }
 
+pub(crate) struct AuthenticateUserRequest<'a> {
+    pub session_id: u32,
+    pub username: &'a str,
+    pub password: &'a str,
+    pub tokens: Vec<String>,
+    pub client_info: Option<hubedge::ClientInfo>,
+    pub preconnect_self_mute: Option<bool>,
+    pub preconnect_self_deaf: Option<bool>,
+}
+
+pub(crate) struct UserStateChangeRequest {
+    pub session_id: u32,
+    pub self_mute: Option<bool>,
+    pub self_deaf: Option<bool>,
+    pub mute: Option<bool>,
+    pub deaf: Option<bool>,
+    pub suppress: Option<bool>,
+    pub priority_speaker: Option<bool>,
+    pub recording: Option<bool>,
+    pub listening_channel_add: Vec<u32>,
+    pub listening_channel_remove: Vec<u32>,
+    pub actor_session: Option<u32>,
+}
+
+pub(crate) struct SaveChannelRequest<'a> {
+    pub channel_id: Option<u32>,
+    pub parent_id: Option<u32>,
+    pub name: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub position: Option<i32>,
+    pub max_users: Option<u32>,
+    pub temporary: Option<bool>,
+    pub creator_session: Option<u32>,
+}
+
 enum NotificationProcessorInput {
-    HubNotification(SequencedNotification),
+    HubNotification(Box<SequencedNotification>),
     RuntimeFullSync(RuntimeFullSyncRequest),
 }
 
@@ -843,9 +878,9 @@ impl HubClient {
             // configured threshold AND no other slot is still connected.
             // Checking any_slot_alive() prevents a single failing slot from
             // kicking all clients while other slots remain healthy.
-            if !unreachable_emitted {
-                if let Some(since) = first_failure_at {
-                    if since.elapsed() >= UNREACHABLE_TIMEOUT && !self.any_slot_alive().await {
+            if !unreachable_emitted
+                && let Some(since) = first_failure_at
+                    && since.elapsed() >= UNREACHABLE_TIMEOUT && !self.any_slot_alive().await {
                         warn!(
                             elapsed_secs = since.elapsed().as_secs(),
                             "Hub unreachable — disconnecting all clients and refusing new connections"
@@ -853,8 +888,6 @@ impl HubClient {
                         self.edge_state.emit(EdgeEvent::HubUnreachable);
                         unreachable_emitted = true;
                     }
-                }
-            }
             // Only manage global state transitions and events if no other slot
             // is still connected.  With peer-equal slots, a single slot going
             // down should not affect the whole client while others are alive.
@@ -1096,7 +1129,7 @@ impl HubClient {
                         };
                         match input {
                             NotificationProcessorInput::HubNotification(sn) => {
-                                match sequencer.feed(sn) {
+                                match sequencer.feed(*sn) {
                                     SequenceAction::ProcessNow(n) => {
                                         notif_self
                                             .process_sequenced_notification(&mut sequencer, n)
@@ -1720,7 +1753,7 @@ impl HubClient {
                             // far better than blocking the Hub WS reader.
                             let _ = self
                                 .voice_relay_tx
-                                .try_send((params.from_edge_id, params.voice_packet.into()));
+                                .try_send((params.from_edge_id, params.voice_packet));
                         }
                         return Ok(());
                     }
@@ -1733,7 +1766,7 @@ impl HubClient {
                             notification,
                         };
                         if tx
-                            .send(NotificationProcessorInput::HubNotification(sn))
+                            .send(NotificationProcessorInput::HubNotification(Box::new(sn)))
                             .is_err()
                         {
                             warn!("Notification processor channel closed");
@@ -1819,14 +1852,13 @@ impl HubClient {
 
         if !result.success {
             // Check if we need HMAC challenge-response
-            if let Some(challenge) = &result.challenge {
-                if let Some(hmac_secret) = &self.config.hmac_secret {
+            if let Some(challenge) = &result.challenge
+                && let Some(hmac_secret) = &self.config.hmac_secret {
                     info!("Received HMAC challenge, sending response");
                     return self
                         .do_register_with_challenge(slot, challenge, hmac_secret, fresh_process)
                         .await;
                 }
-            }
             anyhow::bail!("Registration failed: {:?}", result.error);
         }
 

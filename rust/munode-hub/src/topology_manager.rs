@@ -82,6 +82,12 @@ pub struct TopologyManager {
     disconnect_reports: HashMap<u32, HashSet<u32>>,
 }
 
+impl Default for TopologyManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TopologyManager {
     pub fn new() -> Self {
         Self {
@@ -654,12 +660,11 @@ impl TopologyManager {
                 continue;
             }
 
-            if let Some(config) = config {
-                if quality.packet_loss > config.failed_packet_loss
-                    || quality.rtt_ms > config.failed_rtt_ms
-                {
-                    continue;
-                }
+            if let Some(config) = config
+                && (quality.packet_loss > config.failed_packet_loss
+                    || quality.rtt_ms > config.failed_rtt_ms)
+            {
+                continue;
             }
 
             let penalty = config.map(|cfg| cfg.relay_hop_penalty_ms).unwrap_or(0.0);

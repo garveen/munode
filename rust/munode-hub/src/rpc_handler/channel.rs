@@ -12,44 +12,47 @@ impl RpcHandler {
             .context("Missing edge_save_channel params")?;
 
         // Validate channel name against configured regex (for create and rename).
-        if let Some(channel_name) = &params.name {
-            if let Some(re) = &self.channel_name_regex {
-                if !re.is_match(channel_name) {
-                    warn!(
-                        "Rejecting channel name '{}': does not match configured channel_name_regex",
-                        channel_name
-                    );
-                    return Ok(
-                        self.make_response_packet(request_id, "edge.saveChannel", |r| {
-                            r.edge_save_channel = Some(EdgeSaveChannelResult {
-                                success: false,
-                                channel_id: None,
-                                error: Some(format!(
-                                    "Invalid channel name: '{}' does not meet naming requirements",
-                                    channel_name
-                                )),
-                            });
-                        }),
-                    );
-                }
-            }
+        if let Some(channel_name) = &params.name
+            && let Some(re) = &self.channel_name_regex
+            && !re.is_match(channel_name)
+        {
+            warn!(
+                "Rejecting channel name '{}': does not match configured channel_name_regex",
+                channel_name
+            );
+            return Ok(
+                self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                    r.edge_save_channel = Some(EdgeSaveChannelResult {
+                        success: false,
+                        channel_id: None,
+                        error: Some(format!(
+                            "Invalid channel name: '{}' does not meet naming requirements",
+                            channel_name
+                        )),
+                    });
+                }),
+            );
         }
 
         let is_new = params.id.is_none();
         let channel_id = if is_new {
             // Reject creating a permanent channel inside a temporary channel
-            if let Some(parent_id) = params.parent_id {
-                if let Some(parent_ch) = self.state.channel_store.get_channel(parent_id).await {
-                    if parent_ch.temporary {
-                        return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
-                            r.edge_save_channel = Some(EdgeSaveChannelResult {
-                                success: false,
-                                channel_id: None,
-                                error: Some("Cannot create a permanent channel inside a temporary channel".to_string()),
-                            });
-                        }));
-                    }
-                }
+            if let Some(parent_id) = params.parent_id
+                && let Some(parent_ch) = self.state.channel_store.get_channel(parent_id).await
+                && parent_ch.temporary
+            {
+                return Ok(
+                    self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                        r.edge_save_channel = Some(EdgeSaveChannelResult {
+                            success: false,
+                            channel_id: None,
+                            error: Some(
+                                "Cannot create a permanent channel inside a temporary channel"
+                                    .to_string(),
+                            ),
+                        });
+                    }),
+                );
             }
 
             // Check channel count limit
@@ -74,39 +77,37 @@ impl RpcHandler {
 
             // Check nesting depth limit
             let nesting_limit = self.state.config.limits.channel_nesting_limit;
-            if nesting_limit > 0 {
-                if let Some(parent_id) = params.parent_id {
-                    let depth = {
-                        let mut d = 1u32;
-                        let mut cur = parent_id;
-                        let channels = self.state.channel_store.get_all_channels().await;
-                        let parent_map: std::collections::HashMap<u32, Option<u32>> =
-                            channels.iter().map(|c| (c.id, c.parent_id)).collect();
-                        while let Some(&Some(pid)) = parent_map.get(&cur) {
-                            d += 1;
-                            cur = pid;
-                            if d > nesting_limit {
-                                break;
-                            }
+            if nesting_limit > 0
+                && let Some(parent_id) = params.parent_id
+            {
+                let depth = {
+                    let mut d = 1u32;
+                    let mut cur = parent_id;
+                    let channels = self.state.channel_store.get_all_channels().await;
+                    let parent_map: std::collections::HashMap<u32, Option<u32>> =
+                        channels.iter().map(|c| (c.id, c.parent_id)).collect();
+                    while let Some(&Some(pid)) = parent_map.get(&cur) {
+                        d += 1;
+                        cur = pid;
+                        if d > nesting_limit {
+                            break;
                         }
-                        d
-                    };
-                    if depth > nesting_limit {
-                        return Ok(self.make_response_packet(
-                            request_id,
-                            "edge.saveChannel",
-                            |r| {
-                                r.edge_save_channel = Some(EdgeSaveChannelResult {
-                                    success: false,
-                                    channel_id: None,
-                                    error: Some(format!(
-                                        "Channel nesting limit ({}) exceeded",
-                                        nesting_limit
-                                    )),
-                                });
-                            },
-                        ));
                     }
+                    d
+                };
+                if depth > nesting_limit {
+                    return Ok(
+                        self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: None,
+                                error: Some(format!(
+                                    "Channel nesting limit ({}) exceeded",
+                                    nesting_limit
+                                )),
+                            });
+                        }),
+                    );
                 }
             }
 
@@ -180,39 +181,30 @@ impl RpcHandler {
             .await;
 
             // Temporary channel: immediately move the creator into it (Murmur Messages.cpp:1433).
-            if is_temp {
-                if let Some(creator_session) = params.creator_session {
-                    if creator_session != 0 {
-                        if self
-                            .state
-                            .session_manager
-                            .get_session(creator_session)
-                            .await
-                            .is_some()
-                        {
-                            if let Some((old_ch, moved_params)) = self
-                                .apply_authoritative_user_move(
-                                    creator_session,
-                                    id,
-                                    Some(creator_session),
-                                )
-                                .await
-                            {
-                                self.broadcast_notification("hub.userMoved", |n| {
-                                    n.user_moved = Some(moved_params);
-                                })
-                                .await;
-                                info!(
-                                    session_id = creator_session,
-                                    channel_id = id,
-                                    "Temporary channel created: moved creator into new channel"
-                                );
-                                // Clean up the old channel if it was also temporary and is now empty.
-                                self.maybe_cleanup_temp_channel(old_ch).await;
-                            }
-                        }
-                    }
-                }
+            if is_temp
+                && let Some(creator_session) = params.creator_session
+                && creator_session != 0
+                && self
+                    .state
+                    .session_manager
+                    .get_session(creator_session)
+                    .await
+                    .is_some()
+                && let Some((old_ch, moved_params)) = self
+                    .apply_authoritative_user_move(creator_session, id, Some(creator_session))
+                    .await
+            {
+                self.broadcast_notification("hub.userMoved", |n| {
+                    n.user_moved = Some(moved_params);
+                })
+                .await;
+                info!(
+                    session_id = creator_session,
+                    channel_id = id,
+                    "Temporary channel created: moved creator into new channel"
+                );
+                // Clean up the old channel if it was also temporary and is now empty.
+                self.maybe_cleanup_temp_channel(old_ch).await;
             }
 
             id
@@ -491,16 +483,15 @@ impl RpcHandler {
             }
 
             // Update inherit_acl flag on channel if provided
-            if let Some(inherit) = acl_msg.inherit_acls {
-                if let Some(mut ch) = self
+            if let Some(inherit) = acl_msg.inherit_acls
+                && let Some(mut ch) = self
                     .state
                     .channel_store
                     .get_channel(params.channel_id)
                     .await
-                {
-                    ch.inherit_acl = inherit;
-                    self.state.channel_store.update_channel(ch).await;
-                }
+            {
+                ch.inherit_acl = inherit;
+                self.state.channel_store.update_channel(ch).await;
             }
 
             // Self-protection: if the actor lost Write access after applying the new ACLs,
@@ -928,10 +919,10 @@ impl RpcHandler {
 
             // Update the in-batch occupancy counters so subsequent displacees account
             // for earlier moves in this same removal batch.
-            if let Some(cnt) = channel_counts.get_mut(&session.channel_id) {
-                if *cnt > 0 {
-                    *cnt -= 1;
-                }
+            if let Some(cnt) = channel_counts.get_mut(&session.channel_id)
+                && *cnt > 0
+            {
+                *cnt -= 1;
             }
             *channel_counts.entry(target_channel).or_insert(0) += 1;
 
@@ -940,7 +931,7 @@ impl RpcHandler {
                 .await
             {
                 self.broadcast_notification("hub.userMoved", |n| {
-                    n.user_moved = Some(moved_params.clone());
+                    n.user_moved = Some(moved_params);
                 })
                 .await;
                 info!(

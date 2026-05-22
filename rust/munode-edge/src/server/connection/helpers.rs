@@ -119,7 +119,7 @@ pub(super) fn strip_html_tags(s: &str) -> String {
 
 /// Decode a hex string into bytes.  Returns `None` if the string is not valid hex.
 pub(crate) fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..hex.len())

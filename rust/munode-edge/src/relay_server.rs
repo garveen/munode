@@ -87,6 +87,35 @@ struct IncomingVoiceTcpConnectionGuard {
     peer_edge_id: u32,
 }
 
+struct CapturePathCallback {
+    captured_path: Arc<StdMutex<String>>,
+}
+
+impl tokio_tungstenite::tungstenite::handshake::server::Callback for CapturePathCallback {
+    fn on_request(
+        self,
+        request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+        response: tokio_tungstenite::tungstenite::handshake::server::Response,
+    ) -> std::result::Result<
+        tokio_tungstenite::tungstenite::handshake::server::Response,
+        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+    > {
+        *self.captured_path.lock().unwrap() = request.uri().path().to_string();
+        Ok(response)
+    }
+}
+
+struct VoiceTcpSlotContext {
+    peer_edge_id: u32,
+    slot_idx: usize,
+    peer_host: String,
+    peer_edge_port: u16,
+    self_edge_id: u32,
+    edge_state: Arc<EdgeState>,
+    pool: Arc<crate::peer_registry::PeerVoiceTcpPool>,
+    hmac_secret: Option<String>,
+}
+
 impl IncomingVoiceTcpConnectionGuard {
     fn new(edge_state: Arc<EdgeState>, peer_edge_id: u32) -> Self {
         edge_state.note_incoming_voice_tcp_connected(peer_edge_id);
@@ -262,7 +291,6 @@ pub async fn run_edge_ws_server_with_listener(
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
                 let hub_host = hub_host.clone();
-                let hub_port = hub_port;
                 let hmac_secret = hmac_secret.clone();
                 let edge_state = edge_state.clone();
                 let hub_client = hub_client.clone();
@@ -272,16 +300,13 @@ pub async fn run_edge_ws_server_with_listener(
                     // at the WebSocket message level after the upgrade completes.
                     let captured_path: Arc<StdMutex<String>> =
                         Arc::new(StdMutex::new(String::new()));
-                    let cp = captured_path.clone();
 
                     let ws_result = timeout(
                         Duration::from_secs(30),
                         tokio_tungstenite::accept_hdr_async(
                             stream,
-                            move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
-                                  response: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                                *cp.lock().unwrap() = req.uri().path().to_string();
-                                Ok(response)
+                            CapturePathCallback {
+                                captured_path: captured_path.clone(),
                             },
                         ),
                     )
@@ -364,12 +389,11 @@ async fn handle_voice_connection(
     hmac_secret: Option<&str>,
 ) {
     // Challenge-response auth before any voice traffic.
-    if let Some(secret) = hmac_secret {
-        if let Err(e) = relay_auth_server(&mut ws, secret).await {
+    if let Some(secret) = hmac_secret
+        && let Err(e) = relay_auth_server(&mut ws, secret).await {
             warn!("Voice TCP auth failed for {}: {}", peer_addr, e);
             return;
         }
-    }
 
     let (mut _write, mut read) = ws.split();
 
@@ -642,16 +666,16 @@ pub async fn connect_peer_voice_tcp(
         let state_c = edge_state.clone();
         let pool_c = pool.clone();
         let handle = tokio::spawn(async move {
-            run_voice_tcp_slot(
+            run_voice_tcp_slot(VoiceTcpSlotContext {
                 peer_edge_id,
                 slot_idx,
-                peer_host_c,
+                peer_host: peer_host_c,
                 peer_edge_port,
                 self_edge_id,
-                state_c,
-                pool_c,
-                secret_c,
-            )
+                edge_state: state_c,
+                pool: pool_c,
+                hmac_secret: secret_c,
+            })
             .await;
         });
         slot_handles.push(handle);
@@ -673,7 +697,7 @@ pub async fn connect_peer_voice_tcp(
         let current = edge_state.voice_tcp_conns.load_full();
         if current
             .get(&peer_edge_id)
-            .map_or(false, |p| Arc::ptr_eq(p, &pool))
+            .is_some_and(|p| Arc::ptr_eq(p, &pool))
         {
             let mut new_conns = (*current).clone();
             new_conns.remove(&peer_edge_id);
@@ -700,16 +724,17 @@ pub async fn connect_peer_voice_tcp(
 /// Loops until the peer is removed from `voice_tcp_peers` (hub.peerLeft).
 /// On each iteration it attempts one TCP voice connection; on failure it applies
 /// exponential back-off before retrying.  On success it resets the back-off.
-async fn run_voice_tcp_slot(
-    peer_edge_id: u32,
-    slot_idx: usize,
-    peer_host: String,
-    peer_edge_port: u16,
-    self_edge_id: u32,
-    edge_state: Arc<EdgeState>,
-    pool: Arc<crate::peer_registry::PeerVoiceTcpPool>,
-    hmac_secret: Option<String>,
-) {
+async fn run_voice_tcp_slot(context: VoiceTcpSlotContext) {
+    let VoiceTcpSlotContext {
+        peer_edge_id,
+        slot_idx,
+        peer_host,
+        peer_edge_port,
+        self_edge_id,
+        edge_state,
+        pool,
+        hmac_secret,
+    } = context;
     let mut retry_ms = VOICE_TCP_MIN_RETRY_MS;
     // Track whether the previous attempt actually established a connection.
     // A slot that connected (sender was placed in the pool) and then dropped
@@ -747,7 +772,7 @@ async fn run_voice_tcp_slot(
         // round-robin skips it rather than blocking on a dead channel.
         let did_connect = {
             let mut slot = pool.senders[slot_idx].lock().ok();
-            let connected = slot.as_ref().map_or(false, |g| g.is_some());
+            let connected = slot.as_ref().is_some_and(|g| g.is_some());
             if let Some(ref mut g) = slot {
                 **g = None;
             }

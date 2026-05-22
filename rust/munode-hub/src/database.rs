@@ -39,6 +39,8 @@ pub struct ChannelGroupRecord {
     pub inheritable: bool,
 }
 
+pub type UserSummaryRow = (u32, String, u32, Option<String>, Option<String>);
+
 /// A ban record from the database.
 #[derive(Debug, Clone)]
 pub struct BanRecord {
@@ -61,10 +63,10 @@ impl Database {
     /// Open or create the SQLite database at the given path.
     pub fn open(path: &str) -> Result<Self> {
         // Ensure parent directory exists
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent).context("Failed to create database directory")?;
-            }
+        if let Some(parent) = std::path::Path::new(path).parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).context("Failed to create database directory")?;
         }
 
         let conn = Connection::open(path).context("Failed to open SQLite database")?;
@@ -757,9 +759,7 @@ impl Database {
     ///
     /// Returns `(id, name, last_channel, texture_blob, comment_blob)` for every row.
     /// Used by [`crate::user_store::UserStore::load_from_db`] at startup.
-    pub fn load_all_users_summary(
-        &self,
-    ) -> Result<Vec<(u32, String, u32, Option<String>, Option<String>)>> {
+    pub fn load_all_users_summary(&self) -> Result<Vec<UserSummaryRow>> {
         let conn = self
             .conn
             .lock()
@@ -1048,8 +1048,7 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut result: HashMap<u32, Vec<crate::acl_manager::AclEntry>> = HashMap::new();
         for chunk in channel_ids.chunks(500) {
-            let placeholders = std::iter::repeat("?")
-                .take(chunk.len())
+            let placeholders = std::iter::repeat_n("?", chunk.len())
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
@@ -1102,8 +1101,7 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut result: HashMap<u32, Vec<ChannelGroupRecord>> = HashMap::new();
         for chunk in channel_ids.chunks(500) {
-            let placeholders = std::iter::repeat("?")
-                .take(chunk.len())
+            let placeholders = std::iter::repeat_n("?", chunk.len())
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
@@ -1153,8 +1151,7 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut result: HashMap<i64, Vec<(u32, bool)>> = HashMap::new();
         for chunk in group_ids.chunks(500) {
-            let placeholders = std::iter::repeat("?")
-                .take(chunk.len())
+            let placeholders = std::iter::repeat_n("?", chunk.len())
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(

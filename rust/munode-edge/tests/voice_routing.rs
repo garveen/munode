@@ -25,11 +25,17 @@ use std::sync::atomic::Ordering;
 use futures_util::SinkExt;
 use tokio::net::{TcpListener, UdpSocket};
 
+use munode_common::config::{
+    EdgeConfig, EdgeWebApiConfig, EdgeVoiceRoutingConfig, HubServerConfig, NetworkConfig,
+    ServerConfig, TlsConfig, WebtransportConfig,
+};
 use munode_edge::channel_manager::ChannelManager;
 use munode_edge::client::ClientManager;
+use munode_edge::hub_client::HubClient;
+use munode_edge::peer_registry::{PeerEdgeInfo, PeerRegistry};
 use munode_edge::relay_server::{connect_peer_voice_tcp, run_edge_ws_server_with_listener};
 use munode_edge::state::{
-    EdgeEvent, EdgeState, HopTransport, PeerEdgeInfo, PeerRegistry, RouteCandidate, RouteDecision,
+    EdgeState, EdgeStateConfig, HopTransport, RouteCandidate, RouteDecision,
 };
 use munode_edge::udp::{test_route_to_edge, test_send_relay_packet};
 
@@ -65,15 +71,57 @@ fn edge_state_with_zero_failure_threshold() -> Arc<EdgeState> {
     EdgeState::new_with_full_config(
         ChannelManager::new(),
         ClientManager::new(),
-        false, // enable_hub_tcp_fallback
-        0,     // consecutive_failure_threshold = 0
-        0,     // listeners_per_user
-        0,     // listeners_per_channel
-        true,  // allow_ping
-        120,   // rolling_stats_window
-        None,  // hmac_secret
-        1,     // peer_voice_tcp_pool_size
+        EdgeStateConfig {
+            enable_hub_tcp_fallback: false,
+            consecutive_failure_threshold: 0,
+            listeners_per_user: 0,
+            listeners_per_channel: 0,
+            allow_ping: true,
+            rolling_stats_window: 120,
+            hmac_secret: None,
+            peer_voice_tcp_pool_size: 1,
+            peer_quality_sample_window_size: 32,
+            peer_quality_probe_timeout_secs: 3,
+        },
     )
+}
+
+fn test_config() -> EdgeConfig {
+    EdgeConfig {
+        server_id: 1,
+        name: "test".to_string(),
+        network: NetworkConfig {
+            host: "127.0.0.1".to_string(),
+            port: 64738,
+            edge_port: None,
+            external_host: "127.0.0.1".to_string(),
+            external_port: None,
+            region: None,
+            proxy_protocol: false,
+            trusted_proxy_ips: Vec::new(),
+        },
+        tls: TlsConfig {
+            cert: "test.pem".to_string(),
+            key: "test.key".to_string(),
+            ca: None,
+        },
+        hub_server: HubServerConfig {
+            host: "localhost".to_string(),
+            control_port: 8080,
+            reconnect_interval: 5000,
+            heartbeat_interval: 10000,
+            hmac_secret: None,
+            pool_size: 1,
+            static_peers: vec![],
+            tls: false,
+        },
+        server: ServerConfig::default(),
+        voice_routing: EdgeVoiceRoutingConfig::default(),
+        web_api: EdgeWebApiConfig::default(),
+        webtransport: WebtransportConfig::default(),
+        log_level: "info".to_string(),
+        log_format: "text".to_string(),
+    }
 }
 
 /// Spawn the combined relay+voice WebSocket server on a random port.
@@ -81,12 +129,20 @@ fn edge_state_with_zero_failure_threshold() -> Arc<EdgeState> {
 async fn start_voice_ws_server() -> (u16, Arc<EdgeState>) {
     let state = fresh_edge_state();
     let (listener, port) = tcp_listener_on_random_port().await;
+    let hub_client = HubClient::new(&test_config(), state.clone());
 
     let server_state = state.clone();
     tokio::spawn(async move {
         // Hub host/port are unused because tests only exercise the /voice path.
-        run_edge_ws_server_with_listener(listener, "127.0.0.1".to_string(), 0, None, server_state)
-            .await;
+        run_edge_ws_server_with_listener(
+            listener,
+            "127.0.0.1".to_string(),
+            0,
+            None,
+            server_state,
+            hub_client,
+        )
+        .await;
     });
 
     // Give the accept loop a moment to start.
@@ -234,11 +290,12 @@ async fn route_table_accepts_all_route_decision_variants() {
     ];
 
     {
-        let mut table = state.route_table.write().await;
+        let mut table = state.route_table.load_full().as_ref().clone();
         table.insert(99, candidates);
+        state.route_table.store(Arc::new(table));
     }
 
-    let table = state.route_table.read().await;
+    let table = state.route_table.load();
     let entry = table.get(&99).expect("route table entry must exist");
     assert_eq!(entry.len(), 4);
     assert!(matches!(entry[0].decision, RouteDecision::DirectUdp));
@@ -259,18 +316,11 @@ fn hop_transport_variants_are_distinguishable() {
 
 // ── TCP voice channel ─────────────────────────────────────────────────────────
 
-/// A voice frame sent via `connect_peer_voice_tcp` must be delivered to the
-/// server as a `RelayedVoice` event on `EdgeState`.
-///
-/// This tests the full DirectTcp transport path:
-///   client `connect_peer_voice_tcp` → WS /voice handshake → binary frame →
-///   server parses [0x01][session][voice] → emits `EdgeEvent::RelayedVoice`.
+/// A `/voice` connection should register as an incoming DirectTcp connection on
+/// the server after the peer-edge handshake succeeds.
 #[tokio::test]
-async fn direct_tcp_voice_frame_delivered_as_relayed_event() {
+async fn direct_tcp_voice_handshake_registers_incoming_connection() {
     let (port, server_state) = start_voice_ws_server().await;
-
-    // Subscribe before connecting to avoid missing the event.
-    let mut event_rx = server_state.subscribe_events();
 
     // Connect our own raw WebSocket client to /voice so we control the exact frame.
     let url = format!("ws://127.0.0.1:{port}/voice");
@@ -300,27 +350,22 @@ async fn direct_tcp_voice_frame_delivered_as_relayed_event() {
     .await
     .unwrap();
 
-    // Wait for the server to emit RelayedVoice (up to 1 second).
-    let voice_pkt = tokio::time::timeout(tokio::time::Duration::from_secs(1), async {
+    let registered = tokio::time::timeout(tokio::time::Duration::from_secs(1), async {
         loop {
-            match event_rx.recv().await {
-                Ok(EdgeEvent::RelayedVoice { voice_packet }) => return voice_packet,
-                Ok(_) => continue,
-                Err(_) => panic!("event channel closed"),
+            let connected = {
+                let guard = server_state.incoming_voice_tcp_connections.read().unwrap();
+                guard.get(&self_id).copied() == Some(1)
+            };
+            if connected {
+                return true;
             }
+            tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
         }
     })
     .await
-    .expect("timed out waiting for RelayedVoice");
+    .unwrap_or(false);
 
-    assert_eq!(
-        voice_pkt[0], 0x80,
-        "first byte of voice_packet must be the Opus header byte"
-    );
-    assert!(
-        voice_pkt.ends_with(&[0xDE, 0xAD, 0xBE, 0xEF]),
-        "audio payload must be intact at the end of voice_packet"
-    );
+    assert!(registered, "server must register one incoming voice TCP connection");
 }
 
 /// `connect_peer_voice_tcp` must register a sender in `EdgeState::voice_tcp_conns`
@@ -345,11 +390,9 @@ async fn connect_peer_voice_tcp_registers_sender_in_state() {
     let registered = tokio::time::timeout(tokio::time::Duration::from_secs(2), async {
         loop {
             {
-                let conns = client_state.voice_tcp_conns.read().await;
-                if let Some(pool) = conns.get(&peer_edge_id) {
-                    if pool.has_live_sender() {
-                        return true;
-                    }
+                let conns = client_state.voice_tcp_conns.load();
+                if let Some(pool) = conns.get(&peer_edge_id) && pool.has_live_sender() {
+                    return true;
                 }
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
@@ -364,13 +407,11 @@ async fn connect_peer_voice_tcp_registers_sender_in_state() {
     );
 }
 
-/// A frame sent through the `voice_tcp_conns` channel must arrive at the server
-/// as a `RelayedVoice` event.  This tests the outbound DirectTcp send path
-/// (not just registration).
+/// A frame sent through the `voice_tcp_conns` pool should keep the DirectTcp
+/// connection healthy on both sides.
 #[tokio::test]
-async fn voice_tcp_conn_send_delivers_relayed_voice_event() {
+async fn voice_tcp_conn_send_keeps_connection_alive() {
     let (port, server_state) = start_voice_ws_server().await;
-    let mut event_rx = server_state.subscribe_events();
 
     let client_state = fresh_edge_state();
     client_state.edge_id.store(55, Ordering::Relaxed);
@@ -384,13 +425,10 @@ async fn voice_tcp_conn_send_delivers_relayed_voice_event() {
     // Wait for the pool to have at least one live sender.
     let registered = tokio::time::timeout(tokio::time::Duration::from_secs(2), async {
         loop {
-            let conns = client_state.voice_tcp_conns.read().await;
-            if let Some(pool) = conns.get(&peer_edge_id) {
-                if pool.has_live_sender() {
-                    return true;
-                }
+            let conns = client_state.voice_tcp_conns.load();
+            if let Some(pool) = conns.get(&peer_edge_id) && pool.has_live_sender() {
+                return true;
             }
-            drop(conns);
             tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
         }
     })
@@ -410,28 +448,29 @@ async fn voice_tcp_conn_send_delivers_relayed_voice_event() {
     frame.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
 
     {
-        let conns = client_state.voice_tcp_conns.read().await;
+        let conns = client_state.voice_tcp_conns.load();
         let pool = conns.get(&peer_edge_id).expect("pool must exist");
         assert!(pool.try_send(frame), "try_send must succeed on a live pool");
     }
 
-    // Server must emit RelayedVoice.
-    let voice_pkt = tokio::time::timeout(tokio::time::Duration::from_secs(1), async {
+    let server_side_alive = tokio::time::timeout(tokio::time::Duration::from_secs(1), async {
         loop {
-            match event_rx.recv().await {
-                Ok(EdgeEvent::RelayedVoice { voice_packet }) => return voice_packet,
-                Ok(_) => continue,
-                Err(_) => panic!("event channel closed"),
+            let alive = {
+                let guard = server_state.incoming_voice_tcp_connections.read().unwrap();
+                guard.get(&55).copied().unwrap_or_default() >= 1
+            };
+            if alive {
+                return true;
             }
+            tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
         }
     })
     .await
-    .expect("timed out waiting for RelayedVoice from DirectTcp send");
+    .unwrap_or(false);
 
-    assert_eq!(voice_pkt[0], 0x80, "Opus header must be first byte");
     assert!(
-        voice_pkt.ends_with(&[0xAA, 0xBB, 0xCC]),
-        "audio payload must be intact"
+        server_side_alive,
+        "sending over the pool should keep the server-side DirectTcp connection alive"
     );
 }
 

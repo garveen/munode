@@ -17,7 +17,10 @@ use munode_protocol::hubedge::{
     TypedRpcRequest,
 };
 
-use super::{HubClient, PendingControlNotification, RuntimeFullSyncOutcome};
+use super::{
+    AuthenticateUserRequest, HubClient, PendingControlNotification, RuntimeFullSyncOutcome,
+    SaveChannelRequest, UserStateChangeRequest,
+};
 
 impl HubClient {
     async fn permission_query_actor_identity(&self, session_id: u32) -> (u32, String) {
@@ -63,15 +66,9 @@ impl HubClient {
     }
 
     /// Authenticate a user via the Hub.
-    pub async fn authenticate_user(
+    pub(crate) async fn authenticate_user(
         &self,
-        session_id: u32,
-        username: &str,
-        password: &str,
-        tokens: Vec<String>,
-        client_info: Option<hubedge::ClientInfo>,
-        preconnect_self_mute: Option<bool>,
-        preconnect_self_deaf: Option<bool>,
+        params: AuthenticateUserRequest<'_>,
     ) -> Result<hubedge::EdgeAuthenticateUserResult> {
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
@@ -79,17 +76,17 @@ impl HubClient {
             method: "edge.authenticateUser".to_string(),
             timeout_ms: Some(30000),
             edge_authenticate_user: Some(EdgeAuthenticateUserParams {
-                session_id,
+                session_id: params.session_id,
                 server_id: self.server_id,
-                username: username.to_string(),
-                password: password.to_string(),
-                tokens,
-                client_info,
+                username: params.username.to_string(),
+                password: params.password.to_string(),
+                tokens: params.tokens,
+                client_info: params.client_info,
                 mute: None,
                 deaf: None,
                 suppress: None,
-                self_mute: preconnect_self_mute,
-                self_deaf: preconnect_self_deaf,
+                self_mute: params.preconnect_self_mute,
+                self_deaf: params.preconnect_self_deaf,
                 priority_speaker: None,
                 recording: None,
             }),
@@ -224,19 +221,9 @@ impl HubClient {
     /// Hub updates session_manager, broadcasts hub.userStateBroadcast to ALL edges, responds.
     /// Every edge, including the requesting edge, waits for the Hub broadcast to
     /// update client-visible state.
-    pub async fn rpc_user_state_changed(
+    pub(crate) async fn rpc_user_state_changed(
         &self,
-        session_id: u32,
-        self_mute: Option<bool>,
-        self_deaf: Option<bool>,
-        mute: Option<bool>,
-        deaf: Option<bool>,
-        suppress: Option<bool>,
-        priority_speaker: Option<bool>,
-        recording: Option<bool>,
-        listening_channel_add: Vec<u32>,
-        listening_channel_remove: Vec<u32>,
-        actor_session: Option<u32>,
+        params: UserStateChangeRequest,
     ) -> Result<()> {
         let edge_id = self.edge_id();
         let request_id = self.next_request_id();
@@ -245,18 +232,18 @@ impl HubClient {
             method: "edge.userStateChanged".to_string(),
             timeout_ms: Some(10000),
             edge_user_state_changed: Some(EdgeHandleUserStateChangedParams {
-                session_id,
+                session_id: params.session_id,
                 edge_id,
-                self_mute,
-                self_deaf,
-                mute,
-                deaf,
-                suppress,
-                priority_speaker,
-                recording,
-                listening_channel_add,
-                listening_channel_remove,
-                actor_session,
+                self_mute: params.self_mute,
+                self_deaf: params.self_deaf,
+                mute: params.mute,
+                deaf: params.deaf,
+                suppress: params.suppress,
+                priority_speaker: params.priority_speaker,
+                recording: params.recording,
+                listening_channel_add: params.listening_channel_add,
+                listening_channel_remove: params.listening_channel_remove,
+                actor_session: params.actor_session,
             }),
             ..Default::default()
         };
@@ -350,12 +337,13 @@ impl HubClient {
             target_id,
             config.clone(),
         );
-        if peer_fanout > 0 {
-            debug!(
-                client_session,
-                target_id, peer_fanout, "VoiceTarget broadcast to peer edges over /voice"
-            );
-        }
+        debug!(
+            client_session,
+            target_id,
+            has_config = config.is_some(),
+            peer_fanout,
+            "Syncing voice target to Hub"
+        );
 
         let request_id = self.next_request_id();
         let edge_id = self.edge_id();
@@ -381,16 +369,9 @@ impl HubClient {
     }
 
     /// Forward a channel create/edit request to Hub via saveChannel RPC.
-    pub async fn save_channel(
+    pub(crate) async fn save_channel(
         &self,
-        channel_id: Option<u32>,
-        parent_id: Option<u32>,
-        name: Option<&str>,
-        description: Option<&str>,
-        position: Option<i32>,
-        max_users: Option<u32>,
-        temporary: Option<bool>,
-        creator_session: Option<u32>,
+        params: SaveChannelRequest<'_>,
     ) -> Result<hubedge::EdgeSaveChannelResult> {
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
@@ -398,16 +379,16 @@ impl HubClient {
             method: "edge.saveChannel".to_string(),
             timeout_ms: Some(10000),
             edge_save_channel: Some(hubedge::EdgeSaveChannelParams {
-                id: channel_id,
-                parent_id,
-                name: name.map(String::from),
-                description: description.map(String::from),
+                id: params.channel_id,
+                parent_id: params.parent_id,
+                name: params.name.map(String::from),
+                description: params.description.map(String::from),
                 description_blob: None,
-                position,
-                max_users,
+                position: params.position,
+                max_users: params.max_users,
                 inherit_acl: None,
-                temporary,
-                creator_session,
+                temporary: params.temporary,
+                creator_session: params.creator_session,
             }),
             ..Default::default()
         };
@@ -442,14 +423,13 @@ impl HubClient {
         };
         match self.rpc_call(request).await {
             Ok(resp) => {
-                if let Some(result) = resp.edge_save_channel_listeners {
-                    if !result.success {
+                if let Some(result) = resp.edge_save_channel_listeners
+                    && !result.success {
                         warn!(
                             "Hub rejected channel listeners save for user {}: {:?}",
                             user_id, result.error
                         );
                     }
-                }
             }
             Err(e) => warn!(
                 "Failed to save channel listeners for user {}: {}",
@@ -641,9 +621,10 @@ impl HubClient {
             Ok(resp) => {
                 let r = resp.edge_handle_acl.unwrap_or_default();
                 if !r.success {
-                    return Err(r.permission_denied.unwrap_or(false));
+                    Err(r.permission_denied.unwrap_or(false))
+                } else {
+                    Ok(r.raw_data.unwrap_or_default())
                 }
-                r.raw_data.ok_or(false)
             }
             Err(e) => {
                 warn!("Failed to get ban list: {}", e);
@@ -939,7 +920,7 @@ impl HubClient {
             edge_relay_voice_via_tcp: Some(hubedge::EdgeRelayVoiceViaTcpParams {
                 from_edge_id,
                 target_edge_id,
-                voice_packet: voice_packet.into(),
+                voice_packet,
                 timestamp: current_millis() as i64,
             }),
             ..Default::default()

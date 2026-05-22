@@ -26,7 +26,7 @@ fn capture_output(bin: &std::path::Path, args: &[&str], dur: Duration) -> Vec<St
     let h_out = std::thread::spawn(move || {
         BufReader::new(stdout)
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
@@ -34,7 +34,7 @@ fn capture_output(bin: &std::path::Path, args: &[&str], dur: Duration) -> Vec<St
     let h_err = std::thread::spawn(move || {
         BufReader::new(stderr)
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()

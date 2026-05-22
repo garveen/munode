@@ -307,7 +307,7 @@ pub async fn deliver_relayed_voice(
 /// Shared voice packet utilities used by both the TCP (server.rs) and UDP (udp.rs) paths.
 ///
 /// All three functions are on the forwarding hot path, so they are marked `#[inline]`.
-
+///
 /// Build a server-to-client Mumble voice payload.
 ///
 /// Client-to-server format:  `[header(1B)][sequence_varint][audio_data]`
@@ -368,10 +368,10 @@ pub fn deliver_voice_tcp(sessions: &[u32], frame: &bytes::Bytes) -> usize {
             continue;
         }
         let sender_guard = slot.sender.load();
-        if let Some(sender) = &**sender_guard {
-            if sender.try_send(frame.clone()).is_ok() {
-                count += 1;
-            }
+        if let Some(sender) = &**sender_guard
+            && sender.try_send(frame.clone()).is_ok()
+        {
+            count += 1;
         }
     }
     count

@@ -913,7 +913,7 @@ impl Default for HubAutoBanConfig {
 }
 
 /// Client suggestion configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct HubSuggestConfig {
     /// Suggested client version string (e.g. "1.3.4").
     /// Parsed to v1 (major<<16|minor<<8|patch) and v2 (major<<48|minor<<32|patch<<16) at send time.
@@ -952,16 +952,6 @@ impl HubSuggestConfig {
             | ((minor_capped.min(0xFF) as u32) << 8)
             | (patch_capped.min(0xFF) as u32);
         Some((v1, v2))
-    }
-}
-
-impl Default for HubSuggestConfig {
-    fn default() -> Self {
-        Self {
-            version: None,
-            positional: None,
-            push_to_talk: None,
-        }
     }
 }
 

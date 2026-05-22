@@ -189,8 +189,8 @@ impl UdpServer {
     }
 
     async fn request_crypt_resync(&self, session_id: u32) {
-        if let Some(sender) = self.edge_state.client_manager.get_sender(session_id).await {
-            if sender
+        if let Some(sender) = self.edge_state.client_manager.get_sender(session_id).await
+            && sender
                 .send_message(MessageType::CryptSetup, &mumbleproto::CryptSetup::default())
                 .await
             {
@@ -199,7 +199,6 @@ impl UdpServer {
                     "requested CryptSetup resync after UDP decrypt failure"
                 );
             }
-        }
     }
 
     /// Main receive loop.  Polls both the client socket and the edge socket.
@@ -285,7 +284,7 @@ impl UdpServer {
                                 let timeout_ms = probe_state.peer_quality_probe_timeout_ms();
                                 let sample_window_size = probe_state.peer_quality_sample_window_size();
                                 let mut pq = probe_quality.lock().await;
-                                let result = pq.iter_mut().filter_map(|(&eid, pqs)| {
+                                pq.iter_mut().filter_map(|(&eid, pqs)| {
                                     let expired = pqs.expire_stale_pings(
                                         report_now_ms,
                                         timeout_ms,
@@ -311,8 +310,7 @@ impl UdpServer {
                                     pqs.last_report_jitter_ms = Some(jitter_ms);
 
                                     Some((eid, average_rtt_ms, packet_loss, jitter_ms, samples))
-                                }).collect();
-                                result
+                                }).collect()
                             };
                             for (target_edge_id, rtt, loss, jitter, samples) in entries {
                                 probe_hub.report_quality(target_edge_id, rtt, loss, jitter, samples).await;
@@ -1178,84 +1176,15 @@ fn bind_session_addr(
         }
     }
 
-    if let Some(previous_addr) = session_to_addr.insert(session_id, addr) {
-        if previous_addr != addr {
+    if let Some(previous_addr) = session_to_addr.insert(session_id, addr)
+        && previous_addr != addr {
             addr_to_session.remove(&previous_addr);
         }
-    }
 
-    if let Some(previous_session) = addr_to_session.insert(addr, session_id) {
-        if previous_session != session_id {
+    if let Some(previous_session) = addr_to_session.insert(addr, session_id)
+        && previous_session != session_id {
             session_to_addr.remove(&previous_session);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{bind_session_addr, quality_report_metrics};
-    use crate::state::PeerQualityState;
-    use dashmap::DashMap;
-    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-
-    fn localhost(port: u16) -> SocketAddr {
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
-    }
-
-    #[test]
-    fn udp_rebind_updates_both_indexes() {
-        let addr_to_session = DashMap::new();
-        let session_to_addr = DashMap::new();
-        let old_addr = localhost(40_001);
-        let new_addr = localhost(40_002);
-
-        bind_session_addr(&addr_to_session, &session_to_addr, 10_001, old_addr);
-        bind_session_addr(&addr_to_session, &session_to_addr, 10_001, new_addr);
-
-        assert!(addr_to_session.get(&old_addr).is_none());
-        assert_eq!(
-            addr_to_session.get(&new_addr).map(|entry| *entry.value()),
-            Some(10_001)
-        );
-        assert_eq!(
-            session_to_addr.get(&10_001).map(|entry| *entry.value()),
-            Some(new_addr)
-        );
-    }
-
-    #[test]
-    fn bind_session_addr_recovers_after_forward_index_was_cleared() {
-        let addr_to_session = DashMap::new();
-        let session_to_addr = DashMap::new();
-        let old_addr = localhost(41_001);
-        let new_addr = localhost(41_002);
-
-        bind_session_addr(&addr_to_session, &session_to_addr, 10_002, old_addr);
-        session_to_addr.remove(&10_002);
-        bind_session_addr(&addr_to_session, &session_to_addr, 10_002, new_addr);
-
-        assert!(addr_to_session.get(&old_addr).is_none());
-        assert_eq!(
-            addr_to_session.get(&new_addr).map(|entry| *entry.value()),
-            Some(10_002)
-        );
-        assert_eq!(
-            session_to_addr.get(&10_002).map(|entry| *entry.value()),
-            Some(new_addr)
-        );
-    }
-
-    #[test]
-    fn quality_report_metrics_keeps_full_loss_without_rtt_samples() {
-        let mut quality = PeerQualityState::default();
-
-        quality.pending_pings.insert(1, 100);
-        quality.expire_stale_pings(200, 50, 32);
-
-        assert_eq!(quality.rtt_sample_count(), 0);
-        assert_eq!(quality.packet_loss(), Some(1.0));
-        assert_eq!(quality_report_metrics(&quality), Some((0.0, 1.0, 0.0, 1)));
-    }
 }
 
 /// Parse a Mumble UDP protobuf `Ping` payload (the bytes after the `0x01` header).
@@ -1395,12 +1324,11 @@ fn increment_hop_failure_by(
     }
     // Fast path: key exists — just increment.
     {
-        if let Ok(map) = failures.read() {
-            if let Some(counter) = map.get(&edge_id) {
+        if let Ok(map) = failures.read()
+            && let Some(counter) = map.get(&edge_id) {
                 counter.fetch_add(amount, Ordering::Relaxed);
                 return;
             }
-        }
     }
     // Slow path: first time we try to reach this edge.  Insert atomically.
     if let Ok(mut map) = failures.write() {
@@ -1422,11 +1350,10 @@ fn reset_hop_failure(
     if threshold == 0 {
         return;
     }
-    if let Ok(map) = failures.read() {
-        if let Some(counter) = map.get(&edge_id) {
+    if let Ok(map) = failures.read()
+        && let Some(counter) = map.get(&edge_id) {
             counter.store(0, std::sync::atomic::Ordering::Relaxed);
         }
-    }
 }
 
 /// Batch-send multiple UDP datagrams via a single `sendmmsg(2)` syscall (Linux only).
@@ -1619,4 +1546,71 @@ pub async fn test_send_relay_packet(
     pkt.extend_from_slice(&sender_session.to_be_bytes());
     pkt.extend_from_slice(payload);
     edge_socket.send_to(&pkt, target_addr).await.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bind_session_addr, quality_report_metrics};
+    use crate::state::PeerQualityState;
+    use dashmap::DashMap;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
+    fn localhost(port: u16) -> SocketAddr {
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
+    }
+
+    #[test]
+    fn udp_rebind_updates_both_indexes() {
+        let addr_to_session = DashMap::new();
+        let session_to_addr = DashMap::new();
+        let old_addr = localhost(40_001);
+        let new_addr = localhost(40_002);
+
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_001, old_addr);
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_001, new_addr);
+
+        assert!(addr_to_session.get(&old_addr).is_none());
+        assert_eq!(
+            addr_to_session.get(&new_addr).map(|entry| *entry.value()),
+            Some(10_001)
+        );
+        assert_eq!(
+            session_to_addr.get(&10_001).map(|entry| *entry.value()),
+            Some(new_addr)
+        );
+    }
+
+    #[test]
+    fn bind_session_addr_recovers_after_forward_index_was_cleared() {
+        let addr_to_session = DashMap::new();
+        let session_to_addr = DashMap::new();
+        let old_addr = localhost(41_001);
+        let new_addr = localhost(41_002);
+
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_002, old_addr);
+        session_to_addr.remove(&10_002);
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_002, new_addr);
+
+        assert!(addr_to_session.get(&old_addr).is_none());
+        assert_eq!(
+            addr_to_session.get(&new_addr).map(|entry| *entry.value()),
+            Some(10_002)
+        );
+        assert_eq!(
+            session_to_addr.get(&10_002).map(|entry| *entry.value()),
+            Some(new_addr)
+        );
+    }
+
+    #[test]
+    fn quality_report_metrics_keeps_full_loss_without_rtt_samples() {
+        let mut quality = PeerQualityState::default();
+
+        quality.pending_pings.insert(1, 100);
+        quality.expire_stale_pings(200, 50, 32);
+
+        assert_eq!(quality.rtt_sample_count(), 0);
+        assert_eq!(quality.packet_loss(), Some(1.0));
+        assert_eq!(quality_report_metrics(&quality), Some((0.0, 1.0, 0.0, 1)));
+    }
 }

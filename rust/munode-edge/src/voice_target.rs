@@ -6,6 +6,8 @@ use smallvec::SmallVec;
 
 use crate::channel_manager::ChannelManager;
 
+type ResolvedVoiceTargetSnapshot = (u32, u32, HashMap<u32, Option<Vec<String>>>);
+
 /// A single voice target configuration (whisper/shout destinations).
 #[derive(Debug, Clone)]
 pub struct VoiceTargetConfig {
@@ -237,10 +239,12 @@ pub(crate) fn resolve_voice_target_channels_with_snapshot(
 /// wins over any group restriction (union semantics).
 ///
 /// Resolution order (matches Mumble C++ server behaviour):
-///   1. Start with the base channel.
-///   2. If `links=true`, extend with all transitively linked channels.
-///   3. If `children=true`, extend with all recursive sub-channels of EVERY
-///      channel collected so far (base + links), not just the base channel.
+///
+/// 1. Start with the base channel.
+/// 2. If `links=true`, extend with all transitively linked channels.
+/// 3. If `children=true`, extend with all recursive sub-channels of EVERY
+///    channel collected so far (base + links), not just the base channel.
+///
 /// An empty-string group is treated the same as no group (no filter).
 pub async fn resolve_voice_target_channels(
     channels: &[VoiceTargetChannelConfig],
@@ -436,14 +440,16 @@ pub async fn recompute_link_affected_voice_targets(
                 let affected_link_channels = &affected_link_channels;
                 targets
                     .iter()
-                    .filter_map(move |(&target_id, voice_target)| {
+                    .filter(move |(_, voice_target)| {
                         voice_target
                             .channels
                             .iter()
                             .any(|config| {
                                 config.links && affected_link_channels.contains(&config.channel_id)
                             })
-                            .then(|| (session_id, target_id, voice_target.channels.clone()))
+                    })
+                    .map(move |(&target_id, voice_target)| {
+                        (session_id, target_id, voice_target.channels.clone())
                     })
             })
             .collect()
@@ -461,7 +467,7 @@ async fn recompute_voice_target_snapshots(
     link_graph: &HashMap<u32, Vec<u32>>,
     children_map: &HashMap<u32, Vec<u32>>,
 ) {
-    let resolved_list: Vec<(u32, u32, HashMap<u32, Option<Vec<String>>>)> = snapshots
+    let resolved_list: Vec<ResolvedVoiceTargetSnapshot> = snapshots
         .iter()
         .map(|(session_id, target_id, channels)| {
             (
@@ -478,12 +484,10 @@ async fn recompute_voice_target_snapshots(
         if let Some(voice_target) = cache
             .get_mut(&session_id)
             .and_then(|targets| targets.get_mut(&target_id))
-        {
-            if voice_target.resolved_channels != resolved_channels {
+            && voice_target.resolved_channels != resolved_channels {
                 voice_target.resolved_channels = resolved_channels;
                 touched_sessions.insert(session_id);
             }
-        }
     }
     if touched_sessions.is_empty() {
         return;

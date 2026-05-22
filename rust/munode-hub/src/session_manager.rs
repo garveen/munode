@@ -27,6 +27,12 @@ pub struct SessionManager {
     sessions: RwLock<HashMap<u32, SessionInfo>>,
 }
 
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionManager {
     pub fn new() -> Self {
         Self {

@@ -21,12 +21,12 @@ pub(super) async fn handle_user_state_update(
 
     if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
         // 9.1 Channel move with permission check
-        if let Some(target_channel_id) = user_state.channel_id {
-            if client.channel_id != target_channel_id {
+        if let Some(target_channel_id) = user_state.channel_id
+            && client.channel_id != target_channel_id {
                 // Check Enter permission on target channel via Hub
                 let can_enter = get_perm_cached(
-                    &hub_client,
-                    &edge_state,
+                    hub_client,
+                    edge_state,
                     session_id,
                     target_channel_id,
                     true,
@@ -64,8 +64,8 @@ pub(super) async fn handle_user_state_update(
                     // Check Speak permission before the atomic move so we know the
                     // suppress flag to set without holding any internal locks.
                     let can_speak = get_perm_cached(
-                        &hub_client,
-                        &edge_state,
+                        hub_client,
+                        edge_state,
                         session_id,
                         target_channel_id,
                         true,
@@ -108,7 +108,6 @@ pub(super) async fn handle_user_state_update(
                     return;
                 }
             }
-        }
 
         // Self-deaf update: self_deaf=true implies self_mute=true (Mumble protocol coupling).
         if let Some(self_deaf) = user_state.self_deaf {
@@ -142,7 +141,7 @@ pub(super) async fn handle_user_state_update(
         // Murmur: if target == actor → SelfRegisterPermission; else → RegisterPermission.
         if user_state.user_id.is_some() {
             // Check SelfRegister permission on root channel (channel 0)
-            let has_self_register = get_perm_cached(&hub_client, &edge_state, session_id, 0, false)
+            let has_self_register = get_perm_cached(hub_client, edge_state, session_id, 0, false)
                 .await
                 & perm::SELF_REGISTER
                 != 0;
@@ -200,12 +199,11 @@ pub(super) async fn handle_user_state_update(
         // bBroadcast if `pDstServerUser->bRecording != msg.recording()`, so
         // a client resending `recording=false` on connect should NOT generate
         // a "User stopped recording" notification on other clients.
-        if let Some(rec) = user_state.recording {
-            if rec != client.recording {
+        if let Some(rec) = user_state.recording
+            && rec != client.recording {
                 client.recording = rec;
                 needs_broadcast = true;
             }
-        }
 
         // 9.4 Listening channel add/remove
         let mut actually_added_channels: Vec<u32> = Vec::new();
@@ -244,7 +242,7 @@ pub(super) async fn handle_user_state_update(
                 }
 
                 // Check Listen permission (0x800) before the atomic add.
-                let can_listen = get_perm_cached(&hub_client, &edge_state, session_id, ch, true)
+                let can_listen = get_perm_cached(hub_client, edge_state, session_id, ch, true)
                     .await
                     & perm::LISTEN
                     != 0;
@@ -305,34 +303,32 @@ pub(super) async fn handle_user_state_update(
                     state_update.self_deaf = Some(false);
                 }
             }
-            if let Some(v) = user_state.recording {
-                if state_update.recording.is_none() {
+            if let Some(v) = user_state.recording
+                && state_update.recording.is_none() {
                     state_update.recording = Some(v);
                 }
-            }
 
             let listening_channel_add = actually_added_channels.clone();
             let listening_channel_remove = user_state.listening_channel_remove.clone();
-            if state_update.self_mute.is_some()
+            if (state_update.self_mute.is_some()
                 || state_update.self_deaf.is_some()
                 || state_update.recording.is_some()
                 || !listening_channel_add.is_empty()
-                || !listening_channel_remove.is_empty()
-            {
-                if let Err(e) = hub_client
-                    .rpc_user_state_changed(
+                || !listening_channel_remove.is_empty())
+                && let Err(e) = hub_client
+                    .rpc_user_state_changed(crate::hub_client::UserStateChangeRequest {
                         session_id,
-                        state_update.self_mute,
-                        state_update.self_deaf,
-                        None,
-                        None,
-                        None,
-                        None,
-                        state_update.recording,
+                        self_mute: state_update.self_mute,
+                        self_deaf: state_update.self_deaf,
+                        mute: None,
+                        deaf: None,
+                        suppress: None,
+                        priority_speaker: None,
+                        recording: state_update.recording,
                         listening_channel_add,
                         listening_channel_remove,
-                        None,
-                    )
+                        actor_session: None,
+                    })
                     .await
                 {
                     warn!(
@@ -340,7 +336,6 @@ pub(super) async fn handle_user_state_update(
                         session_id, e
                     );
                 }
-            }
             return;
         }
 
@@ -461,8 +456,8 @@ pub(super) async fn handle_user_state_update(
                 if data_len > 128 {
                     // Long comments: persist to blob store and broadcast the hash so
                     // peers can request the full text via RequestBlob.
-                    if let Some(hash_hex) = hub_client.blob_set_user_comment(uid, data).await {
-                        if let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
+                    if let Some(hash_hex) = hub_client.blob_set_user_comment(uid, data).await
+                        && let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
                             let hash_msg = mumbleproto::UserState {
                                 session: Some(session_id),
                                 actor: Some(session_id),
@@ -479,7 +474,6 @@ pub(super) async fn handle_user_state_update(
                                 .broadcast(MessageType::UserState, &hash_msg, None)
                                 .await;
                         }
-                    }
                 } else {
                     // Short comments: broadcast inline immediately.  Also persist to
                     // blob store for later retrieval, but don't gate the broadcast on it.
@@ -511,8 +505,8 @@ pub(super) async fn handle_user_state_update(
                     .await
                 {
                     let is_full = e.to_string().contains("Channel is full");
-                    if is_full {
-                        if let Some(sender) = edge_state.client_manager.get_sender(session_id).await
+                    if is_full
+                        && let Some(sender) = edge_state.client_manager.get_sender(session_id).await
                         {
                             let pq = mumbleproto::PermissionDenied {
                                 r#type: Some(
@@ -526,27 +520,26 @@ pub(super) async fn handle_user_state_update(
                                 .send_message(MessageType::PermissionDenied, &pq)
                                 .await;
                         }
-                    }
                     warn!("rpc_user_moved failed for session {}: {:#}", session_id, e);
                 } else {
                     move_committed = true;
                 }
 
-                if move_committed && suppress_changed {
-                    if let Err(e) = hub_client
-                        .rpc_user_state_changed(
+                if move_committed && suppress_changed
+                    && let Err(e) = hub_client
+                        .rpc_user_state_changed(crate::hub_client::UserStateChangeRequest {
                             session_id,
-                            None,
-                            None,
-                            None,
-                            None,
-                            Some(client.suppress),
-                            None,
-                            None,
-                            vec![],
-                            vec![],
-                            None,
-                        )
+                            self_mute: None,
+                            self_deaf: None,
+                            mute: None,
+                            deaf: None,
+                            suppress: Some(client.suppress),
+                            priority_speaker: None,
+                            recording: None,
+                            listening_channel_add: vec![],
+                            listening_channel_remove: vec![],
+                            actor_session: None,
+                        })
                         .await
                     {
                         warn!(
@@ -554,7 +547,6 @@ pub(super) async fn handle_user_state_update(
                             session_id, e
                         );
                     }
-                }
             } else {
                 edge_state
                     .client_manager
@@ -580,11 +572,10 @@ pub(super) async fn handle_user_state_update(
                     }
                 }
 
-                if let Some(v) = user_state.recording {
-                    if broadcast_msg.recording.is_none() {
+                if let Some(v) = user_state.recording
+                    && broadcast_msg.recording.is_none() {
                         broadcast_msg.recording = Some(v);
                     }
-                }
 
                 if !actually_added_channels.is_empty() {
                     broadcast_msg.listening_channel_add = actually_added_channels.clone();
@@ -636,7 +627,7 @@ pub(super) async fn handle_user_state_update(
                 } else {
                     vec![]
                 };
-                if broadcast_msg.self_mute.is_some()
+                if (broadcast_msg.self_mute.is_some()
                     || broadcast_msg.self_deaf.is_some()
                     || broadcast_msg.mute.is_some()
                     || broadcast_msg.deaf.is_some()
@@ -644,22 +635,21 @@ pub(super) async fn handle_user_state_update(
                     || broadcast_msg.recording.is_some()
                     || !listening_channel_add.is_empty()
                     || !listening_channel_remove.is_empty()
-                    || !broadcast_msg.listening_volume_adjustment.is_empty()
-                {
-                    if let Err(e) = hub_client
-                        .rpc_user_state_changed(
+                    || !broadcast_msg.listening_volume_adjustment.is_empty())
+                    && let Err(e) = hub_client
+                        .rpc_user_state_changed(crate::hub_client::UserStateChangeRequest {
                             session_id,
-                            broadcast_msg.self_mute,
-                            broadcast_msg.self_deaf,
-                            broadcast_msg.mute,
-                            broadcast_msg.deaf,
-                            None,
-                            broadcast_msg.priority_speaker,
-                            broadcast_msg.recording,
+                            self_mute: broadcast_msg.self_mute,
+                            self_deaf: broadcast_msg.self_deaf,
+                            mute: broadcast_msg.mute,
+                            deaf: broadcast_msg.deaf,
+                            suppress: None,
+                            priority_speaker: broadcast_msg.priority_speaker,
+                            recording: broadcast_msg.recording,
                             listening_channel_add,
                             listening_channel_remove,
-                            None,
-                        )
+                            actor_session: None,
+                        })
                         .await
                     {
                         warn!(
@@ -667,7 +657,6 @@ pub(super) async fn handle_user_state_update(
                             session_id, e
                         );
                     }
-                }
             }
         }
     }
@@ -710,8 +699,8 @@ pub(super) async fn handle_admin_user_state_update(
             }
 
             let has_mute_deafen = get_perm_cached(
-                &hub_client,
-                &edge_state,
+                hub_client,
+                edge_state,
                 actor_session,
                 client.channel_id,
                 false,
@@ -757,7 +746,7 @@ pub(super) async fn handle_admin_user_state_update(
         // user is not allowed (Murmur: TextTooLong denial for any non-empty comment).
         if let Some(ref comment) = user_state.comment {
             // Check Move permission on root channel (channel 0)
-            let has_move_root = get_perm_cached(&hub_client, &edge_state, actor_session, 0, false)
+            let has_move_root = get_perm_cached(hub_client, edge_state, actor_session, 0, false)
                 .await
                 & perm::MOVE
                 != 0;
@@ -803,19 +792,19 @@ pub(super) async fn handle_admin_user_state_update(
                 .broadcast(MessageType::UserState, &clear_msg, None)
                 .await;
             hub_client
-                .rpc_user_state_changed(
-                    target_session,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    vec![],
-                    vec![],
-                    Some(actor_session),
-                )
+                .rpc_user_state_changed(crate::hub_client::UserStateChangeRequest {
+                    session_id: target_session,
+                    self_mute: None,
+                    self_deaf: None,
+                    mute: None,
+                    deaf: None,
+                    suppress: None,
+                    priority_speaker: None,
+                    recording: None,
+                    listening_channel_add: vec![],
+                    listening_channel_remove: vec![],
+                    actor_session: Some(actor_session),
+                })
                 .await
                 .ok();
             return;
@@ -824,7 +813,7 @@ pub(super) async fn handle_admin_user_state_update(
         // Admin registration: actor registering another user by setting user_id on their session.
         // Requires Register permission on root channel; target must have a certificate.
         if user_state.user_id.is_some() {
-            let has_register = get_perm_cached(&hub_client, &edge_state, actor_session, 0, false)
+            let has_register = get_perm_cached(hub_client, edge_state, actor_session, 0, false)
                 .await
                 & perm::REGISTER
                 != 0;
@@ -879,13 +868,13 @@ pub(super) async fn handle_admin_user_state_update(
 
         // Admin channel move (drag user to another channel)
         let mut channel_moved = false;
-        if let Some(target_channel_id) = user_state.channel_id {
-            if client.channel_id != target_channel_id {
+        if let Some(target_channel_id) = user_state.channel_id
+            && client.channel_id != target_channel_id {
                 // Check 1: actor needs Move permission in the victim's current channel
                 // (mirrors Murmur: "!hasPermission(uSource, pDstServerUser->cChannel, ChanACL::Move)").
                 let actor_can_move_out = get_perm_cached(
-                    &hub_client,
-                    &edge_state,
+                    hub_client,
+                    edge_state,
                     actor_session,
                     client.channel_id,
                     false,
@@ -915,8 +904,8 @@ pub(super) async fn handle_admin_user_state_update(
                 // Check 2: actor has Move in the target channel OR victim has Enter there
                 // (mirrors Murmur: "!hasPermission(uSource, c, Move) && !hasPermission(pDst, c, Enter)").
                 let actor_can_move_in = get_perm_cached(
-                    &hub_client,
-                    &edge_state,
+                    hub_client,
+                    edge_state,
                     actor_session,
                     target_channel_id,
                     false,
@@ -928,8 +917,8 @@ pub(super) async fn handle_admin_user_state_update(
                     false
                 } else {
                     get_perm_cached(
-                        &hub_client,
-                        &edge_state,
+                        hub_client,
+                        edge_state,
                         target_session,
                         target_channel_id,
                         false,
@@ -959,8 +948,8 @@ pub(super) async fn handle_admin_user_state_update(
 
                 // Re-check suppress for the new channel
                 let can_speak = get_perm_cached(
-                    &hub_client,
-                    &edge_state,
+                    hub_client,
+                    edge_state,
                     target_session,
                     target_channel_id,
                     true,
@@ -975,7 +964,6 @@ pub(super) async fn handle_admin_user_state_update(
                 needs_broadcast = true;
                 channel_moved = true;
             }
-        }
 
         if needs_broadcast {
             if channel_moved {
@@ -984,8 +972,8 @@ pub(super) async fn handle_admin_user_state_update(
                     .await
                 {
                     let is_full = e.to_string().contains("Channel is full");
-                    if is_full {
-                        if let Some(sender) =
+                    if is_full
+                        && let Some(sender) =
                             edge_state.client_manager.get_sender(actor_session).await
                         {
                             let pq = mumbleproto::PermissionDenied {
@@ -1000,7 +988,6 @@ pub(super) async fn handle_admin_user_state_update(
                                 .send_message(MessageType::PermissionDenied, &pq)
                                 .await;
                         }
-                    }
                     warn!(
                         "rpc_user_moved failed (admin move, session {}): {:#}",
                         target_session, e
@@ -1008,19 +995,19 @@ pub(super) async fn handle_admin_user_state_update(
                 }
             } else {
                 if let Err(e) = hub_client
-                    .rpc_user_state_changed(
-                        target_session,
-                        None,
-                        None,
-                        user_state.mute,
-                        user_state.deaf,
-                        user_state.suppress,
-                        user_state.priority_speaker,
-                        None,
-                        vec![],
-                        vec![],
-                        Some(actor_session), // carry actor so other edges can show who muted
-                    )
+                    .rpc_user_state_changed(crate::hub_client::UserStateChangeRequest {
+                        session_id: target_session,
+                        self_mute: None,
+                        self_deaf: None,
+                        mute: user_state.mute,
+                        deaf: user_state.deaf,
+                        suppress: user_state.suppress,
+                        priority_speaker: user_state.priority_speaker,
+                        recording: None,
+                        listening_channel_add: vec![],
+                        listening_channel_remove: vec![],
+                        actor_session: Some(actor_session),
+                    })
                     .await
                 {
                     warn!(
@@ -1057,8 +1044,8 @@ pub(super) async fn handle_admin_user_state_update(
             }
 
             let has_mute_deafen = get_perm_cached(
-                &hub_client,
-                &edge_state,
+                hub_client,
+                edge_state,
                 actor_session,
                 remote.channel_id,
                 false,
@@ -1083,19 +1070,19 @@ pub(super) async fn handle_admin_user_state_update(
             }
 
             if let Err(e) = hub_client
-                .rpc_user_state_changed(
-                    target_session,
-                    None,
-                    None,
-                    user_state.mute,
-                    user_state.deaf,
-                    user_state.suppress,
-                    user_state.priority_speaker,
-                    None,
-                    vec![],
-                    vec![],
-                    Some(actor_session),
-                )
+                .rpc_user_state_changed(crate::hub_client::UserStateChangeRequest {
+                    session_id: target_session,
+                    self_mute: None,
+                    self_deaf: None,
+                    mute: user_state.mute,
+                    deaf: user_state.deaf,
+                    suppress: user_state.suppress,
+                    priority_speaker: user_state.priority_speaker,
+                    recording: None,
+                    listening_channel_add: vec![],
+                    listening_channel_remove: vec![],
+                    actor_session: Some(actor_session),
+                })
                 .await
             {
                 warn!(
@@ -1114,8 +1101,8 @@ pub(super) async fn handle_admin_user_state_update(
 
             // Permission check 1: actor must have Move in victim's current channel.
             let actor_can_move_out = get_perm_cached(
-                &hub_client,
-                &edge_state,
+                hub_client,
+                edge_state,
                 actor_session,
                 remote.channel_id,
                 false,
@@ -1141,8 +1128,8 @@ pub(super) async fn handle_admin_user_state_update(
 
             // Permission check 2: actor has Move in target OR victim has Enter there.
             let actor_can_move_in = get_perm_cached(
-                &hub_client,
-                &edge_state,
+                hub_client,
+                edge_state,
                 actor_session,
                 target_channel_id,
                 false,
@@ -1154,8 +1141,8 @@ pub(super) async fn handle_admin_user_state_update(
                 false
             } else {
                 get_perm_cached(
-                    &hub_client,
-                    &edge_state,
+                    hub_client,
+                    edge_state,
                     target_session,
                     target_channel_id,
                     false,

@@ -177,8 +177,8 @@ impl ChannelStore {
     /// Update an existing channel. Returns true if the channel existed.
     pub async fn update_channel(&self, ch: ChannelRecord) -> bool {
         let mut channels = self.channels.write().await;
-        if channels.contains_key(&ch.id) {
-            channels.insert(ch.id, ch);
+        if let std::collections::hash_map::Entry::Occupied(mut e) = channels.entry(ch.id) {
+            e.insert(ch);
             true
         } else {
             false

@@ -94,7 +94,7 @@ async fn test_query_user_stats_with_stats_only_flag() -> Result<()> {
 
     if let Some(stats) = waiter.await? {
         assert_eq!(stats.session(), session1);
-        assert_eq!(stats.stats_only(), true);
+        assert!(stats.stats_only());
         // stats_only mode: certificates list must be empty
         assert!(stats.certificates.is_empty());
     }

@@ -493,8 +493,8 @@ async fn try_connect_capture_reject(
     .await;
 
     let _ = handle.await;
-    let v = captured.lock().await.clone();
-    v
+    
+    *captured.lock().await
 }
 
 #[tokio::test]

@@ -59,6 +59,12 @@ impl Clone for CryptState {
     }
 }
 
+impl Default for CryptState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CryptState {
     /// Create a new CryptState with zero key/IVs.
     pub fn new() -> Self {

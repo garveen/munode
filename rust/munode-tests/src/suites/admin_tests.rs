@@ -208,7 +208,7 @@ fn test_admin_schema_version() -> Result<()> {
     let n: u32 = stdout
         .lines()
         .find_map(|l| l.split("Schema version:").nth(1))
-        .and_then(|s| s.trim().split_whitespace().next())
+        .and_then(|s| s.split_whitespace().next())
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let _ = n; // Just verify it parses

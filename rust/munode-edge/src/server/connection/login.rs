@@ -294,15 +294,15 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         .await
         .expect("auth semaphore closed");
     let auth_result = match hub_client
-        .authenticate_user(
-            sid,
-            &username,
-            &password,
+        .authenticate_user(crate::hub_client::AuthenticateUserRequest {
+            session_id: sid,
+            username: &username,
+            password: &password,
             tokens,
-            Some(client_info),
+            client_info: Some(client_info),
             preconnect_self_mute,
             preconnect_self_deaf,
-        )
+        })
         .await
     {
         Ok(result) => result,
@@ -573,21 +573,21 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     // notify Hub and peer Edges about the correct suppress value.  Without this, the Hub session
     // would keep suppress=false (the auth-time value) and other edges would show this user as
     // unsuppressed even though they cannot speak.
-    if client.suppress && !auth_result.suppress.unwrap_or(false) {
-        if let Err(e) = hub_client
-            .rpc_user_state_changed(
-                sid,
-                None,
-                None,
-                None,
-                None,
-                Some(true), // suppress
-                None,
-                None,
-                vec![],
-                vec![],
-                None, // no actor for server-side suppress
-            )
+    if client.suppress && !auth_result.suppress.unwrap_or(false)
+        && let Err(e) = hub_client
+            .rpc_user_state_changed(crate::hub_client::UserStateChangeRequest {
+                session_id: sid,
+                self_mute: None,
+                self_deaf: None,
+                mute: None,
+                deaf: None,
+                suppress: Some(true),
+                priority_speaker: None,
+                recording: None,
+                listening_channel_add: vec![],
+                listening_channel_remove: vec![],
+                actor_session: None,
+            })
             .await
         {
             warn!(
@@ -595,7 +595,6 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
                 sid, e
             );
         }
-    }
 
     // Load persisted channel listeners for registered users.  Restoration is
     // deferred to the outer loop (after the client transitions to `Ready`) so

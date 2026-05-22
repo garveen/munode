@@ -112,6 +112,12 @@ struct AuthServiceInner {
     sender: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
 }
 
+impl Default for AuthServiceHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AuthServiceHandle {
     pub fn new() -> Self {
         Self {
@@ -179,9 +185,7 @@ impl AuthServiceHandle {
         // block connection handover.
         let tx_clone = {
             let sender_guard = self.inner.sender.lock().await;
-            let Some(tx) = sender_guard.as_ref() else {
-                return None;
-            };
+            let tx = sender_guard.as_ref()?;
             let generation = self.inner.active_conn_gen.load(Ordering::Relaxed);
             {
                 let mut pending = self.inner.pending.lock().await;

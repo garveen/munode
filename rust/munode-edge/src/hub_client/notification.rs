@@ -679,7 +679,7 @@ impl HubClient {
                                     let current = self.edge_state.peer_registry.load();
                                     current
                                         .get(peer_edge_id)
-                                        .map_or(true, |info| info.udp_addr != udp_addr)
+                                        .is_none_or(|info| info.udp_addr != udp_addr)
                                 };
                                 if addr_changed {
                                     warn!(
@@ -845,7 +845,7 @@ impl HubClient {
                         };
                         new_table
                             .entry(entry.target_edge_id)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(candidate);
                     }
                     for candidates in new_table.values_mut() {
@@ -878,11 +878,10 @@ impl HubClient {
                         .edge_state
                         .dissemination_route_epoch
                         .swap(incoming_route_epoch, Ordering::Relaxed);
-                    if previous_route_epoch != incoming_route_epoch {
-                        if let Ok(mut windows) = self.edge_state.dissemination_dedupe.lock() {
+                    if previous_route_epoch != incoming_route_epoch
+                        && let Ok(mut windows) = self.edge_state.dissemination_dedupe.lock() {
                             windows.clear();
                         }
-                    }
 
                     let mut new_routes: HashMap<u32, DisseminationSourceState> = HashMap::new();
                     for source in &params.sources {
@@ -945,11 +944,9 @@ impl HubClient {
                         for &sid in target_sessions {
                             if let Some(sender) =
                                 self.edge_state.client_manager.get_sender(sid).await
-                            {
-                                if !sender.try_send_raw(data.clone()) {
+                                && !sender.try_send_raw(data.clone()) {
                                     warn!("Dropped ContextActionModify for slow session {}", sid);
                                 }
-                            }
                         }
                         debug!(
                             "ContextActionModify sent to {} client(s): action={:?}",
@@ -968,9 +965,9 @@ impl HubClient {
                     }
                 // Check for hub.aclUpdated (uses unknown_params_json)
                 } else if method == "hub.aclUpdated" {
-                    if let Some(json_str) = &notification.unknown_params_json {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                            if let Some(channel_id) = val.get("channel_id").and_then(|v| v.as_u64())
+                    if let Some(json_str) = &notification.unknown_params_json
+                        && let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str)
+                            && let Some(channel_id) = val.get("channel_id").and_then(|v| v.as_u64())
                             {
                                 let is_enter_restricted = val
                                     .get("is_enter_restricted")
@@ -989,13 +986,11 @@ impl HubClient {
                                     is_enter_restricted,
                                 });
                             }
-                        }
-                    }
                 // Check for hub.ninjaConfig (uses unknown_params_json)
                 } else if method == "hub.ninjaConfig" {
-                    if let Some(json_str) = &notification.unknown_params_json {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                            if val
+                    if let Some(json_str) = &notification.unknown_params_json
+                        && let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str)
+                            && val
                                 .get("enabled")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false)
@@ -1013,8 +1008,6 @@ impl HubClient {
                                 *nc = channels;
                                 debug!("Ninja channels updated from Hub: {:?}", &*nc);
                             }
-                        }
-                    }
                 } else {
                     debug!("Unhandled notification: {}", method);
                 }
@@ -1056,20 +1049,18 @@ impl HubClient {
             limits.max_users.unwrap_or(0),
             std::sync::atomic::Ordering::Relaxed,
         );
-        if let Some(v) = limits.listeners_per_user {
-            if v > 0 {
+        if let Some(v) = limits.listeners_per_user
+            && v > 0 {
                 self.edge_state
                     .listeners_per_user
                     .store(v, std::sync::atomic::Ordering::Relaxed);
             }
-        }
-        if let Some(v) = limits.listeners_per_channel {
-            if v > 0 {
+        if let Some(v) = limits.listeners_per_channel
+            && v > 0 {
                 self.edge_state
                     .listeners_per_channel
                     .store(v, std::sync::atomic::Ordering::Relaxed);
             }
-        }
         *self.edge_state.hub_limits.write().await = Some(limits);
     }
 }

@@ -85,7 +85,7 @@ mod tests {
     fn test_build_parse_voice_packet() {
         // Build a packet as the server would send it back (session included)
         // The server-to-client format has [header][session][seq][data]
-        let header = (4u8 << 5) | 0; // Opus, target=0
+        let header = 4u8 << 5; // Opus, target=0
         let session = 42u32;
         let sequence = 7u64;
         let audio = vec![0xAB, 0xCD, 0xEF];

@@ -154,8 +154,8 @@ pub(crate) async fn hub_event_listener(
                         is_ninja,
                     } => {
                         // Only broadcast for REMOTE users (not local clients - handled by main task)
-                        if state.client_manager.get_client(session_id).await.is_none() {
-                            if let Some(user) =
+                        if state.client_manager.get_client(session_id).await.is_none()
+                            && let Some(user) =
                                 state.channel_manager.get_remote_user(session_id).await
                             {
                                 // When announcing a newly-joined user we must NOT include Some(false)
@@ -217,7 +217,6 @@ pub(crate) async fn hub_event_listener(
                                         .await;
                                 }
                             }
-                        }
                         debug!(
                             "Broadcast remote user joined: {} (session {}, channel {}, ninja={})",
                             username, session_id, channel_id, is_ninja

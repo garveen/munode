@@ -120,11 +120,10 @@ impl ChannelManager {
 
         // Apply link info
         for link in links {
-            if let Some(ch) = ch_map.get_mut(&link.channel_id) {
-                if !ch.links.contains(&link.target_id) {
+            if let Some(ch) = ch_map.get_mut(&link.channel_id)
+                && !ch.links.contains(&link.target_id) {
                     ch.links.push(link.target_id);
                 }
-            }
         }
 
         info!("Loaded {} channels from Hub", ch_map.len());
@@ -211,13 +210,11 @@ impl ChannelManager {
         };
 
         let mut children = self.channel_children.write().await;
-        if old_parent_id != new_parent_id {
-            if let Some(old_pid) = old_parent_id {
-                if let Some(list) = children.get_mut(&old_pid) {
+        if old_parent_id != new_parent_id
+            && let Some(old_pid) = old_parent_id
+                && let Some(list) = children.get_mut(&old_pid) {
                     list.retain(|&child_id| child_id != id);
                 }
-            }
-        }
         if let Some(new_pid) = new_parent_id {
             let list = children.entry(new_pid).or_default();
             if !list.contains(&id) {
@@ -229,13 +226,11 @@ impl ChannelManager {
 
     /// Remove a channel.
     pub async fn remove_channel(&self, channel_id: u32) {
-        if let Some(ch) = self.channels.write().await.remove(&channel_id) {
-            if let Some(pid) = ch.parent_id {
-                if let Some(children) = self.channel_children.write().await.get_mut(&pid) {
+        if let Some(ch) = self.channels.write().await.remove(&channel_id)
+            && let Some(pid) = ch.parent_id
+                && let Some(children) = self.channel_children.write().await.get_mut(&pid) {
                     children.retain(|&id| id != channel_id);
                 }
-            }
-        }
         self.channel_children.write().await.remove(&channel_id);
         debug!("Removed channel {}", channel_id);
     }
@@ -249,18 +244,16 @@ impl ChannelManager {
         let mut index = self.channel_to_sessions.write().await;
         // Remove from the old channel bucket if the user already existed and moved.
         if let Some(old) = users.get(&sid) {
-            if old.channel_id != new_channel {
-                if let Some(set) = index.get_mut(&old.channel_id) {
+            if old.channel_id != new_channel
+                && let Some(set) = index.get_mut(&old.channel_id) {
                     set.remove(&sid);
                 }
-            }
             // Remove from listening channel buckets that are no longer active.
             for &ch in &old.listening_channels {
-                if !new_listening.contains(&ch) {
-                    if let Some(set) = index.get_mut(&ch) {
+                if !new_listening.contains(&ch)
+                    && let Some(set) = index.get_mut(&ch) {
                         set.remove(&sid);
                     }
-                }
             }
         }
         index.entry(new_channel).or_default().insert(sid);
