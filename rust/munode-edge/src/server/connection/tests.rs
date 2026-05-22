@@ -188,6 +188,31 @@ fn decode_user_state(data: &[u8]) -> mumbleproto::UserState {
     mumbleproto::UserState::decode(&frame.payload[..]).expect("decode UserState")
 }
 
+async fn recv_user_state_for_session(
+    rx: &mut mpsc::Receiver<bytes::Bytes>,
+    target_session: u32,
+) -> mumbleproto::UserState {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(100);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let data = tokio::time::timeout(remaining, rx.recv())
+            .await
+            .expect("timed out waiting for UserState")
+            .expect("channel closed while waiting for UserState");
+        let mut buf = BytesMut::from(data.as_ref());
+        let frame = decode_frame(&mut buf)
+            .expect("decode_frame ok")
+            .expect("frame present");
+        if frame.message_type != MessageType::UserState {
+            continue;
+        }
+        let msg = mumbleproto::UserState::decode(&frame.payload[..]).expect("decode UserState");
+        if msg.session == Some(target_session) {
+            return msg;
+        }
+    }
+}
+
 async fn assert_no_message(rx: &mut mpsc::Receiver<bytes::Bytes>) {
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
@@ -644,6 +669,12 @@ async fn test_remote_user_joined_true_flags_are_included() {
 }
 
 // -----------------------------------------------------------------------
+// Regression: after HubRegistered recovery, current LOCAL users must also be
+// re-announced to local observers or source-edge views can remain stale after
+// event-listener lag drops queued move/state events.
+// -----------------------------------------------------------------------
+
+// -----------------------------------------------------------------------
 // Regression: RemoteUserStateChanged must only broadcast fields present
 // in the delta, not ALL current state. Broadcasting all state would send
 // Some(false) for every default-off field on every state update.
@@ -728,6 +759,44 @@ async fn test_remote_user_state_changed_unmute_carries_false() {
     );
     // Other fields still absent.
     assert_eq!(msg.recording, None);
+}
+
+// -----------------------------------------------------------------------
+// Regression: HubRegistered replay must also re-announce current LOCAL users.
+// Without this, event-listener lag recovery can permanently lose same-edge
+// user-state broadcasts while Hub notifications continue to update state.
+// -----------------------------------------------------------------------
+#[tokio::test]
+async fn test_hub_registered_reannounces_local_users() {
+    let (es, _hub) = test_edge_and_hub();
+
+    let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(32);
+    let (tx_target, _rx_target) = mpsc::channel::<bytes::Bytes>(32);
+
+    es.client_manager
+        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .await;
+
+    let mut moved_local = ready_client(2, 0);
+    moved_local.self_mute = true;
+    es.client_manager
+        .add_client(moved_local, ClientSender::new(tx_target))
+        .await;
+
+    let es = run_event_listener_task(es).await;
+    es.emit(EdgeEvent::HubRegistered {
+        disappeared_session_ids: vec![],
+    });
+
+    let msg = recv_user_state_for_session(&mut rx_obs, 2).await;
+    assert_eq!(msg.session, Some(2));
+    assert_eq!(msg.name.as_deref(), Some("user2"));
+    assert_eq!(msg.channel_id, Some(0));
+    assert_eq!(
+        msg.self_mute,
+        Some(true),
+        "HubRegistered recovery must replay current local user state"
+    );
 }
 
 // -----------------------------------------------------------------------

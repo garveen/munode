@@ -117,7 +117,46 @@ async fn handle_hub_registered(disappeared_session_ids: Vec<u32>, state: &Arc<Ed
         authenticated_clients.len()
     );
 
-    // 3. Re-broadcast channel states.
+    // 3. Re-announce current local users as well.
+    //
+    // This is primarily a recovery path for event-listener lag: after a runtime
+    // full-sync we intentionally discard stale queued events and keep only the
+    // latest HubRegistered, so the current local-user snapshot must be replayed
+    // here or source-edge observers can remain stuck on an old view.
+    for user in &authenticated_clients {
+        let mut msg = handler::build_user_state_msg(user);
+        msg.listening_channel_add = user.listening_channels.clone();
+
+        if ninja_channels_snap.contains(&user.channel_id) {
+            for client in &authenticated_clients {
+                let can_see = client.session == user.session
+                    || ninja_visible
+                        .get(&client.session)
+                        .map(|set| set.contains(&user.channel_id))
+                        .unwrap_or(false);
+                if can_see {
+                    state
+                        .client_manager
+                        .send_to(client.session, MessageType::UserState, &msg)
+                        .await;
+                }
+            }
+        } else {
+            for client in &authenticated_clients {
+                state
+                    .client_manager
+                    .send_to(client.session, MessageType::UserState, &msg)
+                    .await;
+            }
+        }
+    }
+    info!(
+        "Hub registered — re-announced {} local user(s) to {} local client(s)",
+        authenticated_clients.len(),
+        authenticated_clients.len()
+    );
+
+    // 4. Re-broadcast channel states.
     let channels = state.channel_manager.get_channels_bfs().await;
     for ch in &channels {
         let ch_msg = handler::build_channel_state_msg(ch);
@@ -511,7 +550,6 @@ pub(crate) async fn hub_event_listener(
                     }
                     EdgeEvent::HubReconcileDisappeared { session_ids } => {
                         // Grace period elapsed after Hub cold restart.
-                        // session_ids are remote sessions that never came back — evict them.
                         if !session_ids.is_empty() {
                             let local_clients = state.client_manager.get_all_clients().await;
                             let authenticated_clients: Vec<_> = local_clients

@@ -322,6 +322,7 @@ struct PendingRequest {
     /// has not yet committed it to a concrete slot. Fast Hub responses can
     /// arrive in that window, so the pending entry must already exist.
     slot: Option<usize>,
+    method: String,
 }
 
 /// A control notification that failed to reach Hub and must be replayed after
@@ -1566,6 +1567,7 @@ impl HubClient {
     /// Hub’s per-edge `EdgeInboundSequencer` re-orders any out-of-order arrivals caused
     /// by concurrent pool slots, eliminating races in upper-layer notification handlers.
     async fn send_notification(&self, notification: TypedRpcNotification) -> Result<()> {
+        let method = notification.method.clone();
         let seq_val = self.outbound_notif_seq.fetch_add(1, Ordering::Relaxed) + 1;
         let packet = EdgeHubPacket {
             r#type: PacketType::RpcNotification as i32,
@@ -1573,6 +1575,12 @@ impl HubClient {
             edge_notification_seq: Some(seq_val),
             ..Default::default()
         };
+        info!(
+            edge_id = self.edge_id(),
+            method = method.as_str(),
+            seq = seq_val,
+            "Edge -> Hub notification"
+        );
         self.send_packet(&packet).await
     }
 
@@ -1608,6 +1616,7 @@ impl HubClient {
         Self::ensure_stable_request_id(&mut request);
         let method = request.method.clone();
         let request_id = request.request_id.clone();
+        let stable_request_id = request.stable_request_id.clone().unwrap_or_default();
         let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(30000) as u64);
         let (tx, rx) = oneshot::channel();
 
@@ -1623,6 +1632,7 @@ impl HubClient {
             PendingRequest {
                 tx,
                 slot: Some(slot),
+                method: method.clone(),
             },
         );
 
@@ -1631,6 +1641,15 @@ impl HubClient {
             return Err(error)
                 .with_context(|| format!("failed to send RPC {} on pool slot {}", method, slot));
         }
+
+        info!(
+            edge_id = self.edge_id(),
+            method = method.as_str(),
+            request_id = request_id.as_str(),
+            stable_request_id = stable_request_id.as_str(),
+            slot,
+            "Edge -> Hub RPC request"
+        );
 
         match time::timeout(timeout, rx).await {
             Ok(Ok(Ok(response))) => Ok(response),
@@ -1679,10 +1698,14 @@ impl HubClient {
             };
             let data = packet.encode_to_vec();
 
-            self.pending
-                .lock()
-                .await
-                .insert(request_id.clone(), PendingRequest { tx, slot: None });
+            self.pending.lock().await.insert(
+                request_id.clone(),
+                PendingRequest {
+                    tx,
+                    slot: None,
+                    method: method.clone(),
+                },
+            );
 
             let used_slot = match self.send_raw(data).await {
                 Ok(s) => s,
@@ -1721,6 +1744,16 @@ impl HubClient {
             if let Some(pending) = self.pending.lock().await.get_mut(&request_id) {
                 pending.slot = Some(used_slot);
             }
+
+            info!(
+                edge_id = self.edge_id(),
+                method = method.as_str(),
+                request_id = request_id.as_str(),
+                stable_request_id = stable_request_id.as_str(),
+                attempt = attempt + 1,
+                slot = used_slot,
+                "Edge -> Hub RPC request"
+            );
 
             // Wait for response with timeout
             match time::timeout(timeout, rx).await {
@@ -1813,6 +1846,13 @@ impl HubClient {
                     // bounded channel by a separate worker task.
                     if notification.method == "hub.relayVoicePacket" {
                         if let Some(params) = notification.relay_voice_packet {
+                            info!(
+                                edge_id = self.edge_id(),
+                                method = "hub.relayVoicePacket",
+                                from_edge_id = params.from_edge_id,
+                                bytes = params.voice_packet.len(),
+                                "Hub -> Edge notification"
+                            );
                             // try_send: drop the packet if the worker is behind.
                             // Voice is best-effort; dropping the occasional packet is
                             // far better than blocking the Hub WS reader.
@@ -1853,8 +1893,25 @@ impl HubClient {
     async fn handle_rpc_response(&self, response: TypedRpcResponse) {
         let request_id = response.request_id.clone();
         if let Some(pending) = self.pending.lock().await.remove(&request_id) {
+            info!(
+                edge_id = self.edge_id(),
+                method = pending.method.as_str(),
+                request_id = request_id.as_str(),
+                slot = ?pending.slot,
+                "Edge <- Hub RPC response"
+            );
             let _ = pending.tx.send(Ok(response));
         } else {
+            let method = response
+                .method
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            info!(
+                edge_id = self.edge_id(),
+                method = method.as_str(),
+                request_id = request_id.as_str(),
+                "Edge <- Hub RPC response without pending entry"
+            );
             // Expected for fire-and-forget requests such as relay_voice_via_hub.
             debug!(
                 "Received response for unregistered request (fire-and-forget): {}",
@@ -1866,7 +1923,22 @@ impl HubClient {
     /// Handle an RPC error by rejecting the pending request.
     async fn handle_rpc_error(&self, request_id: &str, message: &str) {
         if let Some(pending) = self.pending.lock().await.remove(request_id) {
+            info!(
+                edge_id = self.edge_id(),
+                method = pending.method.as_str(),
+                request_id,
+                slot = ?pending.slot,
+                error = message,
+                "Edge <- Hub RPC error"
+            );
             let _ = pending.tx.send(Err(message.to_string()));
+        } else {
+            info!(
+                edge_id = self.edge_id(),
+                request_id,
+                error = message,
+                "Edge <- Hub RPC error without pending entry"
+            );
         }
     }
 

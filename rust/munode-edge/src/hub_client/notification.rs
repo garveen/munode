@@ -8,7 +8,7 @@ use futures_util::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 use munode_protocol::hubedge::{ServerLimitsConfig, TypedRpcNotification};
 use munode_protocol::message_type::MessageType;
@@ -100,12 +100,11 @@ impl HubClient {
     pub(super) async fn handle_notification(&self, notification: TypedRpcNotification) {
         let method = &notification.method;
         let eid = self.edge_id();
-        // High-frequency voice relay notifications are trace-level to avoid log flooding.
-        if method == "hub.relayVoicePacket" {
-            trace!("Hub notification: {} (edge={})", method, eid);
-        } else {
-            debug!("Hub notification: {} (edge={})", method, eid);
-        }
+        info!(
+            edge_id = eid,
+            method = method.as_str(),
+            "Hub -> Edge notification"
+        );
 
         match method.as_str() {
             "hub.userJoined" => {

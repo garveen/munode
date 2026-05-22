@@ -65,6 +65,13 @@ const CHANNEL_LISTENER_OLD_CLIENT_WARNING: &str = "[WARNING]: This server has th
      are saying in your channel without you noticing! You can solve this issue by \
      upgrading to Mumble 1.4.0 or newer.";
 
+fn should_log_client_request(message_type: MessageType) -> bool {
+    !matches!(
+        message_type,
+        MessageType::Version | MessageType::Ping | MessageType::UdpTunnel
+    )
+}
+
 /// Handle a single Mumble client connection (TLS).
 pub(super) async fn handle_client_connection(
     stream: tokio::net::TcpStream,
@@ -617,6 +624,15 @@ pub(crate) async fn run_connection_inner(
                     break 'outer;
                 }
             };
+            if should_log_client_request(frame.message_type) {
+                info!(
+                    peer_addr = %peer_addr,
+                    session_id = session_id.unwrap_or(0),
+                    client_state = ?client_state,
+                    message_type = ?frame.message_type,
+                    "Client -> Edge request"
+                );
+            }
             match frame.message_type {
                 MessageType::Version => {
                     // Parse and log the client's Version.  The server's own Version was

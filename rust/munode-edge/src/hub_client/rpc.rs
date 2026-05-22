@@ -933,6 +933,13 @@ impl HubClient {
             ..Default::default()
         };
         let data = packet.encode_to_vec();
+        info!(
+            edge_id = from_edge_id,
+            method = "edge.relayVoiceViaTcp",
+            target_edge_id,
+            bytes = data.len(),
+            "Edge -> Hub RPC request"
+        );
         if let Err(e) = self.send_raw(data).await {
             debug!(
                 "relay_voice_via_hub to edge {} failed (send): {}",

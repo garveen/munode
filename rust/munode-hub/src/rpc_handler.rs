@@ -14,7 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 use munode_common::config::HubConfig;
 use munode_common::permission;
@@ -662,6 +662,58 @@ impl RpcHandler {
         }
     }
 
+    fn log_outbound_rpc_packet(
+        edge_server_id: u32,
+        connection_id: u64,
+        method: &str,
+        request_id: &str,
+        packet: &EdgeHubPacket,
+    ) {
+        match PacketType::try_from(packet.r#type) {
+            Ok(PacketType::RpcResponse) => {
+                info!(
+                    edge_id = edge_server_id,
+                    connection_id, method, request_id, "Hub -> Edge RPC response"
+                );
+            }
+            Ok(PacketType::RpcError) => {
+                let message = packet
+                    .rpc_error
+                    .as_ref()
+                    .map(|error| error.message.as_str())
+                    .unwrap_or("unknown");
+                info!(
+                    edge_id = edge_server_id,
+                    connection_id,
+                    method,
+                    request_id,
+                    error = message,
+                    "Hub -> Edge RPC error"
+                );
+            }
+            Ok(packet_type) => {
+                info!(
+                    edge_id = edge_server_id,
+                    connection_id,
+                    method,
+                    request_id,
+                    packet_type = ?packet_type,
+                    "Hub -> Edge RPC packet"
+                );
+            }
+            Err(_) => {
+                info!(
+                    edge_id = edge_server_id,
+                    connection_id,
+                    method,
+                    request_id,
+                    packet_type = packet.r#type,
+                    "Hub -> Edge RPC packet with unknown type"
+                );
+            }
+        }
+    }
+
     /// Handle an RPC request from an edge. Returns the response packet bytes.
     pub async fn handle_request(
         &self,
@@ -672,11 +724,14 @@ impl RpcHandler {
         let request_id = request.request_id.clone();
         let method = request.method.clone();
 
-        if method == "edge.relayVoiceViaTcp" {
-            trace!("RPC request: {} (id={})", method, request_id);
-        } else {
-            debug!("RPC request: {} (id={})", method, request_id);
-        }
+        info!(
+            edge_id = edge_server_id,
+            connection_id,
+            method = method.as_str(),
+            request_id = request_id.as_str(),
+            stable_request_id = request.stable_request_id.as_deref().unwrap_or(""),
+            "Edge -> Hub RPC request"
+        );
 
         if method != "edge.register"
             && edge_server_id != 0
@@ -691,9 +746,15 @@ impl RpcHandler {
                 request_id,
                 "Ignoring RPC from stale edge connection after fresh takeover"
             );
-            return Ok(self
-                .make_error_packet(&request_id, -1, "stale edge connection")
-                .encode_to_vec());
+            let packet = self.make_error_packet(&request_id, -1, "stale edge connection");
+            Self::log_outbound_rpc_packet(
+                edge_server_id,
+                connection_id,
+                &method,
+                &request_id,
+                &packet,
+            );
+            return Ok(packet.encode_to_vec());
         }
 
         if let Some(stable_request_id) = request.stable_request_id.clone()
@@ -708,19 +769,32 @@ impl RpcHandler {
                 ) {
                     Ok(action) => action,
                     Err(error) => {
-                        return Ok(self
-                            .make_error_packet(&request_id, -1, &error.to_string())
-                            .encode_to_vec());
+                        let packet = self.make_error_packet(&request_id, -1, &error.to_string());
+                        Self::log_outbound_rpc_packet(
+                            stable_edge_id,
+                            connection_id,
+                            &method,
+                            &request_id,
+                            &packet,
+                        );
+                        return Ok(packet.encode_to_vec());
                     }
                 };
 
                 match action {
                     StableRequestAction::Replay(reply) => {
-                        debug!(
+                        info!(
                             edge_id = stable_edge_id,
                             stable_request_id, method, "Replaying cached stable RPC reply"
                         );
                         let packet = Self::packet_from_stable_reply(&request_id, reply);
+                        Self::log_outbound_rpc_packet(
+                            stable_edge_id,
+                            connection_id,
+                            &method,
+                            &request_id,
+                            &packet,
+                        );
                         return Ok(Self::encode_packet(packet).await);
                     }
                     StableRequestAction::Wait(notify) => {
@@ -744,6 +818,13 @@ impl RpcHandler {
                         if let Some(reply) = Self::stable_reply_from_packet(&packet) {
                             guard.complete(&method, reply);
                         }
+                        Self::log_outbound_rpc_packet(
+                            edge_server_id,
+                            connection_id,
+                            &method,
+                            &request_id,
+                            &packet,
+                        );
                         return Ok(Self::encode_packet(packet).await);
                     }
                 }
@@ -758,6 +839,7 @@ impl RpcHandler {
             &method,
         );
         let packet = Box::pin(packet).await;
+        Self::log_outbound_rpc_packet(edge_server_id, connection_id, &method, &request_id, &packet);
         Ok(Self::encode_packet(packet).await)
     }
 
@@ -768,7 +850,11 @@ impl RpcHandler {
         edge_server_id: u32,
     ) {
         let method = &notification.method;
-        debug!("Notification from edge {}: {}", edge_server_id, method);
+        info!(
+            edge_id = edge_server_id,
+            method = method.as_str(),
+            "Edge -> Hub notification"
+        );
 
         match method.as_str() {
             "hub.handleUserLeft" => {
@@ -948,6 +1034,7 @@ impl RpcHandler {
             ..Default::default()
         };
 
+        info!(method, "Hub -> Edge broadcast notification");
         let data = packet.encode_to_vec();
         crate::server::broadcast_critical_sequenced(&self.state, data).await;
     }
@@ -979,6 +1066,10 @@ impl RpcHandler {
             ..Default::default()
         };
 
+        info!(
+            method,
+            exclude_edge_id, "Hub -> Edge broadcast notification excluding edge"
+        );
         let data = packet.encode_to_vec();
         crate::server::broadcast_critical_excluding_sequenced(&self.state, data, exclude_edge_id)
             .await;
@@ -1046,6 +1137,7 @@ impl RpcHandler {
             ..Default::default()
         };
 
+        info!(edge_id, method, "Hub -> Edge notification");
         let data = packet.encode_to_vec();
         crate::server::notify_sequenced(&self.state, edge_id, data).await;
     }
@@ -1075,6 +1167,7 @@ impl RpcHandler {
             ..Default::default()
         };
 
+        info!(edge_id, method, "Hub -> Edge unsequenced notification");
         let data = packet.encode_to_vec();
         crate::server::notify(&self.state, edge_id, data).await;
     }
