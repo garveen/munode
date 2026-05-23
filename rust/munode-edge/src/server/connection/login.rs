@@ -366,16 +366,13 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         .unwrap_or(username.clone());
 
     info!(
-        "User {} authenticated (session={}, user_id={:?}, channel={})",
-        auth_result.username.as_deref().unwrap_or(&username),
-        sid,
-        auth_result.user_id,
-        channel_id
-    );
-    debug!(
-        session = sid,
+        username = auth_result.username.as_deref().unwrap_or(&username),
+        session_id = sid,
+        user_id = ?auth_result.user_id,
+        channel_id,
+        source_ip = %peer_addr.ip(),
         groups = ?auth_result.groups,
-        "User groups assigned at login"
+        "User authenticated"
     );
 
     let mut client = ClientInfo {

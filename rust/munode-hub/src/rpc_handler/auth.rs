@@ -10,6 +10,16 @@ pub(super) struct HttpAuthCall<'a> {
     timeout_ms: u64,
 }
 
+struct AuthSuccessLog<'a> {
+    auth_backend: &'static str,
+    username: &'a str,
+    session_id: u32,
+    edge_server_id: u32,
+    channel_id: u32,
+    source_ip: Option<&'a str>,
+    groups: &'a [String],
+}
+
 impl RpcHandler {
     fn auth_disconnect_response(&self, request_id: &str) -> EdgeHubPacket {
         self.make_response_packet(request_id, "edge.authenticateUser", |response| {
@@ -20,6 +30,50 @@ impl RpcHandler {
                 ..Default::default()
             });
         })
+    }
+
+    fn log_authentication_success(&self, log: AuthSuccessLog<'_>) {
+        let AuthSuccessLog {
+            auth_backend,
+            username,
+            session_id,
+            edge_server_id,
+            channel_id,
+            source_ip,
+            groups,
+        } = log;
+        let source_ip = source_ip.filter(|ip| !ip.is_empty()).unwrap_or("unknown");
+
+        if self.state.geoip.is_available()
+            && self.state.config.geoip.log_location
+            && let Ok(ip) = source_ip.parse::<std::net::IpAddr>()
+            && let Some(location) = self.state.geoip.lookup(&ip)
+        {
+            info!(
+                auth_backend,
+                username,
+                session_id,
+                edge_id = edge_server_id,
+                channel_id,
+                source_ip,
+                groups = ?groups,
+                country = location.country_code.as_deref().unwrap_or("??"),
+                city = location.city_name.as_deref().unwrap_or("unknown"),
+                "User authenticated"
+            );
+            return;
+        }
+
+        info!(
+            auth_backend,
+            username,
+            session_id,
+            edge_id = edge_server_id,
+            channel_id,
+            source_ip,
+            groups = ?groups,
+            "User authenticated"
+        );
     }
 
     async fn reject_stale_auth_connection(
@@ -624,10 +678,18 @@ impl RpcHandler {
                         return Ok(self.auth_disconnect_response(request_id));
                     }
 
-                    info!(
-                        "User authenticated via ext service: {} (session={}, edge={}, channel={})",
-                        auth_username, params.session_id, edge_server_id, channel_id
-                    );
+                    self.log_authentication_success(AuthSuccessLog {
+                        auth_backend: "ext_service",
+                        username: &auth_username,
+                        session_id: params.session_id,
+                        edge_server_id,
+                        channel_id,
+                        source_ip: params
+                            .client_info
+                            .as_ref()
+                            .map(|client| client.ip_address.as_str()),
+                        groups: &resp.groups,
+                    });
 
                     let cert_hash = params
                         .client_info
@@ -895,10 +957,18 @@ impl RpcHandler {
                         return Ok(self.auth_disconnect_response(request_id));
                     }
 
-                    info!(
-                        "User authenticated via Lua script: {} (session={}, edge={}, channel={})",
-                        auth_username, params.session_id, edge_server_id, channel_id
-                    );
+                    self.log_authentication_success(AuthSuccessLog {
+                        auth_backend: "lua",
+                        username: &auth_username,
+                        session_id: params.session_id,
+                        edge_server_id,
+                        channel_id,
+                        source_ip: params
+                            .client_info
+                            .as_ref()
+                            .map(|client| client.ip_address.as_str()),
+                        groups: &groups,
+                    });
 
                     let cert_hash = params
                         .client_info
@@ -1124,10 +1194,18 @@ impl RpcHandler {
                         return Ok(self.auth_disconnect_response(request_id));
                     }
 
-                    info!(
-                        "User authenticated via HTTP: {} (session={}, edge={}, channel={})",
-                        auth_username, params.session_id, edge_server_id, channel_id
-                    );
+                    self.log_authentication_success(AuthSuccessLog {
+                        auth_backend: "http",
+                        username: &auth_username,
+                        session_id: params.session_id,
+                        edge_server_id,
+                        channel_id,
+                        source_ip: params
+                            .client_info
+                            .as_ref()
+                            .map(|client| client.ip_address.as_str()),
+                        groups: &groups,
+                    });
 
                     let cert_hash = params
                         .client_info
@@ -1441,42 +1519,19 @@ impl RpcHandler {
             return Ok(self.auth_disconnect_response(request_id));
         }
 
-        if self.state.geoip.is_available() && self.state.config.geoip.log_location {
-            let ip_str = params
+        let groups = Vec::new();
+        self.log_authentication_success(AuthSuccessLog {
+            auth_backend: "local_db",
+            username,
+            session_id: params.session_id,
+            edge_server_id,
+            channel_id,
+            source_ip: params
                 .client_info
                 .as_ref()
-                .map(|client| client.ip_address.as_str())
-                .unwrap_or("");
-            if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
-                if let Some(location) = self.state.geoip.lookup(&ip) {
-                    info!(
-                        "User authenticated: {} (session={}, edge={}, channel={}, ip={}, country={}, city={})",
-                        username,
-                        params.session_id,
-                        edge_server_id,
-                        channel_id,
-                        ip_str,
-                        location.country_code.as_deref().unwrap_or("??"),
-                        location.city_name.as_deref().unwrap_or("unknown"),
-                    );
-                } else {
-                    info!(
-                        "User authenticated: {} (session={}, edge={}, channel={})",
-                        username, params.session_id, edge_server_id, channel_id
-                    );
-                }
-            } else {
-                info!(
-                    "User authenticated: {} (session={}, edge={}, channel={})",
-                    username, params.session_id, edge_server_id, channel_id
-                );
-            }
-        } else {
-            info!(
-                "User authenticated: {} (session={}, edge={}, channel={})",
-                username, params.session_id, edge_server_id, channel_id
-            );
-        }
+                .map(|client| client.ip_address.as_str()),
+            groups: &groups,
+        });
 
         let cert_hash = params
             .client_info
@@ -1489,7 +1544,7 @@ impl RpcHandler {
                 user_id,
                 username: username.clone(),
                 channel_id,
-                groups: vec![],
+                groups: groups.clone(),
                 cert_hash,
                 mute: params.mute,
                 deaf: params.deaf,
@@ -1510,7 +1565,7 @@ impl RpcHandler {
                     user_id: Some(user_id),
                     username: Some(username.clone()),
                     display_name: None,
-                    groups: vec![],
+                    groups: groups.clone(),
                     reason: None,
                     reject_type: None,
                     channel_id: Some(channel_id),
