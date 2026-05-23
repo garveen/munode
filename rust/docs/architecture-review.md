@@ -558,13 +558,13 @@ match route_table.get(target_edge_id) {
 **超时**：硬编码 30 秒
 
 **问题**：
-1. **RPC 和通知共用同一 WebSocket**：大量广播通知可能影响 RPC 响应延迟
+1. **RPC 和通知仍共用同一 WebSocket 传输**：但当前 Hub TCP relay 已拆到独立低优先级 voice lane，`edge.relayVoiceViaTcp` 不再与控制消息共用发送队列
 2. **RPC 超时不可配置**：某些操作（如 fullSync）可能需要更长时间
 3. **通知和 RPC 响应之间无顺序保证**：可能出现 `hub.userJoined` 通知先于 `edge.authenticateUser` 响应到达
 
 ### 7.2 Hub → Edge 通知推送
 
-**机制**：Hub 通过存储在 `edge_connections` 中的 `mpsc::Sender` 推送通知
+**机制**：Hub 通过存储在 `edge_connections` 中的双通道 sender 推送通知；控制消息走高优先级 control lane，`hub.relayVoicePacket` 走独立低优先级 voice lane
 
 **通知类型**：
 | 通知 | 用途 | 频率 |
@@ -575,16 +575,16 @@ match route_table.get(target_edge_id) {
 | `hub.userStateChanged` | 静音/耳聋等状态变化 | 中 |
 | `hub.channelCreated/Removed/Updated` | 频道变更 | 低 |
 | `hub.syncVoiceTarget` | 语音目标更新 | 中 |
-| `hub.relayVoicePacket` | 语音中继 | 高（语音活跃时） |
+| `hub.relayVoicePacket` | 语音中继 | 高（语音活跃时，独立低优先级 voice lane） |
 | `hub.peerJoined/Left` | Edge 拓扑变化 | 低 |
 | `hub.routeTableUpdate` | 路由表更新 | 低 |
 | `hub.aclUpdated` | 权限变更 | 低 |
 | `hub.shutdownRequest` | 分区时请求关机 | 极低 |
 
-**问题**：
-- 语音中继通知 (`hub.relayVoicePacket`) 与控制通知共用同一通道和缓冲区
-- 大量语音中继可能挤占控制消息的缓冲区空间
-- 无消息优先级区分
+**现状**：
+- `hub.relayVoicePacket` 已走独立低优先级 voice lane，writer 始终优先发送 control lane
+- Edge → Hub 的 `edge.relayVoiceViaTcp` 也走独立低优先级 voice lane，不参与控制通知排序与 RPC pending
+- Hub TCP relay 仍与控制面复用同一条 WebSocket 连接，但发送侧 QoS 已拆分，语音拥塞不会直接占满控制发送队列
 
 ### 7.3 心跳机制
 

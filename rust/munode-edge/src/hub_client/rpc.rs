@@ -215,6 +215,33 @@ impl HubClient {
         Ok(())
     }
 
+    /// Notification: request a Hub-authoritative move for a local user.
+    ///
+    /// The source edge does not pre-apply any local channel state. Successful
+    /// processing is confirmed by the subsequent `hub.userMoved` broadcast.
+    pub async fn notify_user_moved(
+        &self,
+        session_id: u32,
+        channel_id: u32,
+        actor_session: u32,
+    ) -> Result<()> {
+        let notification = TypedRpcNotification {
+            method: "hub.handleUserMoved".to_string(),
+            timestamp: Some(current_millis() as i64),
+            handle_user_moved: Some(EdgeHandleUserMovedParams {
+                session_id,
+                edge_id: self.edge_id(),
+                channel_id,
+                actor_session: Some(actor_session),
+            }),
+            ..Default::default()
+        };
+
+        self.send_notification(notification)
+            .await
+            .context("hub.handleUserMoved notification failed")
+    }
+
     /// RPC: update a user's state (mute/deaf/suppress/priority-speaker etc).
     /// Hub updates session_manager, broadcasts hub.userStateBroadcast to ALL edges, responds.
     /// Every edge, including the requesting edge, waits for the Hub broadcast to
@@ -249,10 +276,49 @@ impl HubClient {
             .rpc_call(request)
             .await
             .context("edge.userStateChanged RPC failed")?;
-        response
+        let result = response
             .edge_user_state_changed
             .ok_or_else(|| anyhow::anyhow!("No edge_user_state_changed in response"))?;
+        if !result.success {
+            return Err(anyhow::anyhow!(
+                "edge.userStateChanged rejected: {}",
+                result.error.as_deref().unwrap_or("unknown")
+            ));
+        }
         Ok(())
+    }
+
+    /// Notification: request a Hub-authoritative state change for a local user.
+    ///
+    /// The source edge waits for the resulting `hub.userStateBroadcast` before
+    /// applying any client-visible authoritative fields.
+    pub(crate) async fn notify_user_state_changed(
+        &self,
+        params: UserStateChangeRequest,
+    ) -> Result<()> {
+        let notification = TypedRpcNotification {
+            method: "hub.handleUserStateChanged".to_string(),
+            timestamp: Some(current_millis() as i64),
+            handle_user_state_changed: Some(EdgeHandleUserStateChangedParams {
+                session_id: params.session_id,
+                edge_id: self.edge_id(),
+                self_mute: params.self_mute,
+                self_deaf: params.self_deaf,
+                mute: params.mute,
+                deaf: params.deaf,
+                suppress: params.suppress,
+                priority_speaker: params.priority_speaker,
+                recording: params.recording,
+                listening_channel_add: params.listening_channel_add,
+                listening_channel_remove: params.listening_channel_remove,
+                actor_session: params.actor_session,
+            }),
+            ..Default::default()
+        };
+
+        self.send_notification(notification)
+            .await
+            .context("hub.handleUserStateChanged notification failed")
     }
 
     /// Forward a PermissionQuery to the Hub.

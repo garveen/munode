@@ -188,68 +188,16 @@ impl RpcHandler {
             .edge_user_moved
             .as_ref()
             .context("Missing edge_user_moved params")?;
-        if params.session_id == 0 {
+        if let Err(error) = self.apply_user_move_and_broadcast(params).await {
             return Ok(
                 self.make_response_packet(request_id, "edge.userMoved", |response| {
                     response.edge_user_moved = Some(EdgeUserMovedResult {
                         success: false,
-                        error: Some("invalid session_id".into()),
+                        error: Some(error),
                     });
                 }),
             );
         }
-
-        if let Some(target_channel) = self
-            .state
-            .channel_store
-            .get_channel(params.channel_id)
-            .await
-            && target_channel.max_users > 0
-        {
-            let count = self
-                .state
-                .session_manager
-                .get_all_sessions()
-                .await
-                .iter()
-                .filter(|session| session.channel_id == params.channel_id)
-                .count();
-            if count as u32 >= target_channel.max_users {
-                return Ok(
-                    self.make_response_packet(request_id, "edge.userMoved", |response| {
-                        response.edge_user_moved = Some(EdgeUserMovedResult {
-                            success: false,
-                            error: Some("Channel is full".into()),
-                        });
-                    }),
-                );
-            }
-        }
-
-        let Some((old_channel_id, moved_params)) = self
-            .apply_authoritative_user_move(
-                params.session_id,
-                params.channel_id,
-                params.actor_session,
-            )
-            .await
-        else {
-            return Ok(
-                self.make_response_packet(request_id, "edge.userMoved", |response| {
-                    response.edge_user_moved = Some(EdgeUserMovedResult {
-                        success: false,
-                        error: Some("unknown session".into()),
-                    });
-                }),
-            );
-        };
-
-        self.broadcast_notification("hub.userMoved", |notification| {
-            notification.user_moved = Some(moved_params);
-        })
-        .await;
-
-        self.maybe_cleanup_temp_channel(old_channel_id).await;
 
         Ok(
             self.make_response_packet(request_id, "edge.userMoved", |response| {
@@ -271,142 +219,18 @@ impl RpcHandler {
             .edge_user_state_changed
             .as_ref()
             .context("Missing edge_user_state_changed params")?;
-        if params.session_id == 0 {
+        if let Err(error) = self.apply_user_state_changed_and_broadcast(params).await {
             return Ok(self.make_response_packet(
                 request_id,
                 "edge.userStateChanged",
                 |response| {
                     response.edge_user_state_changed = Some(EdgeUserStateChangedResult {
                         success: false,
-                        error: Some("invalid session_id".into()),
+                        error: Some(error),
                     });
                 },
             ));
         }
-
-        let sessions = &self.state.session_manager;
-        if let Some(mut session) = sessions.get_session(params.session_id).await {
-            if let Some(value) = params.self_mute {
-                session.self_mute = value;
-            }
-            if let Some(value) = params.self_deaf {
-                session.self_deaf = value;
-            }
-            if let Some(value) = params.mute {
-                session.mute = value;
-            }
-            if let Some(value) = params.deaf {
-                session.deaf = value;
-            }
-            if let Some(value) = params.suppress {
-                session.suppress = value;
-            }
-            if let Some(value) = params.priority_speaker {
-                session.priority_speaker = value;
-            }
-            if let Some(value) = params.recording {
-                session.recording = value;
-            }
-
-            let per_user_limit = self.state.config.limits.listeners_per_user;
-            let per_channel_limit = self.state.config.limits.listeners_per_channel;
-            let all_sessions_snapshot = if !params.listening_channel_add.is_empty() {
-                Some(self.state.session_manager.get_all_sessions().await)
-            } else {
-                None
-            };
-            let mut validated_adds = Vec::new();
-            for &channel_id in &params.listening_channel_add {
-                if session.listening_channels.contains(&channel_id)
-                    || validated_adds.contains(&channel_id)
-                {
-                    continue;
-                }
-                if per_user_limit > 0
-                    && (session.listening_channels.len() + validated_adds.len()) as u32
-                        >= per_user_limit
-                {
-                    debug!(
-                        session_id = params.session_id,
-                        channel_id,
-                        "Hub: rejected listen add — per-user limit ({}) reached",
-                        per_user_limit
-                    );
-                    continue;
-                }
-                if per_channel_limit > 0 {
-                    let channel_count = all_sessions_snapshot
-                        .as_ref()
-                        .map(|sessions| {
-                            sessions
-                                .iter()
-                                .filter(|entry| entry.listening_channels.contains(&channel_id))
-                                .count()
-                        })
-                        .unwrap_or(0);
-                    if channel_count as u32 >= per_channel_limit {
-                        debug!(
-                            session_id = params.session_id,
-                            channel_id,
-                            "Hub: rejected listen add — per-channel limit ({}) reached",
-                            per_channel_limit
-                        );
-                        continue;
-                    }
-                }
-                let can_listen = self
-                    .state
-                    .acl_manager
-                    .has_permission(
-                        session.user_id as i32,
-                        channel_id,
-                        &session.groups,
-                        munode_common::permission::LISTEN,
-                    )
-                    .await;
-                if !can_listen {
-                    debug!(
-                        session_id = params.session_id,
-                        channel_id, "Hub: rejected listen add — no Listen permission"
-                    );
-                    continue;
-                }
-                validated_adds.push(channel_id);
-            }
-            for &channel_id in &validated_adds {
-                session.listening_channels.push(channel_id);
-            }
-            session
-                .listening_channels
-                .retain(|channel_id| !params.listening_channel_remove.contains(channel_id));
-            sessions.add_session(session).await;
-        }
-
-        let notification = TypedRpcNotification {
-            method: "hub.userStateBroadcast".to_string(),
-            timestamp: Some(current_millis() as i64),
-            user_state_broadcast: Some(HubUserStateBroadcastParams {
-                session_id: params.session_id,
-                edge_id: params.edge_id,
-                self_mute: params.self_mute,
-                self_deaf: params.self_deaf,
-                mute: params.mute,
-                deaf: params.deaf,
-                suppress: params.suppress,
-                priority_speaker: params.priority_speaker,
-                recording: params.recording,
-                listening_channel_add: params.listening_channel_add.clone(),
-                listening_channel_remove: params.listening_channel_remove.clone(),
-                actor_session: params.actor_session,
-            }),
-            ..Default::default()
-        };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        crate::server::broadcast_critical_sequenced(&self.state, packet.encode_to_vec()).await;
 
         Ok(
             self.make_response_packet(request_id, "edge.userStateChanged", |response| {

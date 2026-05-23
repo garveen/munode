@@ -1019,6 +1019,210 @@ impl RpcHandler {
         ))
     }
 
+    async fn apply_user_move_and_broadcast(
+        &self,
+        params: &EdgeHandleUserMovedParams,
+    ) -> std::result::Result<(), String> {
+        if params.session_id == 0 {
+            return Err("invalid session_id".into());
+        }
+
+        let Some(session) = self
+            .state
+            .session_manager
+            .get_session(params.session_id)
+            .await
+        else {
+            return Err("unknown session".into());
+        };
+
+        if params.actor_session == Some(params.session_id) {
+            let can_enter = self
+                .state
+                .acl_manager
+                .has_permission(
+                    session.user_id as i32,
+                    params.channel_id,
+                    &session.groups,
+                    permission::ENTER,
+                )
+                .await;
+            if !can_enter {
+                return Err("permission denied".into());
+            }
+        }
+
+        if session.channel_id != params.channel_id
+            && let Some(target_channel) = self
+                .state
+                .channel_store
+                .get_channel(params.channel_id)
+                .await
+            && target_channel.max_users > 0
+        {
+            let count = self
+                .state
+                .session_manager
+                .get_all_sessions()
+                .await
+                .iter()
+                .filter(|entry| entry.channel_id == params.channel_id)
+                .count();
+            if count as u32 >= target_channel.max_users {
+                return Err("Channel is full".into());
+            }
+        }
+
+        let (old_channel_id, moved_params) = self
+            .apply_authoritative_user_move(
+                params.session_id,
+                params.channel_id,
+                params.actor_session,
+            )
+            .await
+            .ok_or_else(|| "unknown session".to_string())?;
+
+        self.broadcast_notification("hub.userMoved", move |notification| {
+            notification.user_moved = Some(moved_params);
+        })
+        .await;
+
+        self.maybe_cleanup_temp_channel(old_channel_id).await;
+        Ok(())
+    }
+
+    async fn apply_user_state_changed_and_broadcast(
+        &self,
+        params: &EdgeHandleUserStateChangedParams,
+    ) -> std::result::Result<(), String> {
+        if params.session_id == 0 {
+            return Err("invalid session_id".into());
+        }
+
+        let sessions = &self.state.session_manager;
+        let Some(mut session) = sessions.get_session(params.session_id).await else {
+            return Err("unknown session".into());
+        };
+
+        if let Some(value) = params.self_mute {
+            session.self_mute = value;
+        }
+        if let Some(value) = params.self_deaf {
+            session.self_deaf = value;
+        }
+        if let Some(value) = params.mute {
+            session.mute = value;
+        }
+        if let Some(value) = params.deaf {
+            session.deaf = value;
+        }
+        if let Some(value) = params.suppress {
+            session.suppress = value;
+        }
+        if let Some(value) = params.priority_speaker {
+            session.priority_speaker = value;
+        }
+        if let Some(value) = params.recording {
+            session.recording = value;
+        }
+
+        let per_user_limit = self.state.config.limits.listeners_per_user;
+        let per_channel_limit = self.state.config.limits.listeners_per_channel;
+        let all_sessions_snapshot = if !params.listening_channel_add.is_empty() {
+            Some(self.state.session_manager.get_all_sessions().await)
+        } else {
+            None
+        };
+        let mut validated_adds = Vec::new();
+        for &channel_id in &params.listening_channel_add {
+            if session.listening_channels.contains(&channel_id)
+                || validated_adds.contains(&channel_id)
+            {
+                continue;
+            }
+            if per_user_limit > 0
+                && (session.listening_channels.len() + validated_adds.len()) as u32
+                    >= per_user_limit
+            {
+                debug!(
+                    session_id = params.session_id,
+                    channel_id,
+                    "Hub: rejected listen add — per-user limit ({}) reached",
+                    per_user_limit
+                );
+                continue;
+            }
+            if per_channel_limit > 0 {
+                let channel_count = all_sessions_snapshot
+                    .as_ref()
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .filter(|entry| entry.listening_channels.contains(&channel_id))
+                            .count()
+                    })
+                    .unwrap_or(0);
+                if channel_count as u32 >= per_channel_limit {
+                    debug!(
+                        session_id = params.session_id,
+                        channel_id,
+                        "Hub: rejected listen add — per-channel limit ({}) reached",
+                        per_channel_limit
+                    );
+                    continue;
+                }
+            }
+            let can_listen = self
+                .state
+                .acl_manager
+                .has_permission(
+                    session.user_id as i32,
+                    channel_id,
+                    &session.groups,
+                    permission::LISTEN,
+                )
+                .await;
+            if !can_listen {
+                debug!(
+                    session_id = params.session_id,
+                    channel_id, "Hub: rejected listen add — no Listen permission"
+                );
+                continue;
+            }
+            validated_adds.push(channel_id);
+        }
+
+        for &channel_id in &validated_adds {
+            session.listening_channels.push(channel_id);
+        }
+        session
+            .listening_channels
+            .retain(|channel_id| !params.listening_channel_remove.contains(channel_id));
+        sessions.add_session(session).await;
+
+        let listening_channel_add = validated_adds;
+        let listening_channel_remove = params.listening_channel_remove.clone();
+        self.broadcast_notification("hub.userStateBroadcast", move |notification| {
+            notification.user_state_broadcast = Some(HubUserStateBroadcastParams {
+                session_id: params.session_id,
+                edge_id: params.edge_id,
+                self_mute: params.self_mute,
+                self_deaf: params.self_deaf,
+                mute: params.mute,
+                deaf: params.deaf,
+                suppress: params.suppress,
+                priority_speaker: params.priority_speaker,
+                recording: params.recording,
+                listening_channel_add,
+                listening_channel_remove,
+                actor_session: params.actor_session,
+            });
+        })
+        .await;
+
+        Ok(())
+    }
+
     // ==================== Helpers ====================
 
     /// Record a failed authentication attempt for the given IP address and apply an auto-ban

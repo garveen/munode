@@ -46,6 +46,15 @@ async fn test_add_listening_channel_broadcasts_to_same_edge() -> Result<()> {
         got,
         "Adding listening channel should broadcast UserState to observers"
     );
+    assert!(
+        user1
+            .me()
+            .session()
+            .expect("user1 session")
+            .listening_channels
+            .contains(&1),
+        "Actor should apply listened channel after Hub echo on the source edge"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }
@@ -99,6 +108,15 @@ async fn test_remove_listening_channel() -> Result<()> {
     client.me().remove_listener(1).await?;
     sleep_ms(200).await;
 
+    assert!(
+        !client
+            .me()
+            .session()
+            .expect("client session")
+            .listening_channels
+            .contains(&1),
+        "Removed listening channel should disappear after Hub echo"
+    );
     // Should not crash and still be connected
     assert!(client.is_connected());
     cleanup_clients(clients).await;

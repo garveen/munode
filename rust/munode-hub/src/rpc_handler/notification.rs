@@ -145,26 +145,14 @@ impl RpcHandler {
             Some(params) => params,
             None => return,
         };
-        if params.session_id == 0 {
-            return;
+        if let Err(error) = self.apply_user_move_and_broadcast(params).await {
+            warn!(
+                session_id = params.session_id,
+                channel_id = params.channel_id,
+                %error,
+                "Ignored hub.handleUserMoved notification"
+            );
         }
-
-        let Some((old_channel_id, moved_params)) = self
-            .apply_authoritative_user_move(
-                params.session_id,
-                params.channel_id,
-                params.actor_session,
-            )
-            .await
-        else {
-            return;
-        };
-        self.broadcast_notification("hub.userMoved", |notification| {
-            notification.user_moved = Some(moved_params);
-        })
-        .await;
-
-        self.maybe_cleanup_temp_channel(old_channel_id).await;
     }
 
     pub(super) async fn on_user_state_changed(&self, notification: &TypedRpcNotification) {
@@ -172,73 +160,13 @@ impl RpcHandler {
             Some(params) => params,
             None => return,
         };
-        if params.session_id == 0 {
-            return;
+        if let Err(error) = self.apply_user_state_changed_and_broadcast(params).await {
+            warn!(
+                session_id = params.session_id,
+                %error,
+                "Ignored hub.handleUserStateChanged notification"
+            );
         }
-        let source_edge_id = params.edge_id;
-
-        let sessions = &self.state.session_manager;
-        if let Some(mut session) = sessions.get_session(params.session_id).await {
-            if let Some(value) = params.self_mute {
-                session.self_mute = value;
-            }
-            if let Some(value) = params.self_deaf {
-                session.self_deaf = value;
-            }
-            if let Some(value) = params.mute {
-                session.mute = value;
-            }
-            if let Some(value) = params.deaf {
-                session.deaf = value;
-            }
-            if let Some(value) = params.suppress {
-                session.suppress = value;
-            }
-            if let Some(value) = params.priority_speaker {
-                session.priority_speaker = value;
-            }
-            if let Some(value) = params.recording {
-                session.recording = value;
-            }
-            for &channel_id in &params.listening_channel_add {
-                if !session.listening_channels.contains(&channel_id) {
-                    session.listening_channels.push(channel_id);
-                }
-            }
-            session
-                .listening_channels
-                .retain(|channel_id| !params.listening_channel_remove.contains(channel_id));
-            sessions.add_session(session).await;
-        }
-
-        let broadcast = HubUserStateBroadcastParams {
-            session_id: params.session_id,
-            edge_id: source_edge_id,
-            self_mute: params.self_mute,
-            self_deaf: params.self_deaf,
-            mute: params.mute,
-            deaf: params.deaf,
-            suppress: params.suppress,
-            priority_speaker: params.priority_speaker,
-            recording: params.recording,
-            listening_channel_add: params.listening_channel_add.clone(),
-            listening_channel_remove: params.listening_channel_remove.clone(),
-            actor_session: params.actor_session,
-        };
-        let forward = TypedRpcNotification {
-            method: "hub.userStateBroadcast".to_string(),
-            timestamp: Some(current_millis() as i64),
-            user_state_broadcast: Some(broadcast),
-            ..Default::default()
-        };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(forward),
-            ..Default::default()
-        };
-        let data = packet.encode_to_vec();
-        crate::server::broadcast_critical_excluding_sequenced(&self.state, data, source_edge_id)
-            .await;
     }
 
     pub(super) async fn on_text_message(
