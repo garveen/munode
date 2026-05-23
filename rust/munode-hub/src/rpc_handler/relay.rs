@@ -6,7 +6,11 @@ impl RpcHandler {
         params: EdgeRelayVoiceViaTcpParams,
         edge_server_id: u32,
     ) {
-        if !self.state.config.voice_routing.enable_hub_tcp_relay {
+        if !self
+            .state
+            .hub_tcp_relay_enabled
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
             debug!(
                 edge_id = edge_server_id,
                 target_edge_id = params.target_edge_id,
@@ -48,7 +52,7 @@ impl RpcHandler {
             let edges = self.state.edge_connections.read().await;
             edges.get(&target_edge_id).cloned()
         }
-        .map(|pool| pool.try_send(data))
+        .map(|pool| pool.try_send_voice(data))
         .unwrap_or(false);
 
         if !sent {

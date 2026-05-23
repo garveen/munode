@@ -727,6 +727,9 @@ pub struct ServerLimitsConfig {
     /// 是否允许客户端发送 UDP ping 包（默认 true）。
     #[prost(bool, optional, tag = "16")]
     pub allow_ping: ::core::option::Option<bool>,
+    /// Hub 是否允许作为跨 Edge 语音的 TCP relay 最后兜底路径。
+    #[prost(bool, optional, tag = "17")]
+    pub hub_tcp_relay_enabled: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeInfo {

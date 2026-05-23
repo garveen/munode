@@ -344,7 +344,7 @@ async fn forward_logical_frame(
         routes.get(&parsed.source_edge_id).cloned()
     };
     let Some(plan) = plan else {
-        if state.enable_hub_tcp_fallback {
+        if state.hub_tcp_relay_allowed() {
             for target_edge_id in hub_escape_targets {
                 hub_client
                     .relay_voice_via_hub(target_edge_id, frame.clone())
@@ -368,7 +368,7 @@ async fn forward_logical_frame(
         "Cluster voice forward plan"
     );
     if next_hops.is_empty() {
-        if state.enable_hub_tcp_fallback {
+        if state.hub_tcp_relay_allowed() {
             for target_edge_id in hub_escape_targets {
                 hub_client
                     .relay_voice_via_hub(target_edge_id, frame.clone())
@@ -442,7 +442,7 @@ async fn forward_logical_frame(
             continue;
         }
 
-        if state.enable_hub_tcp_fallback {
+        if state.hub_tcp_relay_allowed() {
             hub_client
                 .relay_voice_via_hub(next_hop, frame.clone())
                 .await;
@@ -519,7 +519,7 @@ async fn forward_emergency_flood(
         if dispatch_peer_tcp(state, next_hop, &flood_frame) {
             continue;
         }
-        if state.enable_hub_tcp_fallback {
+        if state.hub_tcp_relay_allowed() {
             hub_client
                 .relay_voice_via_hub(next_hop, flood_frame.clone())
                 .await;

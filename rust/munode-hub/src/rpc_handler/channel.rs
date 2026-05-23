@@ -1015,7 +1015,7 @@ mod tests {
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
     use tempfile::tempdir;
     use tokio::sync::RwLock;
 
@@ -1067,6 +1067,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             voice_targets: RwLock::new(HashMap::new()),
             live_limits: RwLock::new(crate::rpc_handler::server_limits_from_config(&config)),
+            hub_tcp_relay_enabled: AtomicBool::new(config.voice_routing.enable_hub_tcp_relay),
             notification_seqs: std::sync::Mutex::new(HashMap::new()),
             edge_notif_senders: RwLock::new(HashMap::new()),
             pending_auths: RwLock::new(HashMap::new()),

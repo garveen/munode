@@ -263,8 +263,47 @@ struct HttpAuthResponse {
     reject_type: Option<u32>,
 }
 
-/// Sender type for pushing serialized packets to a specific edge.
-pub type EdgeSender = mpsc::Sender<Vec<u8>>;
+/// Sender pair for pushing serialized packets to a specific edge.
+#[derive(Clone)]
+pub struct EdgeSender {
+    control_tx: mpsc::Sender<Vec<u8>>,
+    voice_tx: mpsc::Sender<Vec<u8>>,
+}
+
+impl EdgeSender {
+    pub fn new(control_tx: mpsc::Sender<Vec<u8>>, voice_tx: mpsc::Sender<Vec<u8>>) -> Self {
+        Self {
+            control_tx,
+            voice_tx,
+        }
+    }
+
+    pub fn same_channel(&self, other: &Self) -> bool {
+        self.control_tx.same_channel(&other.control_tx)
+            && self.voice_tx.same_channel(&other.voice_tx)
+    }
+
+    fn try_send_control(
+        &self,
+        data: Vec<u8>,
+    ) -> std::result::Result<(), tokio::sync::mpsc::error::TrySendError<Vec<u8>>> {
+        self.control_tx.try_send(data)
+    }
+
+    fn try_send_voice(
+        &self,
+        data: Vec<u8>,
+    ) -> std::result::Result<(), tokio::sync::mpsc::error::TrySendError<Vec<u8>>> {
+        self.voice_tx.try_send(data)
+    }
+
+    async fn send_control(
+        &self,
+        data: Vec<u8>,
+    ) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<Vec<u8>>> {
+        self.control_tx.send(data).await
+    }
+}
 
 /// A set of outbound senders for a single Edge's connection pool.
 ///
@@ -316,7 +355,25 @@ impl EdgeSenderPool {
         let mut senders = self.senders.lock().unwrap();
         let mut index = 0;
         while index < senders.len() {
-            match senders[index].try_send(data.clone()) {
+            match senders[index].try_send_control(data.clone()) {
+                Ok(()) => return true,
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    senders.swap_remove(index);
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    index += 1;
+                }
+            }
+        }
+        false
+    }
+
+    /// Try to send low-priority voice relay data non-blocking.
+    pub fn try_send_voice(&self, data: Vec<u8>) -> bool {
+        let mut senders = self.senders.lock().unwrap();
+        let mut index = 0;
+        while index < senders.len() {
+            match senders[index].try_send_voice(data.clone()) {
                 Ok(()) => return true,
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                     senders.swap_remove(index);
@@ -336,7 +393,7 @@ impl EdgeSenderPool {
     pub async fn send_async(&self, data: Vec<u8>) -> bool {
         let snapshot: Vec<EdgeSender> = self.senders.lock().unwrap().clone();
         for sender in snapshot {
-            match sender.send(data.clone()).await {
+            match sender.send_control(data.clone()).await {
                 Ok(()) => return true,
                 Err(_) => continue,
             }
@@ -1448,6 +1505,19 @@ mod tests {
                 .contains("stable_request_id stable-3 was reused across methods")
         );
     }
+
+    #[tokio::test]
+    async fn edge_sender_pool_keeps_voice_lane_off_control_queue() {
+        let (control_tx, mut control_rx) = mpsc::channel::<Vec<u8>>(4);
+        let (voice_tx, mut voice_rx) = mpsc::channel::<Vec<u8>>(4);
+        let pool = EdgeSenderPool::new(EdgeSender::new(control_tx, voice_tx));
+
+        assert!(pool.try_send_voice(b"voice".to_vec()));
+        assert!(pool.try_send(b"control".to_vec()));
+
+        assert_eq!(control_rx.recv().await, Some(b"control".to_vec()));
+        assert_eq!(voice_rx.recv().await, Some(b"voice".to_vec()));
+    }
 }
 
 /// Generate a random challenge string for HMAC authentication.
@@ -1603,6 +1673,7 @@ pub(crate) fn server_limits_from_config(config: &HubConfig) -> ServerLimitsConfi
             None
         },
         allow_ping: Some(limits.allow_ping),
+        hub_tcp_relay_enabled: Some(config.voice_routing.enable_hub_tcp_relay),
     }
 }
 

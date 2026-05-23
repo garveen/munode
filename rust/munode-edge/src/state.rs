@@ -703,8 +703,10 @@ pub struct EdgeState {
     /// Registry of peer Edges and their UDP endpoints for direct voice routing.
     /// Lock-free reads via ArcSwap; writes (peerJoined/peerLeft) use clone-modify-store.
     pub peer_registry: ArcSwap<PeerRegistry>,
-    /// Whether Hub-mediated TCP relay is allowed for cross-Edge voice (last resort).
+    /// Whether this Edge's local config allows Hub-mediated TCP relay as a last resort.
     pub enable_hub_tcp_fallback: bool,
+    /// Whether Hub currently advertises that TCP relay is enabled.
+    pub hub_tcp_relay_enabled: AtomicBool,
     /// Number of consecutive send failures before skipping a next-hop.
     /// 0 means never skip (rely solely on Hub route table updates).
     pub consecutive_failure_threshold: u32,
@@ -877,6 +879,7 @@ impl EdgeState {
             voice_targets: RwLock::new(HashMap::new()),
             peer_registry: ArcSwap::new(Arc::new(PeerRegistry::default())),
             enable_hub_tcp_fallback,
+            hub_tcp_relay_enabled: AtomicBool::new(true),
             consecutive_failure_threshold: 2,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
@@ -941,6 +944,7 @@ impl EdgeState {
             voice_targets: RwLock::new(HashMap::new()),
             peer_registry: ArcSwap::new(Arc::new(PeerRegistry::default())),
             enable_hub_tcp_fallback,
+            hub_tcp_relay_enabled: AtomicBool::new(true),
             consecutive_failure_threshold: 2,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
@@ -1007,6 +1011,7 @@ impl EdgeState {
             voice_targets: RwLock::new(HashMap::new()),
             peer_registry: ArcSwap::new(Arc::new(PeerRegistry::default())),
             enable_hub_tcp_fallback: config.enable_hub_tcp_fallback,
+            hub_tcp_relay_enabled: AtomicBool::new(true),
             consecutive_failure_threshold: config.consecutive_failure_threshold,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
@@ -1069,6 +1074,16 @@ impl EdgeState {
             config.voice_routing.quality.probe_timeout_secs.max(1) as u32,
             Ordering::Relaxed,
         );
+    }
+
+    #[inline]
+    pub fn hub_tcp_relay_allowed(&self) -> bool {
+        self.enable_hub_tcp_fallback && self.hub_tcp_relay_enabled.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn set_hub_tcp_relay_enabled(&self, enabled: bool) {
+        self.hub_tcp_relay_enabled.store(enabled, Ordering::Relaxed);
     }
 
     #[inline]
@@ -1370,6 +1385,18 @@ mod tests {
         assert_eq!(hit.channel_sessions.as_slice(), &[31_002]);
         assert_eq!(hit.relay_edge_ids.as_slice(), &[5]);
         assert!(state.get_cached_whisper_route(10_001, 2, 7).is_none());
+    }
+
+    #[test]
+    fn hub_tcp_relay_allowed_combines_local_and_hub_state() {
+        let local_enabled = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        assert!(local_enabled.hub_tcp_relay_allowed());
+        local_enabled.set_hub_tcp_relay_enabled(false);
+        assert!(!local_enabled.hub_tcp_relay_allowed());
+
+        let local_disabled = EdgeState::new(ChannelManager::new(), ClientManager::new(), false);
+        local_disabled.set_hub_tcp_relay_enabled(true);
+        assert!(!local_disabled.hub_tcp_relay_allowed());
     }
 
     #[test]

@@ -35,10 +35,49 @@ mod rpc;
 /// Minimum allowed base delay in milliseconds.  Prevents accidentally-zero intervals
 /// (e.g. when `reconnect_interval = 0` is set in config) from causing a tight reconnect loop.
 const MIN_BACKOFF_MS: u64 = 100;
+const HUB_CONTROL_QUEUE_CAPACITY: usize = 256;
+const HUB_VOICE_QUEUE_CAPACITY: usize = 2048;
 
 /// Duration without a successful Hub connection before all local Mumble clients are
 /// disconnected and new connections are refused.
 const UNREACHABLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[derive(Clone)]
+struct HubSlotSenders {
+    control_tx: mpsc::Sender<Vec<u8>>,
+    voice_tx: mpsc::Sender<Vec<u8>>,
+}
+
+async fn recv_hub_outbound_frame(
+    control_rx: &mut mpsc::Receiver<Vec<u8>>,
+    voice_rx: &mut mpsc::Receiver<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    loop {
+        if let Ok(data) = control_rx.try_recv() {
+            return Some(data);
+        }
+        if let Ok(data) = voice_rx.try_recv() {
+            return Some(data);
+        }
+        if control_rx.is_closed() && voice_rx.is_closed() {
+            return None;
+        }
+
+        tokio::select! {
+            biased;
+            data = control_rx.recv(), if !control_rx.is_closed() => {
+                if let Some(data) = data {
+                    return Some(data);
+                }
+            }
+            data = voice_rx.recv(), if !voice_rx.is_closed() => {
+                if let Some(data) = data {
+                    return Some(data);
+                }
+            }
+        }
+    }
+}
 
 struct ExponentialBackoff {
     base_ms: u64,
@@ -393,8 +432,8 @@ pub struct HubClient {
     pending: Mutex<HashMap<String, PendingRequest>>,
     /// Number of pool connections to maintain (1 = no pool, >1 = pool mode).
     pool_size: usize,
-    /// Per-slot send channels.
-    pool_senders: Vec<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
+    /// Per-slot send channels split into control and voice lanes.
+    pool_senders: Vec<Mutex<Option<HubSlotSenders>>>,
     /// Per-slot registration readiness.
     ///
     /// A slot is eligible for general RPCs / notifications only after its own
@@ -1088,9 +1127,13 @@ impl HubClient {
 
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
-        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(4096);
+        let (control_tx, mut control_rx) = mpsc::channel::<Vec<u8>>(HUB_CONTROL_QUEUE_CAPACITY);
+        let (voice_tx, mut voice_rx) = mpsc::channel::<Vec<u8>>(HUB_VOICE_QUEUE_CAPACITY);
         if let Some(s) = self.pool_senders.get(slot) {
-            *s.lock().await = Some(send_tx);
+            *s.lock().await = Some(HubSlotSenders {
+                control_tx,
+                voice_tx,
+            });
         }
         self.set_slot_registered(slot, false);
 
@@ -1099,7 +1142,7 @@ impl HubClient {
         let writer_handle = tokio::spawn(async move {
             let mut fail_tx = Some(writer_fail_tx_via);
             let write_label = format!("Hub WebSocket writer (slot {})", slot);
-            while let Some(data) = send_rx.recv().await {
+            while let Some(data) = recv_hub_outbound_frame(&mut control_rx, &mut voice_rx).await {
                 if let Err(e) = crate::control_ws::send_with_timeout(
                     &mut ws_write,
                     tungstenite::Message::Binary(Bytes::from(data)),
@@ -1497,9 +1540,30 @@ impl HubClient {
             .lock()
             .await
             .as_ref()
-            .map(|s| s.clone())
+            .map(|s| s.control_tx.clone())
             .ok_or_else(|| anyhow::anyhow!("Pool slot {} not connected", slot))?;
         tx.send(data).await.context("Send channel closed")
+    }
+
+    async fn try_send_voice_on_slot(&self, slot: usize, data: Vec<u8>) -> Result<()> {
+        let sender = self
+            .pool_senders
+            .get(slot)
+            .ok_or_else(|| anyhow::anyhow!("Pool slot {} out of range", slot))?;
+        let tx = sender
+            .lock()
+            .await
+            .as_ref()
+            .map(|s| s.voice_tx.clone())
+            .ok_or_else(|| anyhow::anyhow!("Pool slot {} not connected", slot))?;
+        tx.try_send(data).map_err(|err| match err {
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                anyhow::anyhow!("Voice lane closed on pool slot {}", slot)
+            }
+            tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                anyhow::anyhow!("Voice lane full on pool slot {}", slot)
+            }
+        })
     }
 
     /// Send raw bytes through the WebSocket, using round-robin across slots whose
@@ -1529,7 +1593,7 @@ impl HubClient {
                 // indefinitely stalling callers when the writer task is backed up
                 // (e.g. TCP send buffer full).  A full channel means this slot's
                 // writer is stalled; skip to the next slot rather than blocking.
-                match tx.try_send(data.clone()) {
+                match tx.control_tx.try_send(data.clone()) {
                     Ok(()) => return Ok(slot),
                     Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                         warn!(
@@ -1555,10 +1619,58 @@ impl HubClient {
         ))
     }
 
+    async fn send_voice_raw(&self, data: Vec<u8>) -> Result<usize> {
+        if self.pool_size == 1 {
+            if !self.slot_registered(0) {
+                anyhow::bail!("pool slot 0 not registered")
+            }
+            self.try_send_voice_on_slot(0, data).await?;
+            return Ok(0);
+        }
+
+        let start = self.pool_rr.fetch_add(1, Ordering::Relaxed) % self.pool_size;
+        for i in 0..self.pool_size {
+            let slot = (start + i) % self.pool_size;
+            if !self.slot_registered(slot) {
+                continue;
+            }
+            let sender_opt = {
+                let guard = self.pool_senders[slot].lock().await;
+                guard.as_ref().map(|s| s.voice_tx.clone())
+            };
+            if let Some(tx) = sender_opt {
+                match tx.try_send(data.clone()) {
+                    Ok(()) => return Ok(slot),
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        debug!(
+                            slot,
+                            "Hub voice lane full — dropping relay frame on this slot"
+                        );
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+                }
+            }
+        }
+
+        debug!(
+            "HubClient::send_voice_raw: all {} registered pool slot(s) unavailable (disconnected, unregistered or busy) — voice relay dropped",
+            self.pool_size
+        );
+        Err(anyhow::anyhow!(
+            "all {} registered connection pool slots unavailable (disconnected, unregistered or busy)",
+            self.pool_size
+        ))
+    }
+
     /// Send an EdgeHubPacket to the Hub.
     async fn send_packet(&self, packet: &EdgeHubPacket) -> Result<()> {
         let data = packet.encode_to_vec();
         self.send_raw(data).await.map(|_slot| ())
+    }
+
+    async fn send_voice_packet(&self, packet: &EdgeHubPacket) -> Result<()> {
+        let data = packet.encode_to_vec();
+        self.send_voice_raw(data).await.map(|_slot| ())
     }
 
     /// Send a sequenced fire-and-forget control notification to Hub (Edge→Hub direction).
@@ -1604,14 +1716,15 @@ impl HubClient {
                 method = method.as_str(),
                 "Edge -> Hub unsequenced notification"
             );
+            self.send_voice_packet(&packet).await
         } else {
             info!(
                 edge_id = self.edge_id(),
                 method = method.as_str(),
                 "Edge -> Hub unsequenced notification"
             );
+            self.send_packet(&packet).await
         }
-        self.send_packet(&packet).await
     }
 
     /// Immediately cancel (with an error) all in-flight RPC requests that were sent
@@ -2644,7 +2757,7 @@ mod tests {
         ServerConfig, TlsConfig, WebtransportConfig,
     };
     use munode_protocol::hubedge::{
-        EdgeFullSyncResult, EdgeHubPacket, PacketType, TypedRpcNotification, TypedRpcRequest,
+        self, EdgeFullSyncResult, EdgeHubPacket, PacketType, TypedRpcNotification, TypedRpcRequest,
         TypedRpcResponse,
     };
     use prost::Message;
@@ -2706,11 +2819,19 @@ mod tests {
     #[tokio::test]
     async fn send_raw_skips_connected_but_unregistered_slot() {
         let hub = test_hub_client(2);
-        let (tx0, mut rx0) = mpsc::channel::<Vec<u8>>(4);
-        let (tx1, mut rx1) = mpsc::channel::<Vec<u8>>(4);
+        let (tx0_control, mut rx0_control) = mpsc::channel::<Vec<u8>>(4);
+        let (tx0_voice, _rx0_voice) = mpsc::channel::<Vec<u8>>(4);
+        let (tx1_control, mut rx1_control) = mpsc::channel::<Vec<u8>>(4);
+        let (tx1_voice, _rx1_voice) = mpsc::channel::<Vec<u8>>(4);
 
-        *hub.pool_senders[0].lock().await = Some(tx0);
-        *hub.pool_senders[1].lock().await = Some(tx1);
+        *hub.pool_senders[0].lock().await = Some(super::HubSlotSenders {
+            control_tx: tx0_control,
+            voice_tx: tx0_voice,
+        });
+        *hub.pool_senders[1].lock().await = Some(super::HubSlotSenders {
+            control_tx: tx1_control,
+            voice_tx: tx1_voice,
+        });
         hub.set_slot_registered(0, false);
         hub.set_slot_registered(1, true);
 
@@ -2721,24 +2842,90 @@ mod tests {
             .expect("send should succeed");
 
         assert_eq!(used_slot, 1, "unregistered slot must be skipped");
-        assert_eq!(rx1.recv().await, Some(payload));
+        assert_eq!(rx1_control.recv().await, Some(payload));
         assert!(
-            rx0.try_recv().is_err(),
+            rx0_control.try_recv().is_err(),
             "unregistered slot should stay idle"
+        );
+    }
+
+    #[tokio::test]
+    async fn recv_hub_outbound_frame_prefers_control_lane() {
+        let (control_tx, mut control_rx) = mpsc::channel::<Vec<u8>>(4);
+        let (voice_tx, mut voice_rx) = mpsc::channel::<Vec<u8>>(4);
+
+        voice_tx.send(b"voice".to_vec()).await.unwrap();
+        control_tx.send(b"control".to_vec()).await.unwrap();
+
+        let first = super::recv_hub_outbound_frame(&mut control_rx, &mut voice_rx)
+            .await
+            .expect("frame should be available");
+        let second = super::recv_hub_outbound_frame(&mut control_rx, &mut voice_rx)
+            .await
+            .expect("frame should be available");
+
+        assert_eq!(first, b"control".to_vec());
+        assert_eq!(second, b"voice".to_vec());
+    }
+
+    #[tokio::test]
+    async fn relay_voice_notification_uses_voice_lane() {
+        let hub = test_hub_client(1);
+        let (control_tx, mut control_rx) = mpsc::channel::<Vec<u8>>(4);
+        let (voice_tx, mut voice_rx) = mpsc::channel::<Vec<u8>>(4);
+        *hub.pool_senders[0].lock().await = Some(super::HubSlotSenders {
+            control_tx,
+            voice_tx,
+        });
+        hub.set_slot_registered(0, true);
+
+        let notification = TypedRpcNotification {
+            method: "edge.relayVoiceViaTcp".to_string(),
+            timestamp: Some(1),
+            edge_relay_voice_via_tcp: Some(hubedge::EdgeRelayVoiceViaTcpParams {
+                from_edge_id: 1,
+                target_edge_id: 2,
+                voice_packet: bytes::Bytes::from_static(b"voice-frame"),
+                timestamp: 1,
+            }),
+            ..Default::default()
+        };
+
+        hub.send_unsequenced_notification(notification)
+            .await
+            .expect("voice relay notification should be enqueued");
+
+        let data = voice_rx
+            .recv()
+            .await
+            .expect("voice lane should receive frame");
+        let packet = EdgeHubPacket::decode(data.as_slice()).expect("decode packet");
+        let notification = packet.rpc_notification.expect("notification packet");
+        assert_eq!(notification.method, "edge.relayVoiceViaTcp");
+        assert!(
+            control_rx.try_recv().is_err(),
+            "voice relay must not occupy the control lane"
         );
     }
 
     #[tokio::test]
     async fn runtime_full_sync_request_drains_ready_buffered_notifications() {
         let hub = test_hub_client(1);
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4);
-        *hub.pool_senders[0].lock().await = Some(tx);
+        let (control_tx, mut control_rx) = mpsc::channel::<Vec<u8>>(4);
+        let (voice_tx, _voice_rx) = mpsc::channel::<Vec<u8>>(4);
+        *hub.pool_senders[0].lock().await = Some(super::HubSlotSenders {
+            control_tx,
+            voice_tx,
+        });
         hub.set_slot_registered(0, true);
 
         let mut event_rx = hub.edge_state.subscribe_events();
         let hub_for_reply = hub.clone();
         let reply_task = tokio::spawn(async move {
-            let data = rx.recv().await.expect("full sync request should be sent");
+            let data = control_rx
+                .recv()
+                .await
+                .expect("full sync request should be sent");
             let packet = EdgeHubPacket::decode(data.as_slice()).expect("decode request packet");
             let request = packet.rpc_request.expect("rpc request");
             assert_eq!(request.method, "edge.fullSync");

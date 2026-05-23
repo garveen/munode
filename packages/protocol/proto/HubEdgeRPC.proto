@@ -45,6 +45,8 @@ message ServerLimitsConfig {
   optional uint32 max_users_per_channel = 15;
   // 是否允许客户端发送 UDP ping 包（默认 true）。
   optional bool allow_ping = 16;
+  // Hub 是否允许作为跨 Edge 语音的 TCP relay 最后兜底路径。
+  optional bool hub_tcp_relay_enabled = 17;
 }
 
 message EdgeInfo {

@@ -2,6 +2,8 @@ use std::io::Result;
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
+    println!("cargo:rerun-if-env-changed=MUNODE_REGEN_PROTO");
+
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out_dir = manifest_dir.join("src/generated");
     let force_regen = std::env::var("MUNODE_REGEN_PROTO")
@@ -47,6 +49,20 @@ fn main() -> Result<()> {
                 proto_dir
             ),
         ));
+    }
+
+    for proto_name in [
+        "Mumble.proto",
+        "HubEdge.proto",
+        "HubEdgeSync.proto",
+        "HubEdgeRPC.proto",
+        "AuthService.proto",
+        "VoiceUDP.proto",
+    ] {
+        println!(
+            "cargo:rerun-if-changed={}",
+            proto_dir.join(proto_name).display()
+        );
     }
 
     std::fs::create_dir_all(&out_dir).ok();

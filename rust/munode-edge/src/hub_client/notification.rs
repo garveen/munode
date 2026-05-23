@@ -1092,6 +1092,7 @@ impl HubClient {
             listeners_per_channel = limits.listeners_per_channel.unwrap_or(0),
             listeners_per_user = limits.listeners_per_user.unwrap_or(0),
             allow_ping = limits.allow_ping.unwrap_or(false),
+            hub_tcp_relay_enabled = limits.hub_tcp_relay_enabled.unwrap_or(true),
             suggest_version = limits.suggest_version.unwrap_or(0),
             suggest_positional = limits.suggest_positional.unwrap_or(false),
             suggest_push_to_talk = limits.suggest_push_to_talk.unwrap_or(false),
@@ -1102,6 +1103,9 @@ impl HubClient {
             self.edge_state
                 .allow_ping
                 .store(allow_ping, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(enabled) = limits.hub_tcp_relay_enabled {
+            self.edge_state.set_hub_tcp_relay_enabled(enabled);
         }
         self.edge_state.max_bandwidth_bps.store(
             limits.max_bandwidth.unwrap_or(0),
@@ -1134,8 +1138,52 @@ mod tests {
     use super::{DisseminationEpochDecision, decide_dissemination_epoch_update};
     use crate::channel_manager::ChannelManager;
     use crate::client::ClientManager;
+    use crate::hub_client::HubClient;
     use crate::state::EdgeState;
+    use munode_common::config::{
+        EdgeConfig, EdgeVoiceRoutingConfig, EdgeWebApiConfig, HubServerConfig, NetworkConfig,
+        ServerConfig, TlsConfig, WebtransportConfig,
+    };
+    use munode_protocol::hubedge::ServerLimitsConfig;
     use std::sync::atomic::Ordering;
+
+    fn test_config() -> EdgeConfig {
+        EdgeConfig {
+            server_id: 1,
+            name: "test".to_string(),
+            network: NetworkConfig {
+                host: "127.0.0.1".to_string(),
+                port: 64738,
+                edge_port: None,
+                external_host: "127.0.0.1".to_string(),
+                external_port: None,
+                region: None,
+                proxy_protocol: false,
+                trusted_proxy_ips: Vec::new(),
+            },
+            tls: TlsConfig {
+                cert: "test.pem".to_string(),
+                key: "test.key".to_string(),
+                ca: None,
+            },
+            hub_server: HubServerConfig {
+                host: "localhost".to_string(),
+                control_port: 8080,
+                reconnect_interval: 5000,
+                heartbeat_interval: 10000,
+                hmac_secret: None,
+                pool_size: 1,
+                static_peers: vec![],
+                tls: false,
+            },
+            server: ServerConfig::default(),
+            voice_routing: EdgeVoiceRoutingConfig::default(),
+            web_api: EdgeWebApiConfig::default(),
+            webtransport: WebtransportConfig::default(),
+            log_level: "info".to_string(),
+            log_format: "text".to_string(),
+        }
+    }
 
     #[test]
     fn dissemination_epoch_rejects_stale_updates() {
@@ -1197,5 +1245,21 @@ mod tests {
             edge_state.dissemination_route_epoch.load(Ordering::Acquire),
             12
         );
+    }
+
+    #[tokio::test]
+    async fn apply_server_limits_updates_hub_tcp_relay_live_flag() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        let hub = HubClient::new(&test_config(), edge_state.clone());
+
+        assert!(edge_state.hub_tcp_relay_allowed());
+
+        hub.apply_server_limits(ServerLimitsConfig {
+            hub_tcp_relay_enabled: Some(false),
+            ..Default::default()
+        })
+        .await;
+
+        assert!(!edge_state.hub_tcp_relay_allowed());
     }
 }

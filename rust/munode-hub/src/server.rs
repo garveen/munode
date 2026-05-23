@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -191,6 +191,11 @@ pub struct HubState {
     /// Initialised from the startup config and updated in-place on SIGHUP hot-reload.
     /// All reads use the async `RwLock` so callers never block the runtime.
     pub live_limits: RwLock<ServerLimitsConfig>,
+    /// Live Hub TCP relay enable flag.
+    ///
+    /// Updated on SIGHUP hot-reload so relay handlers can stop accepting
+    /// `edge.relayVoiceViaTcp` without restarting the Hub.
+    pub hub_tcp_relay_enabled: AtomicBool,
     /// Per-edge monotonic notification sequence counter.
     ///
     /// Each Edge has its own counter that is incremented every time a sequenced
@@ -334,6 +339,7 @@ impl HubServer {
             started_at: std::time::Instant::now(),
             voice_targets: RwLock::new(HashMap::new()),
             live_limits: RwLock::new(crate::rpc_handler::server_limits_from_config(&self.config)),
+            hub_tcp_relay_enabled: AtomicBool::new(self.config.voice_routing.enable_hub_tcp_relay),
             notification_seqs: StdMutex::new(HashMap::new()),
             edge_notif_senders: RwLock::new(HashMap::new()),
             pending_auths: RwLock::new(HashMap::new()),
@@ -380,9 +386,7 @@ impl HubServer {
                 };
                 loop {
                     sighup.recv().await;
-                    info!(
-                        "SIGHUP received — reloading config and pushing limits to connected Edges"
-                    );
+                    info!("SIGHUP received — reloading config and applying live settings");
                     let Some(ref path) = reload_path else {
                         warn!("SIGHUP received but no config path known; skipping hot-reload");
                         continue;
@@ -394,6 +398,16 @@ impl HubServer {
                         Ok(Ok(new_cfg)) => {
                             if let Some(ref lr) = log_reload_handle {
                                 lr.reload_level(&new_cfg.log_level);
+                            }
+                            let relay_enabled = new_cfg.voice_routing.enable_hub_tcp_relay;
+                            let previous_relay_enabled = reload_state
+                                .hub_tcp_relay_enabled
+                                .swap(relay_enabled, Ordering::AcqRel);
+                            if previous_relay_enabled != relay_enabled {
+                                info!(
+                                    enabled = relay_enabled,
+                                    "SIGHUP: updated live Hub TCP relay availability"
+                                );
                             }
                             // Compute new limits from the reloaded config.
                             let mut new_limits =
@@ -458,7 +472,8 @@ impl HubServer {
                             broadcast_critical_sequenced(&reload_state, data).await;
                             info!(
                                 log_level = %new_cfg.log_level,
-                                "Hub config hot-reload applied and pushed to all connected Edges"
+                                relay_enabled,
+                                "Hub config hot-reload applied; updated live server limits on connected Edges"
                             );
                         }
                         Ok(Err(e)) => {

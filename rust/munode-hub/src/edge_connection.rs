@@ -11,8 +11,42 @@ use tracing::{debug, error, info, warn};
 
 use munode_protocol::hubedge::*;
 
-use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
+use crate::rpc_handler::{EdgeSender, EdgeSenderPool, RpcHandler};
 use crate::server::{EdgeConnectionControl, EdgeHealth, EdgeNotifEnvelope, HubState};
+
+const EDGE_CONTROL_QUEUE_CAPACITY: usize = 256;
+const EDGE_VOICE_QUEUE_CAPACITY: usize = 2048;
+
+async fn recv_edge_outbound_frame(
+    control_rx: &mut mpsc::Receiver<Vec<u8>>,
+    voice_rx: &mut mpsc::Receiver<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    loop {
+        if let Ok(data) = control_rx.try_recv() {
+            return Some(data);
+        }
+        if let Ok(data) = voice_rx.try_recv() {
+            return Some(data);
+        }
+        if control_rx.is_closed() && voice_rx.is_closed() {
+            return None;
+        }
+
+        tokio::select! {
+            biased;
+            data = control_rx.recv(), if !control_rx.is_closed() => {
+                if let Some(data) = data {
+                    return Some(data);
+                }
+            }
+            data = voice_rx.recv(), if !voice_rx.is_closed() => {
+                if let Some(data) = data {
+                    return Some(data);
+                }
+            }
+        }
+    }
+}
 
 /// Represents a single connected edge server.
 pub struct EdgeConnection {
@@ -26,7 +60,7 @@ pub struct EdgeConnection {
     /// Clone of this connection's outbound sender, set after registration.
     /// Used to identify and remove this specific sender from the edge's pool
     /// on disconnect, without affecting other pool connections.
-    own_sender: Option<mpsc::Sender<Vec<u8>>>,
+    own_sender: Option<EdgeSender>,
 }
 
 impl EdgeConnection {
@@ -53,8 +87,10 @@ impl EdgeConnection {
     ) -> Result<()> {
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
-        // Channel for sending outgoing messages to this edge
-        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(4096);
+        // Split outbound traffic into high-priority control and low-priority voice lanes.
+        let (control_tx, mut control_rx) = mpsc::channel::<Vec<u8>>(EDGE_CONTROL_QUEUE_CAPACITY);
+        let (voice_tx, mut voice_rx) = mpsc::channel::<Vec<u8>>(EDGE_VOICE_QUEUE_CAPACITY);
+        let send_tx = EdgeSender::new(control_tx.clone(), voice_tx);
         // Graceful-shutdown signal for the writer task.
         let (writer_stop_tx, mut writer_stop_rx) = mpsc::channel::<()>(1);
         // Writer-to-reader failure signal: when the writer encounters a fatal send error
@@ -64,14 +100,14 @@ impl EdgeConnection {
         let shutdown = Arc::clone(&self.shutdown);
         let mut request_tasks = JoinSet::new();
 
-        // Writer task: forwards messages from send_rx to WebSocket
+        // Writer task: always drains control before voice so relay traffic stays best-effort.
         let writer_handle = tokio::spawn(async move {
             let mut fail_tx = Some(writer_fail_tx);
             loop {
                 tokio::select! {
                     biased;
                     _ = writer_stop_rx.recv() => break,
-                    msg = send_rx.recv() => {
+                    msg = recv_edge_outbound_frame(&mut control_rx, &mut voice_rx) => {
                         match msg {
                             Some(data) => {
                                 if let Err(e) = ws_write
@@ -112,7 +148,10 @@ impl EdgeConnection {
                 msg = ws_read.next() => {
                     match msg {
                         Some(Ok(tungstenite::Message::Binary(data))) => {
-                            if let Err(e) = self.handle_incoming(&data, &send_tx, &mut request_tasks).await {
+                            if let Err(e) = self
+                                .handle_incoming(&data, &control_tx, &send_tx, &mut request_tasks)
+                                .await
+                            {
                                 warn!("Error handling edge message from {}: {}", addr, e);
                             }
                         }
@@ -122,7 +161,7 @@ impl EdgeConnection {
                         }
                         Some(Ok(tungstenite::Message::Ping(data))) => {
                             let pong = tungstenite::Message::Pong(data).into_data().to_vec();
-                            let _ = send_tx.send(pong).await;
+                            let _ = control_tx.send(pong).await;
                         }
                         Some(Ok(_)) => {}
                         Some(Err(e)) => {
@@ -300,7 +339,7 @@ impl EdgeConnection {
         Ok(register.success)
     }
 
-    async fn install_registered_sender(&mut self, edge_id: u32, send_tx: &mpsc::Sender<Vec<u8>>) {
+    async fn install_registered_sender(&mut self, edge_id: u32, send_tx: &EdgeSender) {
         self.own_sender = Some(send_tx.clone());
 
         let reset_processor = {
@@ -339,6 +378,7 @@ impl EdgeConnection {
         &mut self,
         data: &[u8],
         send_tx: &mpsc::Sender<Vec<u8>>,
+        registered_sender: &EdgeSender,
         request_tasks: &mut JoinSet<()>,
     ) -> Result<()> {
         let packet = EdgeHubPacket::decode(data).context("Failed to decode EdgeHubPacket")?;
@@ -371,7 +411,8 @@ impl EdgeConnection {
                             Ok(response_data) => {
                                 match Self::register_response_succeeded(&response_data) {
                                     Ok(true) => {
-                                        self.install_registered_sender(edge_id, send_tx).await;
+                                        self.install_registered_sender(edge_id, registered_sender)
+                                            .await;
                                     }
                                     Ok(false) => {}
                                     Err(e) => {
@@ -553,4 +594,28 @@ fn current_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn recv_edge_outbound_frame_prefers_control_lane() {
+        let (control_tx, mut control_rx) = mpsc::channel::<Vec<u8>>(4);
+        let (voice_tx, mut voice_rx) = mpsc::channel::<Vec<u8>>(4);
+
+        voice_tx.send(b"voice".to_vec()).await.unwrap();
+        control_tx.send(b"control".to_vec()).await.unwrap();
+
+        let first = recv_edge_outbound_frame(&mut control_rx, &mut voice_rx)
+            .await
+            .expect("first frame");
+        let second = recv_edge_outbound_frame(&mut control_rx, &mut voice_rx)
+            .await
+            .expect("second frame");
+
+        assert_eq!(first, b"control".to_vec());
+        assert_eq!(second, b"voice".to_vec());
+    }
 }

@@ -720,7 +720,7 @@ pub(crate) async fn hub_event_listener(
                         let hub_reachable = state
                             .accepting_connections
                             .load(std::sync::atomic::Ordering::Relaxed);
-                        if hub_reachable && state.enable_hub_tcp_fallback {
+                        if hub_reachable && state.hub_tcp_relay_allowed() {
                             debug!(
                                 "Peer edge {} DirectTcp down but Hub TCP relay is available — \
                                  skipping partition report (voice flows via Hub relay)",
