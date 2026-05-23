@@ -1219,7 +1219,10 @@ impl RpcHandler {
                 .await;
             }
 
-            self.send_notification_to_edge_unsequenced(edge_id, "hub.disseminationUpdate", |n| {
+            // Runtime source-rooted forwarding consumes dissemination directly, so
+            // this update must follow the existing reliable Hub->Edge notification
+            // channel instead of the fire-and-forget unsequenced path.
+            self.send_notification_to_edge(edge_id, "hub.disseminationUpdate", |n| {
                 n.dissemination_update = Some(HubDisseminationUpdateParams {
                     sources: dissemination_sources
                         .into_iter()

@@ -17,7 +17,7 @@
 
 #![cfg(feature = "test-utils")]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -31,10 +31,14 @@ use munode_common::config::{
 };
 use munode_edge::channel_manager::ChannelManager;
 use munode_edge::client::ClientManager;
+use munode_edge::cluster_voice::forward_source_voice_packet;
 use munode_edge::hub_client::HubClient;
-use munode_edge::peer_registry::{PeerEdgeInfo, PeerRegistry};
+use munode_edge::peer_registry::{PeerEdgeInfo, PeerRegistry, PeerVoiceTcpPool};
 use munode_edge::relay_server::{connect_peer_voice_tcp, run_edge_ws_server_with_listener};
-use munode_edge::state::{EdgeState, EdgeStateConfig, HopTransport, RouteCandidate, RouteDecision};
+use munode_edge::state::{
+    DisseminationSourceState, EdgeState, EdgeStateConfig, HopTransport, RouteCandidate,
+    RouteDecision,
+};
 use munode_edge::udp::{test_route_to_edge, test_send_relay_packet};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -662,6 +666,94 @@ async fn recovery_after_degradation_clears_failure_counter() {
             .unwrap_or(0),
         0,
         "failure counter must be reset to 0 after a successful send"
+    );
+}
+
+/// A best-effort branch backup must not suppress direct fallback to the failed
+/// primary child edge. Otherwise the primary child itself can be blackholed even
+/// though a backup peer accepted the duplicate.
+#[tokio::test]
+async fn failed_primary_child_still_uses_direct_tcp_fallback_when_backup_udp_succeeds() {
+    let state = fresh_edge_state();
+    state.edge_id.store(4, Ordering::Relaxed);
+
+    let (edge_sock, _) = udp_socket_on_random_port().await;
+    state.edge_udp_socket.store(Arc::new(Some(edge_sock)));
+
+    let (backup_recv_sock, backup_addr) = udp_socket_on_random_port().await;
+
+    let mut registry = PeerRegistry::default();
+    registry.upsert(
+        2,
+        PeerEdgeInfo {
+            udp_addr: backup_addr,
+            host: "127.0.0.1".into(),
+            relay_port: None,
+        },
+    );
+    state.peer_registry.store(Arc::new(registry));
+
+    state.dissemination_routes.store(Arc::new(HashMap::from([(
+        4,
+        DisseminationSourceState {
+            active_children: vec![1],
+            duplicate_children: vec![1],
+            branch_backups: HashMap::from([(1, vec![2])]),
+        },
+    )])));
+
+    {
+        let mut failures = state.next_hop_failures.write().unwrap();
+        failures.insert(
+            1,
+            std::sync::atomic::AtomicU32::new(state.consecutive_failure_threshold),
+        );
+    }
+
+    let pool = Arc::new(PeerVoiceTcpPool::new(1));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    *pool.senders[0].lock().unwrap() = Some(tx);
+    pool.mark_connected();
+    state
+        .voice_tcp_conns
+        .store(Arc::new(HashMap::from([(1, pool)])));
+
+    let hub_client = HubClient::new(&test_config(), state.clone());
+
+    forward_source_voice_packet(
+        &state,
+        &hub_client,
+        40_001,
+        &[0x80, 0x01, 0xAA, 0xBB],
+        0,
+        &[],
+    )
+    .await;
+
+    let tcp_frame = tokio::time::timeout(tokio::time::Duration::from_millis(250), rx.recv())
+        .await
+        .expect("primary fallback timeout")
+        .expect("primary fallback frame");
+    assert_eq!(
+        tcp_frame[0], 0x01,
+        "DirectTcp fallback must send EDGE_PKT_VOICE"
+    );
+    assert_eq!(
+        tcp_frame[1], 4,
+        "fallback frame must preserve source edge id"
+    );
+
+    let mut backup_buf = [0u8; 128];
+    let backup_len = tokio::time::timeout(
+        tokio::time::Duration::from_millis(250),
+        backup_recv_sock.recv(&mut backup_buf),
+    )
+    .await
+    .expect("backup UDP timeout")
+    .expect("backup UDP recv");
+    assert!(
+        backup_len > 0,
+        "best-effort backup UDP copy must still be sent"
     );
 }
 

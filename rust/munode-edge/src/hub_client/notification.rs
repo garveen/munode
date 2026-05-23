@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use tracing::{debug, info, warn};
 
-use munode_protocol::hubedge::{ServerLimitsConfig, TypedRpcNotification};
+use munode_protocol::hubedge::{
+    HubDisseminationUpdateParams, ServerLimitsConfig, TypedRpcNotification,
+};
 use munode_protocol::message_type::MessageType;
 
 use crate::channel_manager::{ChannelData, RemoteUser};
@@ -21,6 +23,73 @@ use crate::voice_target::{apply_voice_target_proto, clear_session_voice_targets}
 use super::HubClient;
 
 const WHISPER_PERMISSION_PREFETCH_CONCURRENCY: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisseminationEpochDecision {
+    Apply {
+        clear_dedupe: bool,
+    },
+    DropStale {
+        current_epoch: u64,
+        incoming_epoch: u64,
+    },
+}
+
+fn decide_dissemination_epoch_update(
+    edge_state: &crate::state::EdgeState,
+    incoming_epoch: u64,
+) -> DisseminationEpochDecision {
+    use std::sync::atomic::Ordering;
+
+    let mut current_epoch = edge_state.dissemination_route_epoch.load(Ordering::Acquire);
+    loop {
+        if incoming_epoch < current_epoch {
+            return DisseminationEpochDecision::DropStale {
+                current_epoch,
+                incoming_epoch,
+            };
+        }
+
+        match edge_state.dissemination_route_epoch.compare_exchange(
+            current_epoch,
+            incoming_epoch,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                return DisseminationEpochDecision::Apply {
+                    clear_dedupe: current_epoch != incoming_epoch,
+                };
+            }
+            Err(actual_epoch) => current_epoch = actual_epoch,
+        }
+    }
+}
+
+fn build_dissemination_routes(
+    params: &HubDisseminationUpdateParams,
+) -> HashMap<u32, crate::state::DisseminationSourceState> {
+    let mut routes = HashMap::new();
+    for source in &params.sources {
+        let mut branch_backups = HashMap::new();
+        for backup in &source.branch_backups {
+            branch_backups.insert(
+                backup.primary_child_edge_id,
+                backup.backup_next_hops.clone(),
+            );
+        }
+
+        routes.insert(
+            source.source_edge_id,
+            crate::state::DisseminationSourceState {
+                active_children: source.active_children.clone(),
+                duplicate_children: source.duplicate_children.clone(),
+                branch_backups,
+            },
+        );
+    }
+    routes
+}
 
 impl HubClient {
     async fn collect_channel_subtree(&self, root_channel_id: u32) -> Vec<u32> {
@@ -864,7 +933,6 @@ impl HubClient {
             }
             "hub.disseminationUpdate" => {
                 if let Some(params) = &notification.dissemination_update {
-                    use crate::state::DisseminationSourceState;
                     use std::sync::atomic::Ordering;
 
                     let new_max_ttl = params.max_ttl.unwrap_or(4);
@@ -873,35 +941,28 @@ impl HubClient {
                         .store(new_max_ttl, Ordering::Relaxed);
 
                     let incoming_route_epoch = params.route_epoch.unwrap_or(0);
-                    let previous_route_epoch = self
-                        .edge_state
-                        .dissemination_route_epoch
-                        .swap(incoming_route_epoch, Ordering::Relaxed);
-                    if previous_route_epoch != incoming_route_epoch
-                        && let Ok(mut windows) = self.edge_state.dissemination_dedupe.lock()
+                    match decide_dissemination_epoch_update(&self.edge_state, incoming_route_epoch)
                     {
-                        windows.clear();
-                    }
-
-                    let mut new_routes: HashMap<u32, DisseminationSourceState> = HashMap::new();
-                    for source in &params.sources {
-                        let mut branch_backups = HashMap::new();
-                        for backup in &source.branch_backups {
-                            branch_backups.insert(
-                                backup.primary_child_edge_id,
-                                backup.backup_next_hops.clone(),
+                        DisseminationEpochDecision::DropStale {
+                            current_epoch,
+                            incoming_epoch,
+                        } => {
+                            warn!(
+                                current_epoch,
+                                incoming_epoch, "Dropping stale dissemination update"
                             );
+                            return;
                         }
-
-                        new_routes.insert(
-                            source.source_edge_id,
-                            DisseminationSourceState {
-                                active_children: source.active_children.clone(),
-                                duplicate_children: source.duplicate_children.clone(),
-                                branch_backups,
-                            },
-                        );
+                        DisseminationEpochDecision::Apply { clear_dedupe } => {
+                            if clear_dedupe
+                                && let Ok(mut windows) = self.edge_state.dissemination_dedupe.lock()
+                            {
+                                windows.clear();
+                            }
+                        }
                     }
+
+                    let new_routes = build_dissemination_routes(params);
 
                     let count = new_routes.len();
                     self.edge_state
@@ -1065,5 +1126,76 @@ impl HubClient {
                 .store(v, std::sync::atomic::Ordering::Relaxed);
         }
         *self.edge_state.hub_limits.write().await = Some(limits);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DisseminationEpochDecision, decide_dissemination_epoch_update};
+    use crate::channel_manager::ChannelManager;
+    use crate::client::ClientManager;
+    use crate::state::EdgeState;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn dissemination_epoch_rejects_stale_updates() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        edge_state
+            .dissemination_route_epoch
+            .store(12, Ordering::Release);
+
+        let decision = decide_dissemination_epoch_update(&edge_state, 11);
+
+        assert_eq!(
+            decision,
+            DisseminationEpochDecision::DropStale {
+                current_epoch: 12,
+                incoming_epoch: 11,
+            }
+        );
+        assert_eq!(
+            edge_state.dissemination_route_epoch.load(Ordering::Acquire),
+            12
+        );
+    }
+
+    #[test]
+    fn dissemination_epoch_accepts_newer_updates_and_marks_dedupe_reset() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        edge_state
+            .dissemination_route_epoch
+            .store(12, Ordering::Release);
+
+        let decision = decide_dissemination_epoch_update(&edge_state, 13);
+
+        assert_eq!(
+            decision,
+            DisseminationEpochDecision::Apply { clear_dedupe: true }
+        );
+        assert_eq!(
+            edge_state.dissemination_route_epoch.load(Ordering::Acquire),
+            13
+        );
+    }
+
+    #[test]
+    fn dissemination_epoch_accepts_same_epoch_without_dedupe_reset() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        edge_state
+            .dissemination_route_epoch
+            .store(12, Ordering::Release);
+
+        let decision = decide_dissemination_epoch_update(&edge_state, 12);
+
+        assert_eq!(
+            decision,
+            DisseminationEpochDecision::Apply {
+                clear_dedupe: false,
+            }
+        );
+        assert_eq!(
+            edge_state.dissemination_route_epoch.load(Ordering::Acquire),
+            12
+        );
     }
 }

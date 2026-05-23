@@ -400,7 +400,7 @@ async fn forward_logical_frame(
     let mut need_emergency_flood = false;
 
     for next_hop in unresolved.drain(..) {
-        let backup_recovered = plan
+        let backup_dispatched = plan
             .branch_backups
             .get(&next_hop)
             .map(|backups| {
@@ -423,9 +423,20 @@ async fn forward_logical_frame(
                 backup_unresolved.len() < backup_next_hops.len()
             })
             .unwrap_or(false);
-        if backup_recovered {
-            continue;
+        if backup_dispatched {
+            trace!(
+                next_hop,
+                source_edge_id = parsed.source_edge_id,
+                seq = parsed.transport_packet_seq,
+                "Cluster voice branch backup dispatched"
+            );
         }
+
+        // Branch backups are only best-effort alternate next hops. The media
+        // packet does not carry per-branch destination metadata, so a backup
+        // send cannot prove the original primary child edge itself will still
+        // receive the frame. Keep the failed primary child on the reliable
+        // fallback ladder (peer TCP -> Hub relay -> emergency flood).
 
         if dispatch_peer_tcp(state, next_hop, &frame) {
             continue;
