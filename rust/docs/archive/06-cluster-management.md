@@ -70,7 +70,7 @@ impl TopologyManager {
 ### Edge 间通信
 
 - 证书交换: `edge.exchangeCertificates`
-- 语音 TCP 中继: `edge.relayVoiceViaTcp` (Hub 转发，当 Edge 间 UDP 不通时)
+- 语音 TCP 中继: `edge.relayVoiceViaTcp` 单向通知 (Hub 转发，当 Edge 间 UDP 不通时)
 - 直连 UDP: Edge 间直接 UDP 语音转发 (可选)
 
 ### 影响范围

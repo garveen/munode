@@ -519,12 +519,12 @@ max_relay_bandwidth = 0
 
 ### 8.3 Hub 侧配置（`hub.toml`）
 
-现有字段 `enable_relay` **需要改名为 `enable_hub_tcp_relay`**。当前名称的字面意思是"是否启用中继功能"，容易误解为控制所有中继（包括 Edge 间 UDP 中继），但实际上它只控制 Hub 是否接受 `edge.relayVoiceViaTcp` RPC。改名后语义明确：只控制 Hub 作为 TCP 中继节点的开关。
+现有字段 `enable_relay` **需要改名为 `enable_hub_tcp_relay`**。当前名称的字面意思是"是否启用中继功能"，容易误解为控制所有中继（包括 Edge 间 UDP 中继），但实际上它只控制 Hub 是否接受 `edge.relayVoiceViaTcp` 单向通知。改名后语义明确：只控制 Hub 作为 TCP 中继节点的开关。
 
 ```toml
 [voice_routing]
 # ─── Hub TCP 中继控制 ───
-# Hub 是否接受 edge.relayVoiceViaTcp RPC（仅控制 Hub TCP 中继，不影响 Edge 间 UDP 中继）
+# Hub 是否接受 edge.relayVoiceViaTcp 单向通知（仅控制 Hub TCP 中继，不影响 Edge 间 UDP 中继）
 # 原名 enable_relay，改名以避免歧义
 enable_hub_tcp_relay = true
 # Hub TCP 中继的全局带宽上限（Kbps，0 = 不限制）

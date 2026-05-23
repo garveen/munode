@@ -609,7 +609,7 @@ pub struct HubChannelNinjaConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct HubVoiceRoutingConfig {
     /// Enable Hub-mediated voice relay (default: true).
-    /// When false, `edge.relayVoiceViaTcp` RPC calls are rejected.
+    /// When false, `edge.relayVoiceViaTcp` notifications are dropped.
     #[serde(default = "default_true")]
     pub enable_hub_tcp_relay: bool,
     /// Maximum number of simultaneous relay streams per Edge pair.

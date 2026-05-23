@@ -446,117 +446,109 @@ impl RpcHandler {
             };
         }
 
-        let response = if method == "edge.relayVoiceViaTcp" {
-            boxed_handler!(self.handle_relay_voice_via_tcp(request, request_id))
-        } else {
-            match method {
-                "edge.register" => {
-                    boxed_handler!(self.handle_register(&request, request_id, connection_id))
-                }
-                "edge.authenticateUser" => {
-                    boxed_handler!(self.handle_authenticate_user(
-                        &request,
-                        request_id,
-                        edge_server_id,
-                        connection_id,
-                    ))
-                }
-                "edge.reportSession" => {
-                    boxed_handler!(self.handle_report_session(
-                        &request,
-                        request_id,
-                        edge_server_id,
-                        connection_id,
-                    ))
-                }
-                "edge.fullSync" => {
-                    boxed_handler!(self.handle_full_sync(&request, request_id, edge_server_id))
-                }
-                "edge.handlePermissionQuery" => {
-                    boxed_handler!(self.handle_permission_query(&request, request_id))
-                }
-                "edge.batchPermissionQuery" => {
-                    boxed_handler!(self.handle_batch_permission_query(&request, request_id))
-                }
-                "edge.syncVoiceTarget" => {
-                    boxed_handler!(self.handle_sync_voice_target(&request, request_id))
-                }
-                "edge.getVoiceTargets" => boxed_handler!(self.handle_get_voice_targets(request_id)),
-                "edge.saveChannel" => {
-                    boxed_handler!(self.handle_save_channel(&request, request_id))
-                }
-                "edge.handleACL" => boxed_handler!(self.handle_acl(&request, request_id)),
-                "edge.getBanList" => boxed_handler!(self.handle_get_ban_list(&request, request_id)),
-                "edge.updateBanList" => {
-                    boxed_handler!(self.handle_update_ban_list(&request, request_id))
-                }
-                "edge.getUserList" => boxed_handler!(self.handle_get_user_list(request_id)),
-                "edge.updateUserList" => {
-                    boxed_handler!(self.handle_update_user_list(&request, request_id))
-                }
-                "edge.saveChannelListeners" => {
-                    boxed_handler!(self.handle_save_channel_listeners(&request, request_id))
-                }
-                "edge.loadChannelListeners" => {
-                    boxed_handler!(self.handle_load_channel_listeners(&request, request_id))
-                }
-                "blob.put" => boxed_handler!(self.handle_blob_put(&request, request_id)),
-                "blob.get" => boxed_handler!(self.handle_blob_get(&request, request_id)),
-                "blob.getUserTexture" => {
-                    boxed_handler!(self.handle_blob_get_user_texture(&request, request_id))
-                }
-                "blob.getUserComment" => {
-                    boxed_handler!(self.handle_blob_get_user_comment(&request, request_id))
-                }
-                "blob.setUserTexture" => {
-                    boxed_handler!(self.handle_blob_set_user_texture(&request, request_id))
-                }
-                "blob.setUserComment" => {
-                    boxed_handler!(self.handle_blob_set_user_comment(&request, request_id))
-                }
-                "edge.join" => {
-                    boxed_handler!(self.handle_cluster_join(&request, request_id, edge_server_id))
-                }
-                "edge.joinComplete" => {
-                    boxed_handler!(self.handle_cluster_join_complete(&request, request_id))
-                }
-                "edge.reportPeerDisconnect" => {
-                    boxed_handler!(self.handle_report_peer_disconnect(&request, request_id))
-                }
-                "edge.reportQuality" => {
-                    boxed_handler!(self.handle_report_quality(&request, request_id))
-                }
-                "cluster.getStatus" => boxed_handler!(self.handle_cluster_get_status(request_id)),
-                "edge.userLeft" => {
-                    boxed_handler!(self.handle_user_left_rpc(&request, request_id, edge_server_id))
-                }
-                "edge.userMoved" => {
-                    boxed_handler!(self.handle_user_moved_rpc(&request, request_id, edge_server_id))
-                }
-                "edge.userStateChanged" => {
-                    boxed_handler!(self.handle_user_state_changed_rpc(
-                        &request,
-                        request_id,
-                        edge_server_id
-                    ))
-                }
-                "edge.channelState" => {
-                    boxed_handler!(self.handle_channel_state_rpc(&request, request_id))
-                }
-                "edge.channelRemove" => {
-                    boxed_handler!(self.handle_channel_remove_rpc(&request, request_id))
-                }
-                "edge.userRemove" => {
-                    boxed_handler!(self.handle_user_remove_rpc(&request, request_id))
-                }
-                _ => {
-                    warn!("Unknown RPC method: {}", method);
-                    Ok(self.make_error_packet(
-                        request_id,
-                        -1,
-                        &format!("Unknown method: {}", method),
-                    ))
-                }
+        let response = match method {
+            "edge.register" => {
+                boxed_handler!(self.handle_register(&request, request_id, connection_id))
+            }
+            "edge.authenticateUser" => {
+                boxed_handler!(self.handle_authenticate_user(
+                    &request,
+                    request_id,
+                    edge_server_id,
+                    connection_id,
+                ))
+            }
+            "edge.reportSession" => {
+                boxed_handler!(self.handle_report_session(
+                    &request,
+                    request_id,
+                    edge_server_id,
+                    connection_id,
+                ))
+            }
+            "edge.fullSync" => {
+                boxed_handler!(self.handle_full_sync(&request, request_id, edge_server_id))
+            }
+            "edge.handlePermissionQuery" => {
+                boxed_handler!(self.handle_permission_query(&request, request_id))
+            }
+            "edge.batchPermissionQuery" => {
+                boxed_handler!(self.handle_batch_permission_query(&request, request_id))
+            }
+            "edge.syncVoiceTarget" => {
+                boxed_handler!(self.handle_sync_voice_target(&request, request_id))
+            }
+            "edge.getVoiceTargets" => boxed_handler!(self.handle_get_voice_targets(request_id)),
+            "edge.saveChannel" => {
+                boxed_handler!(self.handle_save_channel(&request, request_id))
+            }
+            "edge.handleACL" => boxed_handler!(self.handle_acl(&request, request_id)),
+            "edge.getBanList" => boxed_handler!(self.handle_get_ban_list(&request, request_id)),
+            "edge.updateBanList" => {
+                boxed_handler!(self.handle_update_ban_list(&request, request_id))
+            }
+            "edge.getUserList" => boxed_handler!(self.handle_get_user_list(request_id)),
+            "edge.updateUserList" => {
+                boxed_handler!(self.handle_update_user_list(&request, request_id))
+            }
+            "edge.saveChannelListeners" => {
+                boxed_handler!(self.handle_save_channel_listeners(&request, request_id))
+            }
+            "edge.loadChannelListeners" => {
+                boxed_handler!(self.handle_load_channel_listeners(&request, request_id))
+            }
+            "blob.put" => boxed_handler!(self.handle_blob_put(&request, request_id)),
+            "blob.get" => boxed_handler!(self.handle_blob_get(&request, request_id)),
+            "blob.getUserTexture" => {
+                boxed_handler!(self.handle_blob_get_user_texture(&request, request_id))
+            }
+            "blob.getUserComment" => {
+                boxed_handler!(self.handle_blob_get_user_comment(&request, request_id))
+            }
+            "blob.setUserTexture" => {
+                boxed_handler!(self.handle_blob_set_user_texture(&request, request_id))
+            }
+            "blob.setUserComment" => {
+                boxed_handler!(self.handle_blob_set_user_comment(&request, request_id))
+            }
+            "edge.join" => {
+                boxed_handler!(self.handle_cluster_join(&request, request_id, edge_server_id))
+            }
+            "edge.joinComplete" => {
+                boxed_handler!(self.handle_cluster_join_complete(&request, request_id))
+            }
+            "edge.reportPeerDisconnect" => {
+                boxed_handler!(self.handle_report_peer_disconnect(&request, request_id))
+            }
+            "edge.reportQuality" => {
+                boxed_handler!(self.handle_report_quality(&request, request_id))
+            }
+            "cluster.getStatus" => boxed_handler!(self.handle_cluster_get_status(request_id)),
+            "edge.userLeft" => {
+                boxed_handler!(self.handle_user_left_rpc(&request, request_id, edge_server_id))
+            }
+            "edge.userMoved" => {
+                boxed_handler!(self.handle_user_moved_rpc(&request, request_id, edge_server_id))
+            }
+            "edge.userStateChanged" => {
+                boxed_handler!(self.handle_user_state_changed_rpc(
+                    &request,
+                    request_id,
+                    edge_server_id
+                ))
+            }
+            "edge.channelState" => {
+                boxed_handler!(self.handle_channel_state_rpc(&request, request_id))
+            }
+            "edge.channelRemove" => {
+                boxed_handler!(self.handle_channel_remove_rpc(&request, request_id))
+            }
+            "edge.userRemove" => {
+                boxed_handler!(self.handle_user_remove_rpc(&request, request_id))
+            }
+            _ => {
+                warn!("Unknown RPC method: {}", method);
+                Ok(self.make_error_packet(request_id, -1, &format!("Unknown method: {}", method)))
             }
         };
 
@@ -850,13 +842,25 @@ impl RpcHandler {
         edge_server_id: u32,
     ) {
         let method = &notification.method;
-        info!(
-            edge_id = edge_server_id,
-            method = method.as_str(),
-            "Edge -> Hub notification"
-        );
+        if method == "edge.relayVoiceViaTcp" {
+            debug!(
+                edge_id = edge_server_id,
+                method = method.as_str(),
+                "Edge -> Hub notification"
+            );
+        } else {
+            info!(
+                edge_id = edge_server_id,
+                method = method.as_str(),
+                "Edge -> Hub notification"
+            );
+        }
 
         match method.as_str() {
+            "edge.relayVoiceViaTcp" => {
+                self.on_relay_voice_via_tcp(&notification, edge_server_id)
+                    .await;
+            }
             "hub.handleUserLeft" => {
                 self.on_user_left(&notification).await;
             }

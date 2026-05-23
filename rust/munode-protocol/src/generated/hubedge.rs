@@ -1007,7 +1007,7 @@ pub struct VoiceTargetConfigEntry {
     pub timestamp: i64,
 }
 /// ---------------------------------------------------------------------------
-/// edge.relayVoiceViaTcp - TCP 降级：Edge 通过 Hub 中转语音数据
+/// edge.relayVoiceViaTcp - TCP 降级：Edge 通过单向通知请求 Hub 中转语音数据
 /// 当 UDP 直连和中转路由都不可用时使用
 /// ---------------------------------------------------------------------------
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1024,13 +1024,6 @@ pub struct EdgeRelayVoiceViaTcpParams {
     /// 时间戳
     #[prost(int64, required, tag = "4")]
     pub timestamp: i64,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct EdgeRelayVoiceViaTcpResult {
-    #[prost(bool, required, tag = "1")]
-    pub success: bool,
-    #[prost(string, optional, tag = "2")]
-    pub error: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// ---------------------------------------------------------------------------
 /// edge.adminOperation - Edge 执行管理操作
@@ -2186,8 +2179,6 @@ pub struct TypedRpcRequest {
     pub edge_sync_voice_target: ::core::option::Option<EdgeSyncVoiceTargetParams>,
     #[prost(message, optional, tag = "16")]
     pub edge_get_voice_targets: ::core::option::Option<EdgeGetVoiceTargetsParams>,
-    #[prost(message, optional, tag = "17")]
-    pub edge_relay_voice_via_tcp: ::core::option::Option<EdgeRelayVoiceViaTcpParams>,
     #[prost(message, optional, tag = "18")]
     pub edge_admin_operation: ::core::option::Option<EdgeAdminOperationParams>,
     #[prost(message, optional, tag = "19")]
@@ -2293,8 +2284,6 @@ pub struct TypedRpcResponse {
     pub edge_sync_voice_target: ::core::option::Option<EdgeSyncVoiceTargetResult>,
     #[prost(message, optional, tag = "16")]
     pub edge_get_voice_targets: ::core::option::Option<EdgeGetVoiceTargetsResult>,
-    #[prost(message, optional, tag = "17")]
-    pub edge_relay_voice_via_tcp: ::core::option::Option<EdgeRelayVoiceViaTcpResult>,
     #[prost(message, optional, tag = "18")]
     pub edge_admin_operation: ::core::option::Option<EdgeAdminOperationResult>,
     #[prost(message, optional, tag = "19")]
@@ -2491,6 +2480,9 @@ pub struct TypedRpcNotification {
     pub server_config_update: ::core::option::Option<ServerLimitsConfig>,
     #[prost(message, optional, tag = "39")]
     pub dissemination_update: ::core::option::Option<HubDisseminationUpdateParams>,
+    /// Edge → Hub: fire-and-forget voice relay request for Hub TCP fallback
+    #[prost(message, optional, tag = "40")]
+    pub edge_relay_voice_via_tcp: ::core::option::Option<EdgeRelayVoiceViaTcpParams>,
     /// hub.contextAction — forward a Mumble ContextAction from an Edge
     #[prost(message, optional, tag = "35")]
     pub context_action: ::core::option::Option<EdgeContextActionParams>,

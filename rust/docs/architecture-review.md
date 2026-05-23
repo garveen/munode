@@ -312,28 +312,27 @@ fn next_request_id(&self) -> String {
 
 ### M-2: 语音中继通过 Hub TCP 时的内存拷贝
 
-**位置**：`munode-hub/src/rpc_handler.rs`（`handle_relay_voice_via_tcp`）
+**位置**：`munode-hub/src/rpc_handler/relay.rs`（`relay_voice_via_hub_tcp` / `on_relay_voice_via_tcp`）
 
-**现状**：Hub TCP 语音中继路径中，语音包需要一次 clone（prost 生成的字段为 `Vec<u8>`，函数参数为共享引用，无法 move）：
+**现状**：当前 Hub TCP 语音中继路径已经改为 Edge→Hub 单向通知，Hub 侧按值接收 `EdgeRelayVoiceViaTcpParams`，可直接 move `voice_packet` 进入下游通知，不再额外 clone：
 
 ```rust
-// 代码注释已说明：由于 params 是 &EdgeRelayVoiceViaTcpParams（共享借用），
-// 此 clone 是不可避免的。直接将其放入通知结构体以保持拷贝次数为 1。
 relay_voice_packet: Some(HubRelayVoicePacketParams {
-    from_edge_id,
-    voice_packet: params.voice_packet.clone(),  // 一次 clone，无法避免
+    from_edge_id: edge_server_id,
+    voice_packet: params.voice_packet,
     timestamp,
 }),
 ```
 
 **问题**：
 - Edge-to-Edge UDP 直连已是首选路由，Hub TCP 中继是最后手段
-- Hub TCP 中继比 UDP 直连多 2 次序列化和至少 1 次内存拷贝
-- 但 prost 字段类型限制（`Vec<u8>`）使 `Bytes` 零拷贝较难实现
+- Hub TCP 中继比 UDP 直连多 2 次序列化
+- prost 字段类型仍然是 `Vec<u8>`，因此这条 fallback 链路暂时仍不是零拷贝
 
 **建议**：
 1. ~~尽量使用 Edge-to-Edge 直连 UDP（当前已有优先选择直连的逻辑）~~ ✅ 已实现优先级路由
-2. ~~**【实现】** Hub 中继路径考虑使用 `Bytes` 类型实现零拷贝转发~~ **【暂缓】** prost 生成的 Vec<u8> 字段无法在不修改 proto 文件的情况下实现真正零拷贝；中继路径是 fallback，收益有限
+2. ~~移除 Hub 中继路径里那次额外 clone~~ ✅ 已通过按值消费通知参数实现
+3. ~~**【实现】** Hub 中继路径考虑使用 `Bytes` 类型实现零拷贝转发~~ **【暂缓】** prost 生成的 Vec<u8> 字段无法在不修改 proto 文件的情况下实现真正零拷贝；中继路径是 fallback，收益有限
 3. 添加 Hub 中继带宽监控告警（待实现）
 
 ---
@@ -505,7 +504,7 @@ Client A → Edge A → [0x01][session][voice] UDP → Edge B → Client B
 ### 6.3 通过 Hub TCP 中继
 
 ```
-Client A → Edge A → [RPC: edge.relayVoiceViaTcp] → Hub → [notify: hub.relayVoicePacket] → Edge B → Client B
+Client A → Edge A → [notify: edge.relayVoiceViaTcp] → Hub → [notify: hub.relayVoicePacket] → Edge B → Client B
 ```
 
 **性能评估**：⚠️ 可用但低效
@@ -670,7 +669,7 @@ message_burst        = 5          # 保持不变
 heartbeat_timeout = 30000         # 从 90000 降低到 30000（30 秒）
 
 [voice_routing]
-# 仅控制 Hub 是否接受来自 Edge 的 `edge.relayVoiceViaTcp` RPC 请求（Hub 侧 TCP 中继）。
+# 仅控制 Hub 是否接受来自 Edge 的 `edge.relayVoiceViaTcp` 单向通知（Hub 侧 TCP 中继）。
 # 不影响 Edge 间 UDP 直连或 UDP 多跳转发；后者由 Edge 侧 connection_strategy 控制。
 enable_relay         = true
 max_total_relay_streams = 200     # 设置上限防止 Hub 过载
@@ -707,8 +706,8 @@ max_relay_bandwidth = 50000       # 50 Mbps（提升中继带宽上限）
 >
 > | 配置项 | 所属端 | 控制范围 |
 > |--------|--------|----------|
-> | `[voice_routing] enable_relay` | **Hub** `hub.toml` | Hub 是否接受 Edge 发来的 `edge.relayVoiceViaTcp` RPC 请求（Hub 作为 TCP 中间人转发语音包）。仅影响 Hub TCP 中继这一段，不涉及 UDP。 |
-> | `[voice_routing] connection_strategy` | **Edge** `edge.toml` | Edge 本身使用何种策略进行跨 Edge 语音路由：UDP 直连、Hub TCP 中继或自动回退。决定 Edge 是否会发起 `edge.relayVoiceViaTcp` RPC。 |
+> | `[voice_routing] enable_relay` | **Hub** `hub.toml` | Hub 是否接受 Edge 发来的 `edge.relayVoiceViaTcp` 单向通知（Hub 作为 TCP 中间人转发语音包）。仅影响 Hub TCP 中继这一段，不涉及 UDP。 |
+> | `[voice_routing] connection_strategy` | **Edge** `edge.toml` | Edge 本身使用何种策略进行跨 Edge 语音路由：UDP 直连、Hub TCP 中继或自动回退。决定 Edge 是否会发起 `edge.relayVoiceViaTcp` 单向通知。 |
 > | `[voice_routing.relay] max_relay_bandwidth` | **Edge** `edge.toml` | 当本 Edge 作为 UDP 多跳中继节点（`EDGE_PKT_RELAY`）时的出口带宽上限。与 Hub TCP 中继无关。 |
 >
 > 典型场景：若只想禁止 Hub 参与语音转发（强制所有 Edge 直连），应将 Hub 端 `enable_relay = false`，同时将所有 Edge 端 `connection_strategy = "direct_only"`。单独设置任一项只会影响一半路径。

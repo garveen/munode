@@ -4,7 +4,6 @@
 //! notifications that the Edge sends to the Hub on behalf of connected clients.
 
 use anyhow::{Context, Result};
-use prost::Message;
 use tracing::{debug, info, warn};
 
 use munode_protocol::hubedge::{
@@ -13,8 +12,7 @@ use munode_protocol::hubedge::{
     EdgeContextActionParams, EdgeHandleAclParams, EdgeHandleChannelRemoveParams,
     EdgeHandleChannelStateParams, EdgeHandleTextMessageParams, EdgeHandleUserLeftParams,
     EdgeHandleUserMovedParams, EdgeHandleUserRemoveParams, EdgeHandleUserStateChangedParams,
-    EdgeHubPacket, EdgePluginDataTransmissionParams, PacketType, TypedRpcNotification,
-    TypedRpcRequest,
+    EdgePluginDataTransmissionParams, TypedRpcNotification, TypedRpcRequest,
 };
 
 use super::{
@@ -909,15 +907,11 @@ impl HubClient {
     pub async fn relay_voice_via_hub(&self, target_edge_id: u32, voice_packet: bytes::Bytes) {
         let from_edge_id = self.edge_id();
 
-        // Voice relay is fire-and-forget: UDP voice is inherently unreliable and does not
-        // require Hub acknowledgment.  Using rpc_call() here would hold a semaphore slot
-        // and a pending-map entry for up to 30 s per packet, which exhausts both under load.
-        // We send the request frame directly and never register a pending entry; the Hub
-        // will still send a response that is silently discarded on the receiving side.
-        let request = TypedRpcRequest {
-            request_id: self.next_request_id(),
+        // Voice relay is fire-and-forget: UDP voice is inherently unreliable and should
+        // not consume RPC pending entries, response handling, or control-plane sequencing.
+        let notification = TypedRpcNotification {
             method: "edge.relayVoiceViaTcp".to_string(),
-            timeout_ms: Some(5000),
+            timestamp: Some(current_millis() as i64),
             edge_relay_voice_via_tcp: Some(hubedge::EdgeRelayVoiceViaTcpParams {
                 from_edge_id,
                 target_edge_id,
@@ -927,23 +921,12 @@ impl HubClient {
             ..Default::default()
         };
 
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcRequest as i32,
-            rpc_request: Some(request),
-            ..Default::default()
-        };
-        let data = packet.encode_to_vec();
-        info!(
-            edge_id = from_edge_id,
-            method = "edge.relayVoiceViaTcp",
-            target_edge_id,
-            bytes = data.len(),
-            "Edge -> Hub RPC request"
-        );
-        if let Err(e) = self.send_raw(data).await {
+        if let Err(e) = self.send_unsequenced_notification(notification).await {
             debug!(
-                "relay_voice_via_hub to edge {} failed (send): {}",
-                target_edge_id, e
+                edge_id = from_edge_id,
+                method = "edge.relayVoiceViaTcp",
+                target_edge_id,
+                "relay_voice_via_hub to edge {target_edge_id} failed (send): {e}"
             );
         }
     }

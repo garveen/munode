@@ -654,11 +654,14 @@ impl TopologyManager {
         F: FnMut(u32, f64),
     {
         let mut seen = HashSet::new();
+        let mut explicit_quality_peers = HashSet::new();
 
         for (&(a, b), quality) in &self.link_quality {
             if a != from || excluded_edge == Some((a, b)) {
                 continue;
             }
+
+            explicit_quality_peers.insert(b);
 
             if let Some(config) = config
                 && (quality.packet_loss > config.failed_packet_loss
@@ -682,6 +685,7 @@ impl TopologyManager {
         for &peer_id in &edge.connected_peers {
             if excluded_edge == Some((from, peer_id))
                 || seen.contains(&peer_id)
+                || explicit_quality_peers.contains(&peer_id)
                 || !self.edges.contains_key(&peer_id)
             {
                 continue;
@@ -842,5 +846,59 @@ mod tests {
         assert_eq!(direct_udp_cost, Some(PACKET_LOSS_PENALTY_MS as f32));
         assert_eq!(direct_tcp_cost, Some(DEFAULT_DIRECT_TCP_COST_MS));
         assert!(hub_tcp_cost.unwrap_or_default() > direct_tcp_cost.unwrap_or_default());
+    }
+
+    #[test]
+    fn failed_quality_edge_is_not_reintroduced_via_connected_peer_fallback() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(edge(1));
+        topo.add_edge(edge(2));
+        topo.add_edge(edge(4));
+
+        topo.mark_join_complete(1, vec![2, 4]);
+        topo.mark_join_complete(2, vec![1, 4]);
+        topo.mark_join_complete(4, vec![1, 2]);
+
+        let config = HubVoiceRoutingConfig {
+            relay_hop_penalty_ms: 0.0,
+            failed_packet_loss: 0.4,
+            ..HubVoiceRoutingConfig::default()
+        };
+
+        topo.report_quality(
+            4,
+            1,
+            LinkQuality {
+                rtt_ms: 10.0,
+                packet_loss: 0.9,
+                jitter_ms: 0.0,
+                samples: 30,
+                last_update: Instant::now(),
+            },
+        );
+        topo.report_quality(4, 2, quality(10.0));
+        topo.report_quality(2, 1, quality(10.0));
+
+        let edge4_source4 = topo
+            .compute_dissemination_plan(4, &config)
+            .into_iter()
+            .find(|plan| plan.source_edge_id == 4)
+            .expect("missing source=4 plan for edge 4");
+        assert_eq!(
+            edge4_source4.active_children,
+            vec![2],
+            "failed direct edge 4->1 must not stay in the primary dissemination tree"
+        );
+
+        let edge2_source4 = topo
+            .compute_dissemination_plan(2, &config)
+            .into_iter()
+            .find(|plan| plan.source_edge_id == 4)
+            .expect("missing source=4 plan for edge 2");
+        assert_eq!(
+            edge2_source4.active_children,
+            vec![1],
+            "backup hop 2 must become the actual forwarding parent for edge 1"
+        );
     }
 }

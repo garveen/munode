@@ -146,7 +146,7 @@ for each target_edge_id (远程 Edge):
                             失败 → Hub TCP 兜底
         RelayVia(relay_id) → 三跳 relay [0x02][target][session][voice]
                             失败 → Hub TCP 兜底
-        HubTcp             → Hub TCP relay (edge.relayVoiceViaTcp RPC)
+          HubTcp             → Hub TCP relay (edge.relayVoiceViaTcp notification)
 ```
 
 **`connection_strategy` 配置覆盖：**
@@ -206,7 +206,7 @@ Edge-to-Edge 流量走独立的 `edge_socket`（`edge_port`），与客户端 Mu
 ```
 中间节点（Edge B）收到后，重建 Voice 包 `[0x01][session][voice]` 转发给 Edge C。
 
-**Hub TCP relay（`edge.relayVoiceViaTcp` RPC）：**
+**Hub TCP relay（`edge.relayVoiceViaTcp` 单向通知）：**
 ```
 EdgeRelayVoiceViaTcpParams { from_edge_id, target_edge_id, voice_packet }
 → Hub 推送 hub.relayVoicePacket 到目标 Edge
@@ -388,7 +388,7 @@ max_relay_bandwidth = 0      # Kbps，0 = 不限制
 
 ```toml
 [voice_routing]
-enable_relay = true          # false = 拒绝所有 edge.relayVoiceViaTcp 请求
+enable_relay = true          # false = 丢弃所有 edge.relayVoiceViaTcp 通知
 relay_cost_factor = 1.5
 direct_rtt_threshold = 500   # ms
 direct_loss_threshold = 0.05
@@ -418,7 +418,7 @@ static_peers = [
 | `rust/munode-edge/src/state.rs` | `RouteDecision` 枚举、`EdgeState.route_table`、`PeerRegistry`（UDP+relay 地址） |
 | `rust/munode-edge/src/server.rs` | TCP UDPTunnel 语音处理、whisper 路由、`RelayedVoice` 事件处理 |
 | `rust/munode-hub/src/topology_manager.rs` | Dijkstra 路径计算、质量更新、`compute_route_table()` |
-| `rust/munode-hub/src/rpc_handler.rs` | `handle_report_quality()`、`push_route_tables_to_all()`、`handle_relay_voice_via_tcp()` |
+| `rust/munode-hub/src/rpc_handler.rs` | `handle_report_quality()`、`push_route_tables_to_all()`、`on_relay_voice_via_tcp()` |
 | `rust/munode-common/src/config.rs` | `EdgeVoiceRoutingConfig`、`VoiceConnectionStrategy`、`HubVoiceRoutingConfig`、`StaticPeerConfig` |
 | `rust/munode-protocol/src/generated/hubedge.rs` | `HubRouteEntryProto`、`HubRouteTableUpdateParams`（tag=36 in TypedRpcNotification） |
 

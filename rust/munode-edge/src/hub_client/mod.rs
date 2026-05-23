@@ -1584,6 +1584,36 @@ impl HubClient {
         self.send_packet(&packet).await
     }
 
+    /// Send an unsequenced fire-and-forget notification to Hub.
+    ///
+    /// Use this for lossy or high-volume data-plane messages that must not
+    /// participate in Edge→Hub control notification ordering or gap recovery.
+    async fn send_unsequenced_notification(
+        &self,
+        notification: TypedRpcNotification,
+    ) -> Result<()> {
+        let method = notification.method.clone();
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if method == "edge.relayVoiceViaTcp" {
+            debug!(
+                edge_id = self.edge_id(),
+                method = method.as_str(),
+                "Edge -> Hub unsequenced notification"
+            );
+        } else {
+            info!(
+                edge_id = self.edge_id(),
+                method = method.as_str(),
+                "Edge -> Hub unsequenced notification"
+            );
+        }
+        self.send_packet(&packet).await
+    }
+
     /// Immediately cancel (with an error) all in-flight RPC requests that were sent
     /// via `slot`.  Called when a pool slot's WebSocket connection closes, so callers
     /// see an immediate error rather than hanging until the 30-second timeout fires.
@@ -1911,11 +1941,6 @@ impl HubClient {
                 method = method.as_str(),
                 request_id = request_id.as_str(),
                 "Edge <- Hub RPC response without pending entry"
-            );
-            // Expected for fire-and-forget requests such as relay_voice_via_hub.
-            debug!(
-                "Received response for unregistered request (fire-and-forget): {}",
-                request_id
             );
         }
     }
