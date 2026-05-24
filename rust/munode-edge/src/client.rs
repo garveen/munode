@@ -16,7 +16,7 @@ use munode_protocol::transport::encode_message;
 use crate::bandwidth::BandwidthRecord;
 use crate::crypto::CryptState;
 
-pub const CLIENT_CONTROL_QUEUE_CAPACITY: usize = 256;
+pub const CLIENT_CONTROL_QUEUE_CAPACITY: usize = 65536;
 pub const CLIENT_VOICE_QUEUE_CAPACITY: usize = 2048;
 const CLIENT_WRITE_BATCH_LIMIT: usize = 32;
 
@@ -1481,6 +1481,47 @@ mod tests {
 
         let data = rx.try_recv().unwrap();
         assert!(!data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_send_to_full_queue_returns_immediately_and_requests_disconnect() {
+        let mgr = ClientManager::new();
+        let disconnect_notify = Arc::new(Notify::new());
+        let (control_tx, _control_rx) = mpsc::channel(1);
+        let (voice_tx, _voice_rx) = mpsc::channel(1);
+
+        let client = make_test_client(1, 0);
+        mgr.add_client(
+            client,
+            ClientSender::new_split_with_disconnect_notify(
+                control_tx,
+                voice_tx,
+                Arc::clone(&disconnect_notify),
+            ),
+        )
+        .await;
+
+        let ping = mumbleproto::Ping {
+            timestamp: Some(42),
+            ..Default::default()
+        };
+
+        assert!(mgr.send_to(1, MessageType::Ping, &ping).await);
+
+        let sent = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            mgr.send_to(1, MessageType::Ping, &ping),
+        )
+        .await
+        .expect("send_to should not block on a full control queue");
+        assert!(!sent);
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            disconnect_notify.notified(),
+        )
+        .await
+        .expect("full control queue should request connection close");
     }
 
     #[tokio::test]
