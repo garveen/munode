@@ -225,12 +225,16 @@ async fn handle_wt_session(
     let reader: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(recv_stream);
 
     // Per-session outgoing message channels.
-    let (control_tx, mut control_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
-    let (voice_tx, mut voice_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
-    let client_sender = ClientSender::new_split(control_tx, voice_tx);
-
     let write_failed = Arc::new(tokio::sync::Notify::new());
     let write_failed_notify = Arc::clone(&write_failed);
+
+    let (control_tx, mut control_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (voice_tx, mut voice_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
+    let client_sender = ClientSender::new_split_with_disconnect_notify(
+        control_tx,
+        voice_tx,
+        Arc::clone(&write_failed),
+    );
 
     // Writer task: drain the send_rx channel and write to the QUIC send stream.
     let writer_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {

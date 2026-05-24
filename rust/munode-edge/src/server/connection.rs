@@ -156,15 +156,19 @@ pub(super) async fn handle_client_connection(
     // Create per-client message sender channels.
     // Control traffic must remain deliverable even when voice fallback backs up,
     // so voice uses its own smaller best-effort lane.
-    let (control_tx, mut control_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
-    let (voice_tx, mut voice_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
-    let client_sender = ClientSender::new_split(control_tx, voice_tx);
-
     // Notified when the writer task exits due to a TCP write/flush error (not clean close).
-    // The read loop selects on this so half-open connections are detected promptly instead
-    // of waiting for the 120-second idle timeout.
+    // The read loop also treats client-control-queue overflow as a terminal transport
+    // failure, so a slow client is disconnected instead of silently dropping control traffic.
     let write_failed = std::sync::Arc::new(tokio::sync::Notify::new());
     let write_failed_notify = std::sync::Arc::clone(&write_failed);
+
+    let (control_tx, mut control_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (voice_tx, mut voice_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
+    let client_sender = ClientSender::new_split_with_disconnect_notify(
+        control_tx,
+        voice_tx,
+        std::sync::Arc::clone(&write_failed),
+    );
 
     // Writer task: forwards messages from send_rx to TLS socket.
     // Batches pending messages with write_vectored + single flush to reduce syscalls.

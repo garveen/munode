@@ -543,12 +543,16 @@ where
     let (ws_sink, ws_source) = ws_stream.split();
 
     // Per-session outgoing message channels.
-    let (control_tx, mut control_rx) = mpsc::channel::<Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
-    let (voice_tx, mut voice_rx) = mpsc::channel::<Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
-    let client_sender = ClientSender::new_split(control_tx, voice_tx);
-
     let write_failed = Arc::new(tokio::sync::Notify::new());
     let write_failed_notify = Arc::clone(&write_failed);
+
+    let (control_tx, mut control_rx) = mpsc::channel::<Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (voice_tx, mut voice_rx) = mpsc::channel::<Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
+    let client_sender = ClientSender::new_split_with_disconnect_notify(
+        control_tx,
+        voice_tx,
+        Arc::clone(&write_failed),
+    );
 
     // Writer task: drain send_rx and send each frame as a binary WebSocket message.
     let writer_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {

@@ -38,6 +38,9 @@ pub(crate) mod connection;
 mod event_listener;
 mod proxy_protocol;
 
+#[cfg(test)]
+pub(crate) use event_listener::hub_event_listener;
+
 pub struct EdgeServer {
     config: EdgeConfig,
     /// Path to the config file, used for hot-reload on SIGHUP.

@@ -386,12 +386,12 @@ impl HubClient {
                         } else if let Some(mut client) =
                             self.edge_state.client_manager.get_client(session_id).await
                         {
-                            if let Some(b) = p.self_mute {
-                                client.self_mute = b;
-                            }
-                            if let Some(b) = p.self_deaf {
-                                client.self_deaf = b;
-                            }
+                            // The source edge is authoritative for a connected local
+                            // user's self mute/deaf choice. Hub echoes are used to
+                            // fan out that state to other edges, but must not
+                            // overwrite the local client's immediate choice.
+                            delta.self_mute = None;
+                            delta.self_deaf = None;
                             if let Some(b) = p.mute {
                                 client.mute = b;
                             }
@@ -1137,15 +1137,27 @@ impl HubClient {
 mod tests {
     use super::{DisseminationEpochDecision, decide_dissemination_epoch_update};
     use crate::channel_manager::ChannelManager;
-    use crate::client::ClientManager;
+    use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
     use crate::hub_client::HubClient;
+    use crate::server::hub_event_listener;
     use crate::state::EdgeState;
+    use bytes::BytesMut;
     use munode_common::config::{
         EdgeConfig, EdgeVoiceRoutingConfig, EdgeWebApiConfig, HubServerConfig, NetworkConfig,
         ServerConfig, TlsConfig, WebtransportConfig,
     };
-    use munode_protocol::hubedge::ServerLimitsConfig;
+    use munode_protocol::hubedge::{
+        HubUserMovedParams, HubUserStateBroadcastParams, ServerLimitsConfig, TypedRpcNotification,
+    };
+    use munode_protocol::message_type::MessageType;
+    use munode_protocol::mumbleproto;
+    use munode_protocol::transport::decode_frame;
+    use prost::Message;
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use std::sync::atomic::Ordering;
+    use std::time::Instant;
+    use tokio::sync::{mpsc, watch};
 
     fn test_config() -> EdgeConfig {
         EdgeConfig {
@@ -1183,6 +1195,60 @@ mod tests {
             log_level: "info".to_string(),
             log_format: "text".to_string(),
         }
+    }
+
+    fn make_test_client(session: u32, channel_id: u32) -> ClientInfo {
+        ClientInfo {
+            session,
+            user_id: session,
+            username: format!("user-{session}"),
+            channel_id,
+            state: ClientState::Ready,
+            mute: false,
+            deaf: false,
+            suppress: false,
+            self_mute: false,
+            self_deaf: false,
+            priority_speaker: false,
+            recording: false,
+            ip_address: "127.0.0.1".to_string(),
+            connected_at: Instant::now(),
+            last_active: Instant::now(),
+            cert_hash: None,
+            groups: Vec::new(),
+            opus_supported: true,
+            listening_channels: Vec::new(),
+            listening_volume_adjustments: HashMap::new(),
+            texture_hash: None,
+            comment_hash: None,
+            client_version: None,
+            client_release: String::new(),
+            client_os: String::new(),
+            client_os_version: String::new(),
+            plugin_context: Vec::new(),
+            client_cert_chain: Vec::new(),
+        }
+    }
+
+    async fn run_event_listener_task(edge_state: Arc<EdgeState>) -> Arc<EdgeState> {
+        let listener_state = edge_state.clone();
+        tokio::spawn(async move {
+            let mut rx = listener_state.subscribe_events();
+            let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+            let hub_client = HubClient::new(&test_config(), listener_state.clone());
+            hub_event_listener(listener_state, &mut rx, shutdown_tx, hub_client).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        edge_state
+    }
+
+    fn decode_user_state(data: &[u8]) -> mumbleproto::UserState {
+        let mut buf = BytesMut::from(data);
+        let frame = decode_frame(&mut buf)
+            .expect("decode_frame ok")
+            .expect("frame present");
+        assert_eq!(frame.message_type, MessageType::UserState);
+        mumbleproto::UserState::decode(&frame.payload[..]).expect("decode UserState")
     }
 
     #[test]
@@ -1261,5 +1327,105 @@ mod tests {
         .await;
 
         assert!(!edge_state.hub_tcp_relay_allowed());
+    }
+
+    #[tokio::test]
+    async fn local_client_self_mute_deaf_overrides_hub_echo() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        let hub = HubClient::new(&test_config(), edge_state.clone());
+        let (tx, _rx) = mpsc::channel(16);
+
+        let mut client = make_test_client(42, 0);
+        client.self_mute = true;
+        client.self_deaf = true;
+        edge_state
+            .client_manager
+            .add_client(client, ClientSender::new(tx))
+            .await;
+
+        hub.handle_notification(TypedRpcNotification {
+            method: "hub.userStateBroadcast".to_string(),
+            user_state_broadcast: Some(HubUserStateBroadcastParams {
+                session_id: 42,
+                edge_id: 1,
+                self_mute: Some(false),
+                self_deaf: Some(false),
+                mute: Some(true),
+                deaf: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await;
+
+        let updated = edge_state
+            .client_manager
+            .get_client(42)
+            .await
+            .expect("local client should remain present");
+        assert!(updated.self_mute, "hub echo must not clear local self_mute");
+        assert!(updated.self_deaf, "hub echo must not clear local self_deaf");
+        assert!(updated.mute, "hub admin mute should still apply");
+        assert!(updated.deaf, "hub admin deaf should still apply");
+    }
+
+    #[tokio::test]
+    async fn hub_user_moved_for_local_client_broadcasts_to_all_local_clients() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        let hub = HubClient::new(&test_config(), edge_state.clone());
+
+        let (tx_target, mut rx_target) = mpsc::channel(16);
+        let (tx_observer, mut rx_observer) = mpsc::channel(16);
+
+        edge_state
+            .client_manager
+            .add_client(make_test_client(42, 0), ClientSender::new(tx_target))
+            .await;
+        edge_state
+            .client_manager
+            .add_client(make_test_client(7, 0), ClientSender::new(tx_observer))
+            .await;
+
+        let edge_state = run_event_listener_task(edge_state).await;
+
+        hub.handle_notification(TypedRpcNotification {
+            method: "hub.userMoved".to_string(),
+            user_moved: Some(HubUserMovedParams {
+                session_id: 42,
+                edge_id: 1,
+                channel_id: 9,
+                actor_session: Some(42),
+                suppress: None,
+            }),
+            ..Default::default()
+        })
+        .await;
+
+        let target_msg = decode_user_state(
+            &rx_target
+                .recv()
+                .await
+                .expect("moved local client should receive authoritative move"),
+        );
+        assert_eq!(target_msg.session, Some(42));
+        assert_eq!(target_msg.channel_id, Some(9));
+        assert_eq!(target_msg.actor, Some(42));
+
+        let observer_msg = decode_user_state(
+            &rx_observer
+                .recv()
+                .await
+                .expect("other local clients should receive authoritative move"),
+        );
+        assert_eq!(observer_msg.session, Some(42));
+        assert_eq!(observer_msg.channel_id, Some(9));
+        assert_eq!(observer_msg.actor, Some(42));
+
+        let updated = edge_state
+            .client_manager
+            .get_client(42)
+            .await
+            .expect("moved local client should remain present");
+        assert_eq!(updated.channel_id, 9);
     }
 }

@@ -1086,10 +1086,10 @@ fn default_plugin_message_length() -> u32 {
     1024
 }
 fn default_message_rate() -> f32 {
-    1.0
+    2.0
 }
 fn default_message_burst() -> u32 {
-    5
+    10
 }
 fn default_plugin_message_rate() -> f32 {
     4.0

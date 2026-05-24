@@ -558,6 +558,13 @@ impl HubClient {
         *self.state.read().await
     }
 
+    async fn mark_registered_ready(&self) {
+        *self.state.write().await = HubConnectionState::Registered;
+        self.edge_state
+            .accepting_connections
+            .store(true, Ordering::Relaxed);
+    }
+
     async fn enqueue_runtime_full_sync_request(
         &self,
         reason: &str,
@@ -638,9 +645,7 @@ impl HubClient {
         match self.do_full_sync().await {
             Ok((disappeared, _hub_was_empty, _old_session_ids, hub_seq)) => {
                 sequencer.reset_after_full_sync(hub_seq);
-                self.edge_state
-                    .accepting_connections
-                    .store(true, Ordering::Relaxed);
+                self.mark_registered_ready().await;
                 let outcome = RuntimeFullSyncOutcome {
                     disappeared_session_ids: disappeared,
                     hub_seq,
@@ -1349,7 +1354,9 @@ impl HubClient {
             // yet when this call fires (notify_waiters() is not stored and would be
             // silently dropped in that case, permanently blocking the processor).
             self.sync_notify.notify_one();
-            *self.state.write().await = HubConnectionState::Registered;
+            // Re-enable client logins synchronously here before the asynchronous
+            // event listener catches up.
+            self.mark_registered_ready().await;
 
             // When Hub restarted cold (`hub_was_empty = true`) and we have stale
             // cached sessions, do NOT immediately blast UserRemove to local clients.
@@ -1374,14 +1381,6 @@ impl HubClient {
                     old_session_ids.len(),
                     HUB_RESTART_GRACE_SECS
                 );
-                // Re-enable accepting_connections immediately and synchronously here,
-                // before emitting the event.  The event listener sets it too, but it
-                // processes events asynchronously — if the listener is busy there would
-                // be a window where Hub is Registered but new connections are still
-                // refused with only a debug log.
-                self.edge_state
-                    .accepting_connections
-                    .store(true, Ordering::Relaxed);
                 self.edge_state.emit(EdgeEvent::HubRegistered {
                     disappeared_session_ids: vec![],
                 });
@@ -1422,14 +1421,6 @@ impl HubClient {
                     }
                 });
             } else {
-                // Re-enable accepting_connections immediately and synchronously here,
-                // before emitting the event.  The event listener sets it too, but it
-                // processes events asynchronously — if the listener is busy there would
-                // be a window where Hub is Registered but new connections are still
-                // refused with only a debug log.
-                self.edge_state
-                    .accepting_connections
-                    .store(true, Ordering::Relaxed);
                 self.edge_state.emit(EdgeEvent::HubRegistered {
                     disappeared_session_ids: disappeared,
                 });
@@ -1443,24 +1434,22 @@ impl HubClient {
                 "Slot {} connected (sync already done by another slot)",
                 slot
             );
-            // If Hub was previously declared unreachable (accepting_connections == false),
-            // the slot that wins the sync CAS already re-emits HubRegistered.  But if
-            // another slot was alive during the outage so sync_done was never reset, the
-            // CAS always fails and HubRegistered is never emitted, leaving
-            // accepting_connections permanently false.  Detect that here and recover.
-            if !self
+            // Recover the observable ready state when another slot already owns the
+            // sync result. Without this, a reconnecting slot can receive Hub traffic
+            // while the local state stays at Connected or keeps refusing logins.
+            let accepting_connections = self
                 .edge_state
                 .accepting_connections
-                .load(Ordering::Relaxed)
-            {
+                .load(Ordering::Relaxed);
+            let hub_state = self.state().await;
+            if !accepting_connections || hub_state != HubConnectionState::Registered {
                 info!(
-                    "Slot {} recovering accepting_connections after HubUnreachable (sync held by peer slot)",
+                    accepting_connections,
+                    hub_state = ?hub_state,
+                    "Slot {} recovering Hub ready state after reconnect (sync held by peer slot)",
                     slot
                 );
-                // Same eager set to avoid the event-listener async delay.
-                self.edge_state
-                    .accepting_connections
-                    .store(true, Ordering::Relaxed);
+                self.mark_registered_ready().await;
                 self.edge_state.emit(EdgeEvent::HubRegistered {
                     disappeared_session_ids: vec![],
                 });
@@ -2990,6 +2979,13 @@ mod tests {
         assert_eq!(sequencer.expected_seq, 23);
         assert!(sequencer.reorder_buffer.is_empty());
         assert!(sequencer.gap_since.is_none());
+        assert_eq!(hub.state().await, super::HubConnectionState::Registered);
+        assert!(
+            hub.edge_state
+                .accepting_connections
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "runtime full-sync should reopen client acceptance"
+        );
 
         let event = event_rx
             .recv()
@@ -3003,6 +2999,26 @@ mod tests {
         ));
 
         reply_task.await.expect("reply task should finish");
+    }
+
+    #[tokio::test]
+    async fn mark_registered_ready_sets_state_and_accepts_connections() {
+        let hub = test_hub_client(1);
+
+        *hub.state.write().await = super::HubConnectionState::Connected;
+        hub.edge_state
+            .accepting_connections
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        hub.mark_registered_ready().await;
+
+        assert_eq!(hub.state().await, super::HubConnectionState::Registered);
+        assert!(
+            hub.edge_state
+                .accepting_connections
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "ready transition should reopen client acceptance"
+        );
     }
 
     #[test]

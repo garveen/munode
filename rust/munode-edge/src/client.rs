@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use prost::Message;
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{Notify, RwLock, mpsc, oneshot};
 use tracing::warn;
 
 use munode_protocol::message_type::MessageType;
@@ -90,6 +90,7 @@ pub enum ClientState {
 pub struct ClientSender {
     control_tx: mpsc::Sender<bytes::Bytes>,
     voice_tx: mpsc::Sender<bytes::Bytes>,
+    disconnect_notify: Option<Arc<Notify>>,
 }
 
 impl ClientSender {
@@ -97,6 +98,7 @@ impl ClientSender {
         Self {
             control_tx: tx.clone(),
             voice_tx: tx,
+            disconnect_notify: None,
         }
     }
 
@@ -107,22 +109,54 @@ impl ClientSender {
         Self {
             control_tx,
             voice_tx,
+            disconnect_notify: None,
+        }
+    }
+
+    pub fn new_split_with_disconnect_notify(
+        control_tx: mpsc::Sender<bytes::Bytes>,
+        voice_tx: mpsc::Sender<bytes::Bytes>,
+        disconnect_notify: Arc<Notify>,
+    ) -> Self {
+        Self {
+            control_tx,
+            voice_tx,
+            disconnect_notify: Some(disconnect_notify),
+        }
+    }
+
+    fn notify_disconnect(&self) {
+        if let Some(notify) = &self.disconnect_notify {
+            notify.notify_one();
+        }
+    }
+
+    fn try_send_control(&self, data: bytes::Bytes) -> bool {
+        match self.control_tx.try_send(data) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!(
+                    "Client control queue full — disconnecting slow connection instead of dropping control traffic"
+                );
+                self.notify_disconnect();
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
         }
     }
 
     /// Send raw bytes to the client.
     pub async fn send_raw(&self, data: bytes::Bytes) -> bool {
-        self.control_tx.send(data).await.is_ok()
+        self.try_send_control(data)
     }
 
     /// Non-blocking send: enqueues `data` without waiting.
     ///
-    /// Returns `false` if the channel is at capacity (the writer task is behind).
-    /// Use this for broadcast operations where skipping a single slow client is
-    /// preferable to blocking the caller's read loop — which would prevent it from
-    /// responding to TCP Ping messages and cause Mumble's ping-timeout to fire.
+    /// Returns `false` if the channel is closed or at capacity. On capacity
+    /// overflow the owning connection is force-closed so control messages are
+    /// never silently dropped behind a slow client.
     pub fn try_send_raw(&self, data: bytes::Bytes) -> bool {
-        self.control_tx.try_send(data).is_ok()
+        self.try_send_control(data)
     }
 
     /// Non-blocking send on the voice lane.
@@ -1468,6 +1502,28 @@ mod tests {
             voice_rx.try_recv().unwrap(),
             bytes::Bytes::from_static(b"voice-frame")
         );
+    }
+
+    #[tokio::test]
+    async fn test_control_queue_overflow_notifies_disconnect() {
+        let disconnect_notify = Arc::new(Notify::new());
+        let (control_tx, _control_rx) = mpsc::channel(1);
+        let (voice_tx, _voice_rx) = mpsc::channel(1);
+        let sender = ClientSender::new_split_with_disconnect_notify(
+            control_tx,
+            voice_tx,
+            Arc::clone(&disconnect_notify),
+        );
+
+        assert!(sender.try_send_raw(bytes::Bytes::from_static(b"first-control")));
+        assert!(!sender.try_send_raw(bytes::Bytes::from_static(b"second-control")));
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            disconnect_notify.notified(),
+        )
+        .await
+        .expect("control queue overflow should request connection close");
     }
 
     #[tokio::test]

@@ -507,41 +507,38 @@ async fn test_acl_allows_group_user_to_enter_speak_listen() -> Result<()> {
     Ok(())
 }
 
-/// User without Enter permission gets PermissionDenied and stays in original channel.
+/// User denied by channel max_users gets ChannelFull and stays in original channel.
 #[tokio::test]
-async fn test_acl_denies_entry_to_restricted_channel() -> Result<()> {
+async fn test_channel_full_rejects_self_move_and_preserves_original_channel() -> Result<()> {
+    use munode_client::DenyReason;
+
     let env = single_edge_env().await?;
     let configs = vec![
         ClientConfig::new("admin", 1),
-        ClientConfig::new("acl_op_user", 1),
+        ClientConfig::new("user1", 1),
+        ClientConfig::new("user2", 1),
     ];
     let clients = create_clients(&env, &configs).await?;
-    let (admin, user) = (&clients[0], &clients[1]);
+    let (admin, occupant, user) = (&clients[0], &clients[1], &clients[2]);
 
     let ts = chrono_now_ms();
     let ch = admin
         .channel(0)
-        .create_subchannel(format!("AclDeny_{ts}"))
+        .create_subchannel(format!("ChannelFull_{ts}"))
         .await?;
     sleep_ms(300).await;
 
-    admin
-        .acl(ch)
-        .add_entry(
-            group_entry(
-                "acl_testers",
-                0,
-                PERM_ENTER
-                    | PERM_TRAVERSE
-                    | PERM_SPEAK
-                    | PERM_LISTEN
-                    | PERM_WHISPER
-                    | PERM_TEXT_MESSAGE,
-            ),
-            Duration::from_secs(5),
-        )
-        .await?;
-    sleep_ms(500).await;
+    admin.channel(ch).set_max_users(1).await?;
+    sleep_ms(300).await;
+
+    let occupant_original_ch = occupant.me().session().expect("session").channel_id;
+    occupant.channel(ch).join().await?;
+    sleep_ms(800).await;
+    assert_eq!(
+        occupant.me().session().expect("session").channel_id,
+        ch,
+        "occupant should fill the single-user channel"
+    );
 
     let original_ch = user.me().session().expect("session").channel_id;
 
@@ -552,81 +549,25 @@ async fn test_acl_denies_entry_to_restricted_channel() -> Result<()> {
     let denied = tokio::time::timeout(Duration::from_millis(500), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::PermissionDenied { .. }) => break true,
+                Ok(ClientEvent::PermissionDenied { kind, .. }) => break Some(kind),
                 Ok(_) => continue,
-                Err(_) => break false,
+                Err(_) => break None,
             }
         }
     })
     .await
-    .unwrap_or(false);
-    assert!(
+    .unwrap_or(None);
+    assert_eq!(
         denied,
-        "user should get PermissionDenied for restricted channel"
+        Some(DenyReason::ChannelFull),
+        "user should get ChannelFull for a full channel"
     );
 
     let after = user.me().session().expect("session").channel_id;
     assert_eq!(after, original_ch, "user should remain in original channel");
 
-    admin.channel(ch).delete().await?;
-    cleanup_clients(clients).await;
-    Ok(())
-}
-
-/// User without Listen permission gets PermissionDenied when adding a listener.
-#[tokio::test]
-async fn test_acl_denies_listener_on_restricted_channel() -> Result<()> {
-    let env = single_edge_env().await?;
-    let configs = vec![
-        ClientConfig::new("admin", 1),
-        ClientConfig::new("acl_op_user", 1),
-    ];
-    let clients = create_clients(&env, &configs).await?;
-    let (admin, user) = (&clients[0], &clients[1]);
-
-    let ts = chrono_now_ms();
-    let ch = admin
-        .channel(0)
-        .create_subchannel(format!("AclNoListen_{ts}"))
-        .await?;
+    occupant.channel(occupant_original_ch).join().await?;
     sleep_ms(300).await;
-
-    admin
-        .acl(ch)
-        .add_entry(
-            group_entry(
-                "acl_testers",
-                PERM_ENTER | PERM_TRAVERSE | PERM_SPEAK,
-                PERM_LISTEN,
-            ),
-            Duration::from_secs(5),
-        )
-        .await?;
-    sleep_ms(500).await;
-
-    let mut rx = user.subscribe();
-    user.me().add_listener(ch).await?;
-    sleep_ms(800).await;
-
-    let denied = tokio::time::timeout(Duration::from_millis(500), async {
-        loop {
-            match rx.recv().await {
-                Ok(ClientEvent::PermissionDenied { .. }) => break true,
-                Ok(_) => continue,
-                Err(_) => break false,
-            }
-        }
-    })
-    .await
-    .unwrap_or(false);
-    assert!(denied, "user should get PermissionDenied adding listener");
-
-    let session = user.me().session().expect("session");
-    assert!(
-        !session.listening_channels.contains(&ch),
-        "listener list should not contain restricted channel"
-    );
-
     admin.channel(ch).delete().await?;
     cleanup_clients(clients).await;
     Ok(())

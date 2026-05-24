@@ -20,6 +20,9 @@ pub(super) async fn handle_user_state_update(
     let mut pending_move_channel_id = None;
 
     if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
+        let original_self_mute = client.self_mute;
+        let original_self_deaf = client.self_deaf;
+
         // 9.1 Channel move: forward intent to Hub and wait for the authoritative echo.
         if let Some(target_channel_id) = user_state.channel_id
             && client.channel_id != target_channel_id
@@ -180,37 +183,60 @@ pub(super) async fn handle_user_state_update(
             needs_broadcast = true;
         }
 
+        let mut state_update = mumbleproto::UserState {
+            session: Some(session_id),
+            actor: Some(session_id),
+            ..Default::default()
+        };
+
+        if client.self_mute != original_self_mute {
+            state_update.self_mute = Some(client.self_mute);
+        }
+        if client.self_deaf != original_self_deaf {
+            state_update.self_deaf = Some(client.self_deaf);
+        }
         let has_local_only_updates = !user_state.listening_volume_adjustment.is_empty()
             || user_state.plugin_context.is_some()
             || user_state.texture.is_some()
             || user_state.comment.is_some();
+
+        if let Some(v) = user_state.recording
+            && state_update.recording.is_none()
+        {
+            state_update.recording = Some(v);
+        }
+
+        let listening_channel_add = actually_added_channels.clone();
+        let listening_channel_remove = user_state.listening_channel_remove.clone();
+
+        if state_update.self_mute.is_some() || state_update.self_deaf.is_some() {
+            edge_state
+                .client_manager
+                .update_client(client.clone())
+                .await;
+
+            if state_update.self_deaf.is_some() {
+                edge_state
+                    .topology_version
+                    .fetch_add(1, std::sync::atomic::Ordering::Release);
+            }
+
+            if channel_moved || !has_local_only_updates {
+                let local_self_state_msg = mumbleproto::UserState {
+                    session: Some(session_id),
+                    actor: Some(session_id),
+                    self_mute: state_update.self_mute,
+                    self_deaf: state_update.self_deaf,
+                    ..Default::default()
+                };
+                edge_state
+                    .client_manager
+                    .send_to(session_id, MessageType::UserState, &local_self_state_msg)
+                    .await;
+            }
+        }
+
         if needs_broadcast && !channel_moved && !has_local_only_updates {
-            let mut state_update = mumbleproto::UserState {
-                session: Some(session_id),
-                actor: Some(session_id),
-                ..Default::default()
-            };
-
-            if let Some(sd) = user_state.self_deaf {
-                state_update.self_deaf = Some(sd);
-                if sd {
-                    state_update.self_mute = Some(true);
-                }
-            }
-            if let Some(sm) = user_state.self_mute {
-                state_update.self_mute = Some(sm);
-                if !sm {
-                    state_update.self_deaf = Some(false);
-                }
-            }
-            if let Some(v) = user_state.recording
-                && state_update.recording.is_none()
-            {
-                state_update.recording = Some(v);
-            }
-
-            let listening_channel_add = actually_added_channels.clone();
-            let listening_channel_remove = user_state.listening_channel_remove.clone();
             if (state_update.self_mute.is_some()
                 || state_update.self_deaf.is_some()
                 || state_update.recording.is_some()
@@ -403,11 +429,60 @@ pub(super) async fn handle_user_state_update(
             if channel_moved {
                 if let Some(target_channel_id) = pending_move_channel_id
                     && let Err(e) = hub_client
-                        .notify_user_moved(session_id, target_channel_id, session_id)
+                        .rpc_user_moved(session_id, target_channel_id, session_id)
+                        .await
+                {
+                    let is_full = e.to_string().contains("Channel is full");
+                    if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                        let pq = mumbleproto::PermissionDenied {
+                            r#type: Some(if is_full {
+                                mumbleproto::permission_denied::DenyType::ChannelFull as i32
+                            } else {
+                                mumbleproto::permission_denied::DenyType::Permission as i32
+                            }),
+                            permission: if is_full { None } else { Some(perm::ENTER) },
+                            channel_id: Some(target_channel_id),
+                            session: if is_full { None } else { Some(session_id) },
+                            reason: if is_full {
+                                Some("Channel is full".to_string())
+                            } else {
+                                None
+                            },
+                            ..Default::default()
+                        };
+                        sender
+                            .send_message(MessageType::PermissionDenied, &pq)
+                            .await;
+                    }
+                    warn!(
+                        "rpc_user_moved failed (self move, session {}): {:#}",
+                        session_id, e
+                    );
+                }
+
+                if (state_update.self_mute.is_some()
+                    || state_update.self_deaf.is_some()
+                    || state_update.recording.is_some()
+                    || !listening_channel_add.is_empty()
+                    || !listening_channel_remove.is_empty())
+                    && let Err(e) = hub_client
+                        .notify_user_state_changed(crate::hub_client::UserStateChangeRequest {
+                            session_id,
+                            self_mute: state_update.self_mute,
+                            self_deaf: state_update.self_deaf,
+                            mute: None,
+                            deaf: None,
+                            suppress: None,
+                            priority_speaker: None,
+                            recording: state_update.recording,
+                            listening_channel_add,
+                            listening_channel_remove,
+                            actor_session: None,
+                        })
                         .await
                 {
                     warn!(
-                        "notify_user_moved failed for session {}: {:#}",
+                        "notify_user_state_changed failed for session {}: {:#}",
                         session_id, e
                     );
                 }
@@ -1054,6 +1129,256 @@ pub(super) async fn handle_admin_user_state_update(
             priority_speaker = ?user_state.priority_speaker,
             channel_id = ?user_state.channel_id,
             "Admin UserState target session not found on this edge"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_user_state_update;
+    use crate::channel_manager::ChannelManager;
+    use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
+    use crate::hub_client::HubClient;
+    use crate::state::EdgeState;
+    use bytes::BytesMut;
+    use munode_common::config::{
+        EdgeConfig, EdgeVoiceRoutingConfig, EdgeWebApiConfig, HubServerConfig, NetworkConfig,
+        ServerConfig, TlsConfig, WebtransportConfig,
+    };
+    use munode_protocol::message_type::MessageType;
+    use munode_protocol::mumbleproto;
+    use munode_protocol::transport::decode_frame;
+    use prost::Message;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Instant;
+    use tokio::sync::mpsc;
+
+    fn test_config() -> EdgeConfig {
+        EdgeConfig {
+            server_id: 1,
+            name: "test".to_string(),
+            network: NetworkConfig {
+                host: "127.0.0.1".to_string(),
+                port: 64738,
+                edge_port: None,
+                external_host: "127.0.0.1".to_string(),
+                external_port: None,
+                region: None,
+                proxy_protocol: false,
+                trusted_proxy_ips: Vec::new(),
+            },
+            tls: TlsConfig {
+                cert: "test.pem".to_string(),
+                key: "test.key".to_string(),
+                ca: None,
+            },
+            hub_server: HubServerConfig {
+                host: "localhost".to_string(),
+                control_port: 8080,
+                reconnect_interval: 5000,
+                heartbeat_interval: 10000,
+                hmac_secret: None,
+                pool_size: 1,
+                static_peers: vec![],
+                tls: false,
+            },
+            server: ServerConfig::default(),
+            voice_routing: EdgeVoiceRoutingConfig::default(),
+            web_api: EdgeWebApiConfig::default(),
+            webtransport: WebtransportConfig::default(),
+            log_level: "info".to_string(),
+            log_format: "text".to_string(),
+        }
+    }
+
+    fn make_test_client(session: u32, channel_id: u32) -> ClientInfo {
+        ClientInfo {
+            session,
+            user_id: session,
+            username: format!("user-{session}"),
+            channel_id,
+            state: ClientState::Ready,
+            mute: false,
+            deaf: false,
+            suppress: false,
+            self_mute: false,
+            self_deaf: false,
+            priority_speaker: false,
+            recording: false,
+            ip_address: "127.0.0.1".to_string(),
+            connected_at: Instant::now(),
+            last_active: Instant::now(),
+            cert_hash: None,
+            groups: Vec::new(),
+            opus_supported: true,
+            listening_channels: Vec::new(),
+            listening_volume_adjustments: HashMap::new(),
+            texture_hash: None,
+            comment_hash: None,
+            client_version: None,
+            client_release: String::new(),
+            client_os: String::new(),
+            client_os_version: String::new(),
+            plugin_context: Vec::new(),
+            client_cert_chain: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn local_self_mute_updates_client_state_without_hub_echo() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        let hub_client = HubClient::new(&test_config(), Arc::clone(&edge_state));
+        let (tx, mut rx) = mpsc::channel(16);
+
+        edge_state
+            .client_manager
+            .add_client(make_test_client(7, 0), ClientSender::new(tx))
+            .await;
+
+        handle_user_state_update(
+            &edge_state,
+            &hub_client,
+            7,
+            &mumbleproto::UserState {
+                self_mute: Some(true),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let updated = edge_state
+            .client_manager
+            .get_client(7)
+            .await
+            .expect("client should remain present");
+        assert!(
+            updated.self_mute,
+            "local self_mute should be applied immediately"
+        );
+
+        let outbound = rx
+            .recv()
+            .await
+            .expect("actor should be notified immediately");
+        assert!(
+            !outbound.is_empty(),
+            "server should send an immediate local UserState to the actor"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_self_move_without_hub_returns_permission_denied() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        let hub_client = HubClient::new(&test_config(), Arc::clone(&edge_state));
+        let (tx, mut rx) = mpsc::channel(16);
+
+        edge_state
+            .client_manager
+            .add_client(make_test_client(9, 0), ClientSender::new(tx))
+            .await;
+
+        handle_user_state_update(
+            &edge_state,
+            &hub_client,
+            9,
+            &mumbleproto::UserState {
+                channel_id: Some(1),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let outbound = rx
+            .recv()
+            .await
+            .expect("actor must receive a denial when Hub move RPC cannot be sent");
+        let mut buf = BytesMut::from(&outbound[..]);
+        let frame = decode_frame(&mut buf)
+            .expect("frame should decode")
+            .expect("frame should be complete");
+        assert_eq!(
+            frame.message_type,
+            MessageType::PermissionDenied,
+            "failed self move should return PermissionDenied"
+        );
+
+        let denied = mumbleproto::PermissionDenied::decode(&frame.payload[..])
+            .expect("PermissionDenied should decode");
+        assert_eq!(
+            denied.r#type,
+            Some(mumbleproto::permission_denied::DenyType::Permission as i32)
+        );
+        assert_eq!(denied.channel_id, Some(1));
+        assert_eq!(denied.session, Some(9));
+
+        let client = edge_state
+            .client_manager
+            .get_client(9)
+            .await
+            .expect("client should remain present");
+        assert_eq!(
+            client.channel_id, 0,
+            "failed move must not change local channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_listener_limit_returns_permission_denied_without_mutating_state() {
+        let edge_state =
+            EdgeState::new_with_config(ChannelManager::new(), ClientManager::new(), true, 1, 8);
+        let hub_client = HubClient::new(&test_config(), Arc::clone(&edge_state));
+        let (tx, mut rx) = mpsc::channel(16);
+
+        let mut client = make_test_client(11, 0);
+        client.listening_channels.push(7);
+        edge_state
+            .client_manager
+            .add_client(client, ClientSender::new(tx))
+            .await;
+
+        handle_user_state_update(
+            &edge_state,
+            &hub_client,
+            11,
+            &mumbleproto::UserState {
+                listening_channel_add: vec![8],
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let outbound = rx
+            .recv()
+            .await
+            .expect("actor must receive a denial when listener limit is exceeded");
+        let mut buf = BytesMut::from(&outbound[..]);
+        let frame = decode_frame(&mut buf)
+            .expect("frame should decode")
+            .expect("frame should be complete");
+        assert_eq!(
+            frame.message_type,
+            MessageType::PermissionDenied,
+            "listener limit rejection should return PermissionDenied"
+        );
+
+        let denied = mumbleproto::PermissionDenied::decode(&frame.payload[..])
+            .expect("PermissionDenied should decode");
+        assert_eq!(
+            denied.r#type,
+            Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32)
+        );
+        assert_eq!(denied.channel_id, Some(8));
+
+        let client = edge_state
+            .client_manager
+            .get_client(11)
+            .await
+            .expect("client should remain present");
+        assert_eq!(
+            client.listening_channels,
+            vec![7],
+            "rejected listener add must not mutate local listening state"
         );
     }
 }
