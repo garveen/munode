@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -16,17 +16,159 @@ use munode_protocol::transport::encode_message;
 use crate::bandwidth::BandwidthRecord;
 use crate::crypto::CryptState;
 
-pub const CLIENT_CONTROL_QUEUE_CAPACITY: usize = 65536;
 pub const CLIENT_VOICE_QUEUE_CAPACITY: usize = 2048;
 const CLIENT_WRITE_BATCH_LIMIT: usize = 32;
+const CLIENT_CONTROL_QUEUE_SHRINK_THRESHOLD: usize = 1024;
+
+struct DynamicControlQueue {
+    state: Mutex<DynamicControlQueueState>,
+    notify: Notify,
+}
+
+struct DynamicControlQueueState {
+    pending: VecDeque<bytes::Bytes>,
+    sender_count: usize,
+    receiver_closed: bool,
+}
+
+fn shrink_dynamic_control_queue_if_idle(state: &mut DynamicControlQueueState) {
+    if state.pending.is_empty() && state.pending.capacity() > CLIENT_CONTROL_QUEUE_SHRINK_THRESHOLD
+    {
+        state.pending.shrink_to_fit();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DynamicControlTryRecvError {
+    Empty,
+    Closed,
+}
+
+pub(crate) struct DynamicControlReceiver {
+    inner: Arc<DynamicControlQueue>,
+}
+
+pub(crate) struct DynamicControlSender {
+    inner: Arc<DynamicControlQueue>,
+}
+
+impl Clone for DynamicControlSender {
+    fn clone(&self) -> Self {
+        let mut state = self.inner.state.lock().unwrap();
+        state.sender_count += 1;
+        drop(state);
+
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl Drop for DynamicControlSender {
+    fn drop(&mut self) {
+        let should_notify = {
+            let mut state = self.inner.state.lock().unwrap();
+            if state.sender_count > 0 {
+                state.sender_count -= 1;
+            }
+            state.sender_count == 0
+        };
+
+        if should_notify {
+            self.inner.notify.notify_waiters();
+        }
+    }
+}
+
+impl DynamicControlSender {
+    fn send(&self, data: bytes::Bytes) -> bool {
+        let mut state = self.inner.state.lock().unwrap();
+        if state.receiver_closed {
+            return false;
+        }
+        state.pending.push_back(data);
+        drop(state);
+        self.inner.notify.notify_one();
+        true
+    }
+}
+
+impl DynamicControlReceiver {
+    pub(crate) fn try_recv(&mut self) -> Result<bytes::Bytes, DynamicControlTryRecvError> {
+        let mut state = self.inner.state.lock().unwrap();
+        if let Some(data) = state.pending.pop_front() {
+            shrink_dynamic_control_queue_if_idle(&mut state);
+            return Ok(data);
+        }
+
+        if state.sender_count == 0 {
+            return Err(DynamicControlTryRecvError::Closed);
+        }
+
+        Err(DynamicControlTryRecvError::Empty)
+    }
+
+    pub(crate) async fn recv(&mut self) -> Option<bytes::Bytes> {
+        let inner = Arc::clone(&self.inner);
+        loop {
+            let notified = inner.notify.notified();
+            match self.try_recv() {
+                Ok(data) => return Some(data),
+                Err(DynamicControlTryRecvError::Closed) => return None,
+                Err(DynamicControlTryRecvError::Empty) => notified.await,
+            }
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        let state = self.inner.state.lock().unwrap();
+        state.pending.is_empty() && state.sender_count == 0
+    }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        let state = self.inner.state.lock().unwrap();
+        state.pending.capacity()
+    }
+}
+
+impl Drop for DynamicControlReceiver {
+    fn drop(&mut self) {
+        let mut state = self.inner.state.lock().unwrap();
+        state.receiver_closed = true;
+        state.pending.clear();
+        state.pending.shrink_to_fit();
+        drop(state);
+        self.inner.notify.notify_waiters();
+    }
+}
+
+pub(crate) fn dynamic_control_channel() -> (DynamicControlSender, DynamicControlReceiver) {
+    let inner = Arc::new(DynamicControlQueue {
+        state: Mutex::new(DynamicControlQueueState {
+            pending: VecDeque::new(),
+            sender_count: 1,
+            receiver_closed: false,
+        }),
+        notify: Notify::new(),
+    });
+
+    (
+        DynamicControlSender {
+            inner: Arc::clone(&inner),
+        },
+        DynamicControlReceiver { inner },
+    )
+}
 
 pub(crate) async fn recv_outgoing_batch(
-    control_rx: &mut mpsc::Receiver<bytes::Bytes>,
+    control_rx: &mut DynamicControlReceiver,
     voice_rx: &mut mpsc::Receiver<bytes::Bytes>,
 ) -> Option<Vec<bytes::Bytes>> {
     let first = loop {
-        if let Ok(data) = control_rx.try_recv() {
-            break Some(data);
+        match control_rx.try_recv() {
+            Ok(data) => break Some(data),
+            Err(DynamicControlTryRecvError::Empty | DynamicControlTryRecvError::Closed) => {}
         }
         if let Ok(data) = voice_rx.try_recv() {
             break Some(data);
@@ -57,8 +199,9 @@ pub(crate) async fn recv_outgoing_batch(
         while pending.len() < CLIENT_WRITE_BATCH_LIMIT {
             match control_rx.try_recv() {
                 Ok(data) => pending.push(data),
-                Err(mpsc::error::TryRecvError::Empty)
-                | Err(mpsc::error::TryRecvError::Disconnected) => break,
+                Err(DynamicControlTryRecvError::Empty | DynamicControlTryRecvError::Closed) => {
+                    break;
+                }
             }
         }
 
@@ -88,64 +231,37 @@ pub enum ClientState {
 /// A handle for sending messages to a client's TLS connection.
 #[derive(Clone)]
 pub struct ClientSender {
-    control_tx: mpsc::Sender<bytes::Bytes>,
+    control_tx: DynamicControlSender,
     voice_tx: mpsc::Sender<bytes::Bytes>,
-    disconnect_notify: Option<Arc<Notify>>,
 }
 
 impl ClientSender {
-    pub fn new(tx: mpsc::Sender<bytes::Bytes>) -> Self {
-        Self {
-            control_tx: tx.clone(),
-            voice_tx: tx,
-            disconnect_notify: None,
-        }
-    }
-
-    pub fn new_split(
-        control_tx: mpsc::Sender<bytes::Bytes>,
+    pub(crate) fn new_split(
+        control_tx: DynamicControlSender,
         voice_tx: mpsc::Sender<bytes::Bytes>,
     ) -> Self {
         Self {
             control_tx,
             voice_tx,
-            disconnect_notify: None,
         }
     }
 
-    pub fn new_split_with_disconnect_notify(
-        control_tx: mpsc::Sender<bytes::Bytes>,
+    pub(crate) fn new_split_with_disconnect_notify(
+        control_tx: DynamicControlSender,
         voice_tx: mpsc::Sender<bytes::Bytes>,
-        disconnect_notify: Arc<Notify>,
+        _disconnect_notify: Arc<Notify>,
     ) -> Self {
-        Self {
-            control_tx,
-            voice_tx,
-            disconnect_notify: Some(disconnect_notify),
-        }
-    }
-
-    fn notify_disconnect(&self) {
-        if let Some(notify) = &self.disconnect_notify {
-            notify.notify_one();
-        }
+        Self::new_split(control_tx, voice_tx)
     }
 
     fn try_send_control(&self, data: bytes::Bytes) -> bool {
-        match self.control_tx.try_send(data) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                warn!(
-                    "Client control queue full — disconnecting slow connection instead of dropping control traffic"
-                );
-                self.notify_disconnect();
-                false
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => false,
-        }
+        self.control_tx.send(data)
     }
 
-    /// Send raw bytes to the client.
+    /// Send raw control bytes to the client.
+    ///
+    /// This keeps the async API shape for call-site compatibility, but the enqueue
+    /// itself remains non-blocking so one slow client can never stall shared send loops.
     pub async fn send_raw(&self, data: bytes::Bytes) -> bool {
         self.try_send_control(data)
     }
@@ -188,6 +304,21 @@ impl ClientSender {
         encode_message(msg_type, message, &mut buf);
         self.send_raw(buf.freeze()).await
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_client_sender() -> (
+    ClientSender,
+    DynamicControlReceiver,
+    mpsc::Receiver<bytes::Bytes>,
+) {
+    let (control_tx, control_rx) = dynamic_control_channel();
+    let (voice_tx, voice_rx) = mpsc::channel(16);
+    (
+        ClientSender::new_split(control_tx, voice_tx),
+        control_rx,
+        voice_rx,
+    )
 }
 
 /// Information about a connected client.
@@ -1197,11 +1328,38 @@ impl ClientManager {
                 .collect()
         };
 
+        self.fanout_pre_encoded(targets, data, "broadcast");
+    }
+
+    fn ready_targets_for_sessions<I>(&self, session_ids: I) -> Vec<(u32, ClientSender)>
+    where
+        I: IntoIterator<Item = u32>,
+    {
+        let reg = self.sender_registry.read().unwrap();
+        let mut seen = HashSet::new();
+
+        session_ids
+            .into_iter()
+            .filter(|session| seen.insert(*session))
+            .filter_map(|session| {
+                reg.get(&session)
+                    .filter(|(_, ready)| ready.load(Ordering::Relaxed))
+                    .map(|(sender, _)| (session, sender.clone()))
+            })
+            .collect()
+    }
+
+    fn fanout_pre_encoded(
+        &self,
+        targets: Vec<(u32, ClientSender)>,
+        data: bytes::Bytes,
+        label: &'static str,
+    ) {
         for (session, sender) in targets {
             if !sender.try_send_raw(data.clone()) {
                 warn!(
-                    "Dropped broadcast to session {} (send channel full)",
-                    session
+                    "Dropped {} to session {} (send channel full)",
+                    label, session
                 );
             }
         }
@@ -1220,29 +1378,35 @@ impl ClientManager {
         let data = buf.freeze();
 
         let member_ids = self.get_channel_sessions(channel_id).await;
-
-        // Sync read lock — no async suspension, no competition with state writes.
-        let targets: Vec<(u32, ClientSender)> = {
-            let reg = self.sender_registry.read().unwrap();
+        let targets = self.ready_targets_for_sessions(
             member_ids
-                .iter()
-                .filter(|&&s| Some(s) != exclude_session)
-                .filter_map(|&s| {
-                    reg.get(&s)
-                        .filter(|(_, ready)| ready.load(Ordering::Relaxed))
-                        .map(|(sender, _)| (s, sender.clone()))
-                })
-                .collect()
-        };
+                .into_iter()
+                .filter(|session| Some(*session) != exclude_session),
+        );
 
-        for (session, sender) in targets {
-            if !sender.try_send_raw(data.clone()) {
-                warn!(
-                    "Dropped channel broadcast to session {} (send channel full)",
-                    session
-                );
-            }
-        }
+        self.fanout_pre_encoded(targets, data, "channel broadcast");
+    }
+
+    /// Broadcast a message to an explicit set of ready sessions.
+    ///
+    /// The payload is encoded once and then enqueued with non-blocking `try_send`
+    /// semantics so filtered fanout paths share the same slow-client behavior as
+    /// the common broadcast helpers.
+    pub async fn broadcast_to_sessions<I, M>(
+        &self,
+        session_ids: I,
+        msg_type: MessageType,
+        message: &M,
+    ) where
+        I: IntoIterator<Item = u32>,
+        M: Message,
+    {
+        let mut buf = BytesMut::new();
+        encode_message(msg_type, message, &mut buf);
+        let data = buf.freeze();
+        let targets = self.ready_targets_for_sessions(session_ids);
+
+        self.fanout_pre_encoded(targets, data, "session broadcast");
     }
 
     /// Send a message to a specific client.
@@ -1261,7 +1425,7 @@ impl ClientManager {
             .get(&session)
             .map(|(s, _)| s.clone());
         if let Some(s) = sender {
-            s.send_raw(buf.freeze()).await
+            s.try_send_raw(buf.freeze())
         } else {
             false
         }
@@ -1390,8 +1554,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_remove_client() {
         let mgr = ClientManager::new();
-        let (tx, _rx) = mpsc::channel(16);
-        let sender = ClientSender::new(tx);
+        let (sender, _rx, _voice_rx) = test_client_sender();
 
         let client = make_test_client(1, 0);
         mgr.add_client(client, sender).await;
@@ -1406,13 +1569,11 @@ mod tests {
     #[tokio::test]
     async fn test_channel_sessions() {
         let mgr = ClientManager::new();
-        let (tx1, _rx1) = mpsc::channel(16);
-        let (tx2, _rx2) = mpsc::channel(16);
+        let (sender1, _rx1, _voice_rx1) = test_client_sender();
+        let (sender2, _rx2, _voice_rx2) = test_client_sender();
 
-        mgr.add_client(make_test_client(1, 0), ClientSender::new(tx1))
-            .await;
-        mgr.add_client(make_test_client(2, 0), ClientSender::new(tx2))
-            .await;
+        mgr.add_client(make_test_client(1, 0), sender1).await;
+        mgr.add_client(make_test_client(2, 0), sender2).await;
 
         let sessions = mgr.get_channel_sessions(0).await;
         assert_eq!(sessions.len(), 2);
@@ -1423,8 +1584,7 @@ mod tests {
     #[tokio::test]
     async fn udp_identification_candidates_include_sessions_with_existing_mappings() {
         let mgr = ClientManager::new();
-        let (tx, _rx) = mpsc::channel(16);
-        let sender = ClientSender::new(tx);
+        let (sender, _rx, _voice_rx) = test_client_sender();
 
         let client = make_test_client(1, 0);
         mgr.add_client(client, sender).await;
@@ -1440,16 +1600,16 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast_sends_to_ready_clients() {
         let mgr = ClientManager::new();
-        let (tx1, mut rx1) = mpsc::channel(16);
-        let (tx2, mut rx2) = mpsc::channel(16);
+        let (sender1, mut rx1, _voice_rx1) = test_client_sender();
+        let (sender2, mut rx2, _voice_rx2) = test_client_sender();
 
         let mut c1 = make_test_client(1, 0);
         c1.state = ClientState::Ready;
         let mut c2 = make_test_client(2, 0);
         c2.state = ClientState::Ready;
 
-        mgr.add_client(c1, ClientSender::new(tx1)).await;
-        mgr.add_client(c2, ClientSender::new(tx2)).await;
+        mgr.add_client(c1, sender1).await;
+        mgr.add_client(c2, sender2).await;
 
         let ping = mumbleproto::Ping {
             timestamp: Some(12345),
@@ -1467,10 +1627,10 @@ mod tests {
     #[tokio::test]
     async fn test_send_to_specific_client() {
         let mgr = ClientManager::new();
-        let (tx, mut rx) = mpsc::channel(16);
+        let (sender, mut rx, _voice_rx) = test_client_sender();
 
         let client = make_test_client(1, 0);
-        mgr.add_client(client, ClientSender::new(tx)).await;
+        mgr.add_client(client, sender).await;
 
         let ping = mumbleproto::Ping {
             timestamp: Some(42),
@@ -1484,49 +1644,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_to_full_queue_returns_immediately_and_requests_disconnect() {
-        let mgr = ClientManager::new();
-        let disconnect_notify = Arc::new(Notify::new());
-        let (control_tx, _control_rx) = mpsc::channel(1);
-        let (voice_tx, _voice_rx) = mpsc::channel(1);
-
-        let client = make_test_client(1, 0);
-        mgr.add_client(
-            client,
-            ClientSender::new_split_with_disconnect_notify(
-                control_tx,
-                voice_tx,
-                Arc::clone(&disconnect_notify),
-            ),
-        )
-        .await;
-
-        let ping = mumbleproto::Ping {
-            timestamp: Some(42),
-            ..Default::default()
-        };
-
-        assert!(mgr.send_to(1, MessageType::Ping, &ping).await);
-
-        let sent = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            mgr.send_to(1, MessageType::Ping, &ping),
-        )
-        .await
-        .expect("send_to should not block on a full control queue");
-        assert!(!sent);
-
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            disconnect_notify.notified(),
-        )
-        .await
-        .expect("full control queue should request connection close");
-    }
-
-    #[tokio::test]
     async fn test_split_sender_separates_control_and_voice_lanes() {
-        let (control_tx, mut control_rx) = mpsc::channel(4);
+        let (control_tx, mut control_rx) = dynamic_control_channel();
         let (voice_tx, mut voice_rx) = mpsc::channel(4);
         let sender = ClientSender::new_split(control_tx, voice_tx);
 
@@ -1546,40 +1665,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_control_queue_overflow_notifies_disconnect() {
-        let disconnect_notify = Arc::new(Notify::new());
-        let (control_tx, _control_rx) = mpsc::channel(1);
-        let (voice_tx, _voice_rx) = mpsc::channel(1);
-        let sender = ClientSender::new_split_with_disconnect_notify(
-            control_tx,
-            voice_tx,
-            Arc::clone(&disconnect_notify),
-        );
+    async fn test_broadcast_to_sessions_filters_duplicates_and_non_ready() {
+        let mgr = ClientManager::new();
+        let (sender1, mut rx1, _voice_rx1) = test_client_sender();
+        let (sender2, mut rx2, _voice_rx2) = test_client_sender();
+        let (sender3, mut rx3, _voice_rx3) = test_client_sender();
 
-        assert!(sender.try_send_raw(bytes::Bytes::from_static(b"first-control")));
-        assert!(!sender.try_send_raw(bytes::Bytes::from_static(b"second-control")));
+        let mut ready_one = make_test_client(1, 0);
+        ready_one.state = ClientState::Ready;
+        let mut not_ready = make_test_client(2, 0);
+        not_ready.state = ClientState::Authenticated;
+        let mut ready_three = make_test_client(3, 0);
+        ready_three.state = ClientState::Ready;
 
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            disconnect_notify.notified(),
-        )
-        .await
-        .expect("control queue overflow should request connection close");
+        mgr.add_client(ready_one, sender1).await;
+        mgr.add_client(not_ready, sender2).await;
+        mgr.add_client(ready_three, sender3).await;
+
+        let ping = mumbleproto::Ping {
+            timestamp: Some(7),
+            ..Default::default()
+        };
+
+        mgr.broadcast_to_sessions(vec![1, 1, 2, 3], MessageType::Ping, &ping)
+            .await;
+
+        assert!(!rx1.try_recv().unwrap().is_empty());
+        assert!(!rx3.try_recv().unwrap().is_empty());
+        assert!(rx1.try_recv().is_err());
+        assert!(rx2.try_recv().is_err());
     }
 
     #[tokio::test]
     async fn test_recv_outgoing_batch_prioritizes_control_lane() {
-        let (control_tx, mut control_rx) = mpsc::channel(4);
+        let (control_tx, mut control_rx) = dynamic_control_channel();
         let (voice_tx, mut voice_rx) = mpsc::channel(4);
 
         voice_tx
             .send(bytes::Bytes::from_static(b"voice-1"))
             .await
             .unwrap();
-        control_tx
-            .send(bytes::Bytes::from_static(b"control-1"))
-            .await
-            .unwrap();
+        assert!(control_tx.send(bytes::Bytes::from_static(b"control-1")));
         voice_tx
             .send(bytes::Bytes::from_static(b"voice-2"))
             .await
@@ -1595,10 +1721,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_dynamic_control_queue_scales_beyond_previous_fixed_limit() {
+        let (control_tx, mut control_rx) = dynamic_control_channel();
+
+        for _ in 0..1024 {
+            assert!(control_tx.send(bytes::Bytes::from_static(b"control-frame")));
+        }
+
+        for _ in 0..1024 {
+            let frame = control_rx.try_recv().expect("frame should be queued");
+            assert_eq!(frame, bytes::Bytes::from_static(b"control-frame"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_control_queue_releases_queue_capacity_after_drain() {
+        let (control_tx, mut control_rx) = dynamic_control_channel();
+
+        for _ in 0..2048 {
+            assert!(control_tx.send(bytes::Bytes::from_static(b"control-frame")));
+        }
+        assert!(control_rx.capacity() > CLIENT_CONTROL_QUEUE_SHRINK_THRESHOLD);
+
+        for _ in 0..2048 {
+            control_rx.try_recv().expect("frame should be queued");
+        }
+
+        assert!(control_rx.capacity() <= CLIENT_CONTROL_QUEUE_SHRINK_THRESHOLD);
+    }
+
+    #[tokio::test]
     async fn test_update_client() {
         let mgr = ClientManager::new();
-        let (tx, _rx) = mpsc::channel(16);
-        let sender = ClientSender::new(tx);
+        let (sender, _rx, _voice_rx) = test_client_sender();
 
         let mut client = make_test_client(1, 0);
         mgr.add_client(client.clone(), sender).await;
@@ -1613,10 +1768,9 @@ mod tests {
     #[tokio::test]
     async fn test_record_voice_bytes_enforces_cap() {
         let mgr = ClientManager::new();
-        let (tx, _rx) = mpsc::channel(16);
+        let (sender, _rx, _voice_rx) = test_client_sender();
         let session = 42u32;
-        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx))
-            .await;
+        mgr.add_client(make_test_client(session, 0), sender).await;
         let cap = 500u32;
         let frame_bytes = 100u32;
 
@@ -1650,10 +1804,9 @@ mod tests {
     #[tokio::test]
     async fn test_record_voice_bytes_no_cap() {
         let mgr = ClientManager::new();
-        let (tx, _rx) = mpsc::channel(16);
+        let (sender, _rx, _voice_rx) = test_client_sender();
         let session = 99u32;
-        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx))
-            .await;
+        mgr.add_client(make_test_client(session, 0), sender).await;
 
         // cap = 0 means unlimited — all frames should be accepted.
         for _ in 0..10 {
@@ -1669,10 +1822,9 @@ mod tests {
         use crate::bandwidth::effective_window;
 
         let mgr = ClientManager::new();
-        let (tx, _rx) = mpsc::channel(16);
+        let (sender, _rx, _voice_rx) = test_client_sender();
         let session = 7u32;
-        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx))
-            .await;
+        mgr.add_client(make_test_client(session, 0), sender).await;
 
         // Seed an initial record with a 60-s window.
         mgr.record_voice_bytes(session, 100, 0, 60).await;

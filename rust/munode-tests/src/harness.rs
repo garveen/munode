@@ -171,6 +171,15 @@ static PORT_COUNTER: AtomicU16 = AtomicU16::new(19000);
 /// Reserve extra headroom for transient reuse delays and future listeners.
 const PORTS_PER_ENV: u16 = 32;
 
+fn aligned_port_block_base(preferred_base: u16) -> u16 {
+    let remainder = preferred_base % PORTS_PER_ENV;
+    if remainder == 0 {
+        preferred_base
+    } else {
+        preferred_base.saturating_add(PORTS_PER_ENV - remainder)
+    }
+}
+
 /// Filesystem-backed lease for a port block.
 ///
 /// Cargo can run different test binaries in parallel, so a process-local atomic
@@ -189,7 +198,9 @@ impl PortBlockLease {
         fs::create_dir_all(&root)
             .with_context(|| format!("create port block root {}", root.display()))?;
 
-        let mut base = preferred_base;
+        // Normalize requested bases onto the reservation grid so nearby test
+        // suites like 19400/19410/19420 cannot lease overlapping 32-port blocks.
+        let mut base = aligned_port_block_base(preferred_base);
         let max_base = u16::MAX.saturating_sub(PORTS_PER_ENV);
         while base <= max_base {
             let path = root.join(base.to_string());
@@ -287,6 +298,20 @@ pub fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::aligned_port_block_base;
+
+    #[test]
+    fn port_block_base_rounds_up_to_reservation_boundary() {
+        assert_eq!(aligned_port_block_base(19400), 19424);
+        assert_eq!(aligned_port_block_base(19410), 19424);
+        assert_eq!(aligned_port_block_base(19420), 19424);
+        assert_eq!(aligned_port_block_base(19430), 19456);
+        assert_eq!(aligned_port_block_base(19456), 19456);
+    }
+}
+
 /// Wait until an Edge can complete a real client login, not just accept TCP.
 /// This avoids returning from the harness while the Edge is still waiting to
 /// finish Hub registration, which would otherwise cause the first test clients
@@ -296,11 +321,10 @@ pub async fn wait_for_edge_login_ready(port: u16, timeout: Duration) -> Result<(
 
     let admin = find_user("admin").ok_or_else(|| anyhow!("missing admin test user"))?;
     let deadline = Instant::now() + timeout;
-    let mut last_error: Option<String> = None;
 
     loop {
         let client = MumbleClient::new();
-        match client
+        let retry_reason = match client
             .connect(ConnectOptions {
                 host: "127.0.0.1".into(),
                 port,
@@ -329,22 +353,20 @@ pub async fn wait_for_edge_login_ready(port: u16, timeout: Duration) -> Result<(
 
                 match client_error {
                     ClientError::AuthRejected { reason } if reason.contains("Server not ready") => {
-                        last_error = Some(reason.clone());
+                        reason.clone()
                     }
                     ClientError::AuthRejected { reason }
                         if reason == "Authentication failed"
                             || reason == "Authentication denied" =>
                     {
-                        last_error = Some(reason.clone());
+                        reason.clone()
                     }
                     ClientError::AuthRejected { .. } => {
                         return Ok(());
                     }
-                    ClientError::Io { detail } | ClientError::Protocol { detail } => {
-                        last_error = Some(detail.clone());
-                    }
+                    ClientError::Io { detail } | ClientError::Protocol { detail } => detail.clone(),
                     ClientError::Timeout { secs } => {
-                        last_error = Some(format!("connection timed out after {}s", secs));
+                        format!("connection timed out after {}s", secs)
                     }
                     _ => {
                         return Err(anyhow!(
@@ -355,13 +377,13 @@ pub async fn wait_for_edge_login_ready(port: u16, timeout: Duration) -> Result<(
                     }
                 }
             }
-        }
+        };
 
         if Instant::now() >= deadline {
             bail!(
                 "Timed out waiting for edge {} login readiness: {}",
                 port,
-                last_error.unwrap_or_else(|| "unknown error".to_string())
+                retry_reason
             );
         }
 

@@ -14,6 +14,7 @@ use munode_protocol::hubedge::{
     HubDisseminationUpdateParams, ServerLimitsConfig, TypedRpcNotification,
 };
 use munode_protocol::message_type::MessageType;
+use munode_protocol::mumbleproto;
 
 use crate::channel_manager::{ChannelData, RemoteUser};
 use crate::peer_registry::PeerEdgeInfo;
@@ -241,17 +242,22 @@ impl HubClient {
                     let target_session = params.session;
                     info!("User removed: session {}", target_session);
                     // If the kicked user is a LOCAL client on this edge, send them UserRemove then close
-                    if let Some(sender) = self
+                    if self
                         .edge_state
                         .client_manager
                         .get_sender(target_session)
                         .await
+                        .is_some()
                     {
                         let msg = crate::handler::build_user_remove_msg(
                             target_session,
                             params.reason.as_deref(),
                         );
-                        sender.send_message(MessageType::UserRemove, &msg).await;
+                        let _ = self
+                            .edge_state
+                            .client_manager
+                            .send_to(target_session, MessageType::UserRemove, &msg)
+                            .await;
                         // Remove the client from the manager and then fire the close signal
                         // so the per-client read loop breaks and the TCP connection closes.
                         self.edge_state
@@ -386,12 +392,12 @@ impl HubClient {
                         } else if let Some(mut client) =
                             self.edge_state.client_manager.get_client(session_id).await
                         {
-                            // The source edge is authoritative for a connected local
-                            // user's self mute/deaf choice. Hub echoes are used to
-                            // fan out that state to other edges, but must not
-                            // overwrite the local client's immediate choice.
-                            delta.self_mute = None;
-                            delta.self_deaf = None;
+                            // The source edge remains authoritative for a connected local
+                            // user's self mute/deaf state. Preserve the current local value
+                            // for fan-out and actor resync even if the hub echo carries an
+                            // older value, while still applying admin/listener updates from Hub.
+                            let authoritative_self_mute = p.self_mute.map(|_| client.self_mute);
+                            let authoritative_self_deaf = p.self_deaf.map(|_| client.self_deaf);
                             if let Some(b) = p.mute {
                                 client.mute = b;
                             }
@@ -422,6 +428,9 @@ impl HubClient {
                                 .listening_channels
                                 .retain(|ch| !listening_remove.contains(ch));
 
+                            delta.self_mute = authoritative_self_mute;
+                            delta.self_deaf = authoritative_self_deaf;
+
                             let listening_changed =
                                 !listening_add.is_empty() || !listening_remove.is_empty();
                             let deaf_changed = delta.deaf.is_some() || delta.self_deaf.is_some();
@@ -431,6 +440,38 @@ impl HubClient {
                                     .topology_version
                                     .fetch_add(1, std::sync::atomic::Ordering::Release);
                             }
+
+                            let has_authoritative_sync = delta.self_mute.is_some()
+                                || delta.self_deaf.is_some()
+                                || delta.mute.is_some()
+                                || delta.deaf.is_some()
+                                || delta.suppress.is_some()
+                                || delta.priority_speaker.is_some()
+                                || delta.recording.is_some()
+                                || !listening_add.is_empty()
+                                || !listening_remove.is_empty();
+                            if has_authoritative_sync {
+                                let mut sync_msg = mumbleproto::UserState {
+                                    session: Some(session_id),
+                                    actor: delta.actor_session.or(p.actor_session),
+                                    self_mute: delta.self_mute,
+                                    self_deaf: delta.self_deaf,
+                                    mute: delta.mute,
+                                    deaf: delta.deaf,
+                                    suppress: delta.suppress,
+                                    priority_speaker: delta.priority_speaker,
+                                    recording: delta.recording,
+                                    ..Default::default()
+                                };
+                                sync_msg.listening_channel_add = listening_add.clone();
+                                sync_msg.listening_channel_remove = listening_remove.clone();
+                                let _ = self
+                                    .edge_state
+                                    .client_manager
+                                    .send_to(session_id, MessageType::UserState, &sync_msg)
+                                    .await;
+                            }
+
                             self.edge_state.emit(EdgeEvent::RemoteUserStateChanged {
                                 session_id,
                                 delta,
@@ -1137,7 +1178,7 @@ impl HubClient {
 mod tests {
     use super::{DisseminationEpochDecision, decide_dissemination_epoch_update};
     use crate::channel_manager::ChannelManager;
-    use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
+    use crate::client::{ClientInfo, ClientManager, ClientState};
     use crate::hub_client::HubClient;
     use crate::server::hub_event_listener;
     use crate::state::EdgeState;
@@ -1157,7 +1198,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
     use std::time::Instant;
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::watch;
 
     fn test_config() -> EdgeConfig {
         EdgeConfig {
@@ -1333,15 +1374,12 @@ mod tests {
     async fn local_client_self_mute_deaf_overrides_hub_echo() {
         let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
         let hub = HubClient::new(&test_config(), edge_state.clone());
-        let (tx, _rx) = mpsc::channel(16);
+        let (sender, _rx, _voice_rx) = crate::client::test_client_sender();
 
         let mut client = make_test_client(42, 0);
         client.self_mute = true;
         client.self_deaf = true;
-        edge_state
-            .client_manager
-            .add_client(client, ClientSender::new(tx))
-            .await;
+        edge_state.client_manager.add_client(client, sender).await;
 
         hub.handle_notification(TypedRpcNotification {
             method: "hub.userStateBroadcast".to_string(),
@@ -1374,16 +1412,17 @@ mod tests {
         let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
         let hub = HubClient::new(&test_config(), edge_state.clone());
 
-        let (tx_target, mut rx_target) = mpsc::channel(16);
-        let (tx_observer, mut rx_observer) = mpsc::channel(16);
+        let (target_sender, mut rx_target, _target_voice_rx) = crate::client::test_client_sender();
+        let (observer_sender, mut rx_observer, _observer_voice_rx) =
+            crate::client::test_client_sender();
 
         edge_state
             .client_manager
-            .add_client(make_test_client(42, 0), ClientSender::new(tx_target))
+            .add_client(make_test_client(42, 0), target_sender)
             .await;
         edge_state
             .client_manager
-            .add_client(make_test_client(7, 0), ClientSender::new(tx_observer))
+            .add_client(make_test_client(7, 0), observer_sender)
             .await;
 
         let edge_state = run_event_listener_task(edge_state).await;
@@ -1427,5 +1466,70 @@ mod tests {
             .await
             .expect("moved local client should remain present");
         assert_eq!(updated.channel_id, 9);
+    }
+
+    #[tokio::test]
+    async fn hub_user_moved_out_of_ninja_reappears_for_unprivileged_local_observer() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        let hub = HubClient::new(&test_config(), edge_state.clone());
+
+        edge_state.ninja_channels.write().await.push(1);
+        edge_state
+            .ninja_visible_to
+            .write()
+            .await
+            .insert(7, std::collections::HashSet::new());
+
+        let (target_sender, mut rx_target, _target_voice_rx) = crate::client::test_client_sender();
+        let (observer_sender, mut rx_observer, _observer_voice_rx) =
+            crate::client::test_client_sender();
+
+        edge_state
+            .client_manager
+            .add_client(make_test_client(42, 1), target_sender)
+            .await;
+        edge_state
+            .client_manager
+            .add_client(make_test_client(7, 0), observer_sender)
+            .await;
+
+        let edge_state = run_event_listener_task(edge_state).await;
+
+        hub.handle_notification(TypedRpcNotification {
+            method: "hub.userMoved".to_string(),
+            user_moved: Some(HubUserMovedParams {
+                session_id: 42,
+                edge_id: 1,
+                channel_id: 0,
+                actor_session: Some(42),
+                suppress: None,
+            }),
+            ..Default::default()
+        })
+        .await;
+
+        let _target_msg = decode_user_state(
+            &rx_target
+                .recv()
+                .await
+                .expect("moved local client should receive authoritative move"),
+        );
+
+        let observer_msg = decode_user_state(
+            &rx_observer
+                .recv()
+                .await
+                .expect("observer should receive reappear UserState after ninja exit"),
+        );
+        assert_eq!(observer_msg.session, Some(42));
+        assert_eq!(observer_msg.channel_id, Some(0));
+        assert_eq!(observer_msg.name.as_deref(), Some("user-42"));
+
+        let updated = edge_state
+            .client_manager
+            .get_client(42)
+            .await
+            .expect("moved local client should remain present");
+        assert_eq!(updated.channel_id, 0);
     }
 }

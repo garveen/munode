@@ -49,7 +49,7 @@ use tracing::{debug, info};
 use munode_common::config::EdgeConfig;
 
 use crate::client::{
-    CLIENT_CONTROL_QUEUE_CAPACITY, CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, recv_outgoing_batch,
+    CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, dynamic_control_channel, recv_outgoing_batch,
 };
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
@@ -546,7 +546,7 @@ where
     let write_failed = Arc::new(tokio::sync::Notify::new());
     let write_failed_notify = Arc::clone(&write_failed);
 
-    let (control_tx, mut control_rx) = mpsc::channel::<Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (control_tx, mut control_rx) = dynamic_control_channel();
     let (voice_tx, mut voice_rx) = mpsc::channel::<Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
     let client_sender = ClientSender::new_split_with_disconnect_notify(
         control_tx,

@@ -380,14 +380,13 @@ pub fn deliver_voice_tcp(sessions: &[u32], frame: &bytes::Bytes) -> usize {
 #[cfg(test)]
 mod tests {
     use super::deliver_voice_locally_prefer_udp;
-    use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
+    use crate::client::{ClientInfo, ClientManager, ClientState};
     use crate::crypto::CryptState;
     use dashmap::DashMap;
     use munode_protocol::message_type::MessageType;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::net::UdpSocket;
-    use tokio::sync::mpsc;
     use tokio::time::{Duration, timeout};
 
     fn ready_client(session: u32) -> ClientInfo {
@@ -427,10 +426,10 @@ mod tests {
     async fn deliver_voice_locally_prefer_udp_uses_udp_when_mapping_exists() {
         let session = 90_001;
         let client_manager = ClientManager::new();
-        let (tcp_tx, mut tcp_rx) = mpsc::channel(4);
+        let (sender, _control_rx, mut voice_rx) = crate::client::test_client_sender();
 
         client_manager
-            .add_client(ready_client(session), ClientSender::new(tcp_tx))
+            .add_client(ready_client(session), sender)
             .await;
 
         let mut crypt = CryptState::new();
@@ -460,20 +459,17 @@ mod tests {
             .unwrap();
         assert!(len > 0);
         assert_eq!(from_addr, send_socket.local_addr().unwrap());
-        assert!(matches!(
-            tcp_rx.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-        ));
+        assert!(voice_rx.try_recv().is_err());
     }
 
     #[tokio::test]
     async fn deliver_voice_locally_prefer_udp_falls_back_to_tcp_without_mapping() {
         let session = 90_002;
         let client_manager = ClientManager::new();
-        let (tcp_tx, mut tcp_rx) = mpsc::channel(4);
+        let (sender, _control_rx, mut voice_rx) = crate::client::test_client_sender();
 
         client_manager
-            .add_client(ready_client(session), ClientSender::new(tcp_tx))
+            .add_client(ready_client(session), sender)
             .await;
 
         let session_to_addr: DashMap<u32, std::net::SocketAddr> = DashMap::new();
@@ -483,7 +479,7 @@ mod tests {
 
         assert_eq!(delivered, 1);
 
-        let frame = timeout(Duration::from_millis(200), tcp_rx.recv())
+        let frame = timeout(Duration::from_millis(200), voice_rx.recv())
             .await
             .unwrap()
             .unwrap();

@@ -1145,7 +1145,9 @@ impl MumbleClient {
             }
         })
         .await
-        .context("wait_for_event timed out")?
+        .map_err(|_| ClientError::Timeout {
+            secs: duration.as_secs(),
+        })?
     }
 
     // ── Internal helpers ───────────────────────────────────────────────────

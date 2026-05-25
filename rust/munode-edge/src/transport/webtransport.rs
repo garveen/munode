@@ -35,7 +35,7 @@ use wtransport::{Endpoint, Identity, ServerConfig, VarInt};
 use munode_common::config::EdgeConfig;
 
 use crate::client::{
-    CLIENT_CONTROL_QUEUE_CAPACITY, CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, recv_outgoing_batch,
+    CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, dynamic_control_channel, recv_outgoing_batch,
 };
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
@@ -228,7 +228,7 @@ async fn handle_wt_session(
     let write_failed = Arc::new(tokio::sync::Notify::new());
     let write_failed_notify = Arc::clone(&write_failed);
 
-    let (control_tx, mut control_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (control_tx, mut control_rx) = dynamic_control_channel();
     let (voice_tx, mut voice_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
     let client_sender = ClientSender::new_split_with_disconnect_notify(
         control_tx,
@@ -248,9 +248,8 @@ async fn handle_wt_session(
                 // Bound the write with a timeout: QUIC flow control can stall indefinitely
                 // if the browser stops reading from stream.readable (e.g. JS exception or tab
                 // becomes background).  Without a deadline this would block the writer task
-                // forever, fill the send channel (capacity 4096), and then block any caller
-                // of client_sender.send_raw().await — including the login task — causing an
-                // apparent 30-second "freeze" while the TypeScript authenticate() times out.
+                // forever, fill the bounded control queue, and eventually force the
+                // connection to close once control messages can no longer be enqueued.
                 match tokio::time::timeout(QUIC_WRITE_TIMEOUT, send_stream.write_all(chunk)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {

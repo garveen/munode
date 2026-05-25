@@ -15,7 +15,7 @@ use login::{LoginTaskArgs, LoginTaskResult, do_login_task, spawn_channel_access_
 use user_state::{handle_admin_user_state_update, handle_user_state_update};
 
 use crate::client::{
-    CLIENT_CONTROL_QUEUE_CAPACITY, CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, ClientState,
+    CLIENT_VOICE_QUEUE_CAPACITY, ClientSender, ClientState, dynamic_control_channel,
     recv_outgoing_batch,
 };
 use crate::handler::{self, LoginHandler};
@@ -162,7 +162,7 @@ pub(super) async fn handle_client_connection(
     let write_failed = std::sync::Arc::new(tokio::sync::Notify::new());
     let write_failed_notify = std::sync::Arc::clone(&write_failed);
 
-    let (control_tx, mut control_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_CONTROL_QUEUE_CAPACITY);
+    let (control_tx, mut control_rx) = dynamic_control_channel();
     let (voice_tx, mut voice_rx) = mpsc::channel::<bytes::Bytes>(CLIENT_VOICE_QUEUE_CAPACITY);
     let client_sender = ClientSender::new_split_with_disconnect_notify(
         control_tx,

@@ -1,6 +1,8 @@
 use super::user_state::handle_admin_user_state_update;
 use crate::channel_manager::ChannelManager;
-use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
+use crate::client::{
+    ClientInfo, ClientManager, ClientState, DynamicControlReceiver, test_client_sender,
+};
 use crate::hub_client::HubClient;
 use crate::server::event_listener::hub_event_listener;
 use crate::state::{EdgeEvent, EdgeState, RemoteUserStateDelta};
@@ -13,8 +15,6 @@ use munode_protocol::transport::decode_frame;
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc;
-
 struct ShortWriteSink {
     max_per_write: usize,
     written: Vec<u8>,
@@ -189,7 +189,7 @@ fn decode_user_state(data: &[u8]) -> mumbleproto::UserState {
 }
 
 async fn recv_user_state_for_session(
-    rx: &mut mpsc::Receiver<bytes::Bytes>,
+    rx: &mut DynamicControlReceiver,
     target_session: u32,
 ) -> mumbleproto::UserState {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(100);
@@ -213,7 +213,7 @@ async fn recv_user_state_for_session(
     }
 }
 
-async fn assert_no_message(rx: &mut mpsc::Receiver<bytes::Bytes>) {
+async fn assert_no_message(rx: &mut DynamicControlReceiver) {
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
             .await
@@ -240,14 +240,14 @@ fn test_edge_and_hub() -> (Arc<EdgeState>, Arc<HubClient>) {
 async fn test_self_mute_broadcast_to_self_and_others() {
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
-    let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_a, mut rx_a, _voice_rx_a) = test_client_sender();
+    let (sender_b, mut rx_b, _voice_rx_b) = test_client_sender();
     let mut client1 = ready_client(1, 0);
     es.client_manager
-        .add_client(client1.clone(), ClientSender::new(tx_a))
+        .add_client(client1.clone(), sender_a)
         .await;
     es.client_manager
-        .add_client(ready_client(2, 0), ClientSender::new(tx_b))
+        .add_client(ready_client(2, 0), sender_b)
         .await;
 
     client1.self_mute = true;
@@ -290,16 +290,16 @@ async fn test_self_mute_broadcast_to_self_and_others() {
 async fn test_self_unmute_broadcast_carries_false() {
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
-    let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_a, mut rx_a, _voice_rx_a) = test_client_sender();
+    let (sender_b, mut rx_b, _voice_rx_b) = test_client_sender();
     let mut client1 = ready_client(1, 0);
     client1.self_mute = true;
     client1.self_deaf = true;
     es.client_manager
-        .add_client(client1.clone(), ClientSender::new(tx_a))
+        .add_client(client1.clone(), sender_a)
         .await;
     es.client_manager
-        .add_client(ready_client(2, 0), ClientSender::new(tx_b))
+        .add_client(ready_client(2, 0), sender_b)
         .await;
 
     client1.self_mute = false;
@@ -356,14 +356,14 @@ async fn test_self_unmute_broadcast_carries_false() {
 async fn test_self_deaf_implies_self_mute() {
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
-    let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_a, mut rx_a, _voice_rx_a) = test_client_sender();
+    let (sender_b, mut rx_b, _voice_rx_b) = test_client_sender();
     let mut client1 = ready_client(1, 0);
     es.client_manager
-        .add_client(client1.clone(), ClientSender::new(tx_a))
+        .add_client(client1.clone(), sender_a)
         .await;
     es.client_manager
-        .add_client(ready_client(2, 0), ClientSender::new(tx_b))
+        .add_client(ready_client(2, 0), sender_b)
         .await;
 
     client1.self_deaf = true;
@@ -418,13 +418,11 @@ async fn test_self_deaf_implies_self_mute() {
 async fn test_un_deaf_does_not_clear_self_mute() {
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_a, mut rx_a, _voice_rx_a) = test_client_sender();
     let mut c1 = ready_client(1, 0);
     c1.self_mute = true;
     c1.self_deaf = true;
-    es.client_manager
-        .add_client(c1.clone(), ClientSender::new(tx_a))
-        .await;
+    es.client_manager.add_client(c1.clone(), sender_a).await;
 
     c1.self_deaf = false;
     es.client_manager.update_client(c1).await;
@@ -460,12 +458,10 @@ async fn test_un_deaf_does_not_clear_self_mute() {
 async fn test_recording_flag_false_is_broadcast() {
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_a, mut rx_a, _voice_rx_a) = test_client_sender();
     let mut c1 = ready_client(1, 0);
     c1.recording = true;
-    es.client_manager
-        .add_client(c1.clone(), ClientSender::new(tx_a))
-        .await;
+    es.client_manager.add_client(c1.clone(), sender_a).await;
 
     c1.recording = false;
     es.client_manager.update_client(c1).await;
@@ -497,15 +493,15 @@ async fn test_recording_flag_false_is_broadcast() {
 async fn test_admin_mute_and_unmute_broadcast_false() {
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
-    let (tx_target, mut rx_target) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_admin, mut rx_admin, _voice_rx_admin) = test_client_sender();
+    let (sender_target, mut rx_target, _voice_rx_target) = test_client_sender();
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_admin))
+        .add_client(ready_client(1, 0), sender_admin)
         .await;
     let mut target = ready_client(2, 0);
     target.mute = true;
     es.client_manager
-        .add_client(target.clone(), ClientSender::new(tx_target))
+        .add_client(target.clone(), sender_target)
         .await;
 
     target.mute = false;
@@ -596,9 +592,9 @@ async fn test_remote_user_joined_no_false_booleans() {
     let (es, _hub) = test_edge_and_hub();
 
     // One local observer.
-    let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_obs, mut rx_obs, _voice_rx_obs) = test_client_sender();
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .add_client(ready_client(1, 0), sender_obs)
         .await;
 
     // Remote user (all defaults – nothing true).
@@ -644,9 +640,9 @@ async fn test_remote_user_joined_no_false_booleans() {
 async fn test_remote_user_joined_true_flags_are_included() {
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_obs, mut rx_obs, _voice_rx_obs) = test_client_sender();
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .add_client(ready_client(1, 0), sender_obs)
         .await;
 
     let mut ru = remote_user(11, 0);
@@ -685,9 +681,9 @@ async fn test_remote_user_state_changed_only_broadcasts_delta() {
 
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_obs, mut rx_obs, _voice_rx_obs) = test_client_sender();
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .add_client(ready_client(1, 0), sender_obs)
         .await;
     es.channel_manager
         .upsert_remote_user(remote_user(12, 0))
@@ -730,9 +726,9 @@ async fn test_remote_user_state_changed_unmute_carries_false() {
 
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_obs, mut rx_obs, _voice_rx_obs) = test_client_sender();
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .add_client(ready_client(1, 0), sender_obs)
         .await;
     let mut ru = remote_user(13, 0);
     ru.self_mute = false; // now false after update
@@ -770,17 +766,17 @@ async fn test_remote_user_state_changed_unmute_carries_false() {
 async fn test_hub_registered_reannounces_local_users() {
     let (es, _hub) = test_edge_and_hub();
 
-    let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(32);
-    let (tx_target, _rx_target) = mpsc::channel::<bytes::Bytes>(32);
+    let (sender_obs, mut rx_obs, _voice_rx_obs) = test_client_sender();
+    let (sender_target, _rx_target, _voice_rx_target) = test_client_sender();
 
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_obs))
+        .add_client(ready_client(1, 0), sender_obs)
         .await;
 
     let mut moved_local = ready_client(2, 0);
     moved_local.self_mute = true;
     es.client_manager
-        .add_client(moved_local, ClientSender::new(tx_target))
+        .add_client(moved_local, sender_target)
         .await;
 
     let es = run_event_listener_task(es).await;
@@ -816,15 +812,15 @@ async fn test_hub_registered_reannounces_local_users() {
 async fn test_admin_move_denied_when_hub_unreachable() {
     let (es, hub) = test_edge_and_hub(); // HubClient has no real connection
 
-    let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
-    let (tx_victim, _rx_victim) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_admin, mut rx_admin, _voice_rx_admin) = test_client_sender();
+    let (sender_victim, _rx_victim, _voice_rx_victim) = test_client_sender();
 
     // Admin in channel 0, victim starts in channel 0.
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_admin))
+        .add_client(ready_client(1, 0), sender_admin)
         .await;
     es.client_manager
-        .add_client(ready_client(2, 0), ClientSender::new(tx_victim))
+        .add_client(ready_client(2, 0), sender_victim)
         .await;
 
     // Admin tries to drag victim to channel 1.
@@ -867,13 +863,13 @@ async fn test_admin_mute_without_move_does_not_locally_apply_before_hub_echo() {
     // Grant admin (session 1) MUTE_DEAFEN permission on channel 0.
     es.permission_cache.insert((1, 0), perm::MUTE_DEAFEN);
 
-    let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
-    let (tx_victim, mut rx_victim) = mpsc::channel::<bytes::Bytes>(16);
+    let (sender_admin, mut rx_admin, _voice_rx_admin) = test_client_sender();
+    let (sender_victim, mut rx_victim, _voice_rx_victim) = test_client_sender();
     es.client_manager
-        .add_client(ready_client(1, 0), ClientSender::new(tx_admin))
+        .add_client(ready_client(1, 0), sender_admin)
         .await;
     es.client_manager
-        .add_client(ready_client(2, 0), ClientSender::new(tx_victim))
+        .add_client(ready_client(2, 0), sender_victim)
         .await;
 
     // Admin mutes victim (no channel_id → no Move perm check).

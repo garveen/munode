@@ -32,19 +32,24 @@ async fn handle_hub_registered(disappeared_session_ids: Vec<u32>, state: &Arc<Ed
         return;
     }
 
+    let authenticated_session_ids: Vec<u32> =
+        authenticated_clients.iter().map(|c| c.session).collect();
+
     // 1. UserRemove for disappeared sessions.
     // Guard: never send UserRemove for session S to the client *with* session S.
     for &sid in &disappeared_session_ids {
         let remove_msg = handler::build_user_remove_msg(sid, None);
-        for client in &authenticated_clients {
-            if client.session == sid {
-                continue;
-            }
-            state
-                .client_manager
-                .send_to(client.session, MessageType::UserRemove, &remove_msg)
-                .await;
-        }
+        state
+            .client_manager
+            .broadcast_to_sessions(
+                authenticated_session_ids
+                    .iter()
+                    .copied()
+                    .filter(|session| *session != sid),
+                MessageType::UserRemove,
+                &remove_msg,
+            )
+            .await;
     }
     if !disappeared_session_ids.is_empty() {
         info!(
@@ -90,25 +95,31 @@ async fn handle_hub_registered(disappeared_session_ids: Vec<u32>, state: &Arc<Ed
             ..Default::default()
         };
         if ninja_channels_snap.contains(&user.channel_id) {
-            for client in &authenticated_clients {
-                let can_see = ninja_visible
-                    .get(&client.session)
-                    .map(|set| set.contains(&user.channel_id))
-                    .unwrap_or(false);
-                if can_see {
-                    state
-                        .client_manager
-                        .send_to(client.session, MessageType::UserState, &msg)
-                        .await;
-                }
-            }
+            state
+                .client_manager
+                .broadcast_to_sessions(
+                    authenticated_clients
+                        .iter()
+                        .filter(|client| {
+                            ninja_visible
+                                .get(&client.session)
+                                .map(|set| set.contains(&user.channel_id))
+                                .unwrap_or(false)
+                        })
+                        .map(|client| client.session),
+                    MessageType::UserState,
+                    &msg,
+                )
+                .await;
         } else {
-            for client in &authenticated_clients {
-                state
-                    .client_manager
-                    .send_to(client.session, MessageType::UserState, &msg)
-                    .await;
-            }
+            state
+                .client_manager
+                .broadcast_to_sessions(
+                    authenticated_session_ids.iter().copied(),
+                    MessageType::UserState,
+                    &msg,
+                )
+                .await;
         }
     }
     info!(
@@ -128,26 +139,32 @@ async fn handle_hub_registered(disappeared_session_ids: Vec<u32>, state: &Arc<Ed
         msg.listening_channel_add = user.listening_channels.clone();
 
         if ninja_channels_snap.contains(&user.channel_id) {
-            for client in &authenticated_clients {
-                let can_see = client.session == user.session
-                    || ninja_visible
-                        .get(&client.session)
-                        .map(|set| set.contains(&user.channel_id))
-                        .unwrap_or(false);
-                if can_see {
-                    state
-                        .client_manager
-                        .send_to(client.session, MessageType::UserState, &msg)
-                        .await;
-                }
-            }
+            state
+                .client_manager
+                .broadcast_to_sessions(
+                    authenticated_clients
+                        .iter()
+                        .filter(|client| {
+                            client.session == user.session
+                                || ninja_visible
+                                    .get(&client.session)
+                                    .map(|set| set.contains(&user.channel_id))
+                                    .unwrap_or(false)
+                        })
+                        .map(|client| client.session),
+                    MessageType::UserState,
+                    &msg,
+                )
+                .await;
         } else {
-            for client in &authenticated_clients {
-                state
-                    .client_manager
-                    .send_to(client.session, MessageType::UserState, &msg)
-                    .await;
-            }
+            state
+                .client_manager
+                .broadcast_to_sessions(
+                    authenticated_session_ids.iter().copied(),
+                    MessageType::UserState,
+                    &msg,
+                )
+                .await;
         }
     }
     info!(
@@ -160,12 +177,14 @@ async fn handle_hub_registered(disappeared_session_ids: Vec<u32>, state: &Arc<Ed
     let channels = state.channel_manager.get_channels_bfs().await;
     for ch in &channels {
         let ch_msg = handler::build_channel_state_msg(ch);
-        for client in &authenticated_clients {
-            state
-                .client_manager
-                .send_to(client.session, MessageType::ChannelState, &ch_msg)
-                .await;
-        }
+        state
+            .client_manager
+            .broadcast_to_sessions(
+                authenticated_session_ids.iter().copied(),
+                MessageType::ChannelState,
+                &ch_msg,
+            )
+            .await;
     }
     debug!(
         "Hub registered — re-broadcast {} channel(s) to local clients",
@@ -232,18 +251,22 @@ pub(crate) async fn hub_event_listener(
                                 // Clients lacking both Enter+Listen permission won't see the user
                                 let local_clients = state.client_manager.get_all_clients().await;
                                 let visible_cache = state.ninja_visible_to.read().await;
-                                for client in local_clients {
-                                    let can_see = visible_cache
-                                        .get(&client.session)
-                                        .map(|set| set.contains(&channel_id))
-                                        .unwrap_or(false);
-                                    if can_see {
-                                        state
-                                            .client_manager
-                                            .send_to(client.session, MessageType::UserState, &msg)
-                                            .await;
-                                    }
-                                }
+                                state
+                                    .client_manager
+                                    .broadcast_to_sessions(
+                                        local_clients
+                                            .into_iter()
+                                            .filter(|client| {
+                                                visible_cache
+                                                    .get(&client.session)
+                                                    .map(|set| set.contains(&channel_id))
+                                                    .unwrap_or(false)
+                                            })
+                                            .map(|client| client.session),
+                                        MessageType::UserState,
+                                        &msg,
+                                    )
+                                    .await;
                             } else {
                                 state
                                     .client_manager
@@ -267,18 +290,22 @@ pub(crate) async fn hub_event_listener(
                         if ninja_channels_snap.contains(&channel_id) {
                             let all_clients = state.client_manager.get_all_clients().await;
                             let visible_cache = state.ninja_visible_to.read().await;
-                            for client in &all_clients {
-                                let can_see = visible_cache
-                                    .get(&client.session)
-                                    .map(|set| set.contains(&channel_id))
-                                    .unwrap_or(false);
-                                if can_see {
-                                    state
-                                        .client_manager
-                                        .send_to(client.session, MessageType::UserRemove, &msg)
-                                        .await;
-                                }
-                            }
+                            state
+                                .client_manager
+                                .broadcast_to_sessions(
+                                    all_clients
+                                        .iter()
+                                        .filter(|client| {
+                                            visible_cache
+                                                .get(&client.session)
+                                                .map(|set| set.contains(&channel_id))
+                                                .unwrap_or(false)
+                                        })
+                                        .map(|client| client.session),
+                                    MessageType::UserRemove,
+                                    &msg,
+                                )
+                                .await;
                         } else {
                             state
                                 .client_manager
@@ -336,18 +363,22 @@ pub(crate) async fn hub_event_listener(
                             if ninja_channels_snap.contains(&ch) {
                                 let all_clients = state.client_manager.get_all_clients().await;
                                 let visible_cache = state.ninja_visible_to.read().await;
-                                for client in &all_clients {
-                                    let can_see = visible_cache
-                                        .get(&client.session)
-                                        .map(|set| set.contains(&ch))
-                                        .unwrap_or(false);
-                                    if can_see {
-                                        state
-                                            .client_manager
-                                            .send_to(client.session, MessageType::UserState, &msg)
-                                            .await;
-                                    }
-                                }
+                                state
+                                    .client_manager
+                                    .broadcast_to_sessions(
+                                        all_clients
+                                            .iter()
+                                            .filter(|client| {
+                                                visible_cache
+                                                    .get(&client.session)
+                                                    .map(|set| set.contains(&ch))
+                                                    .unwrap_or(false)
+                                            })
+                                            .map(|client| client.session),
+                                        MessageType::UserState,
+                                        &msg,
+                                    )
+                                    .await;
                                 debug!(
                                     "Broadcast remote user state changed (ninja): session {}",
                                     session_id
@@ -410,8 +441,10 @@ pub(crate) async fn hub_event_listener(
                             let visible_cache = state.ninja_visible_to.read().await;
                             // Build the full UserState for the "appears" case.
                             let full_msg_opt =
-                                state.channel_manager.get_remote_user(session_id).await.map(
-                                    |user| mumbleproto::UserState {
+                                if let Some(user) =
+                                    state.channel_manager.get_remote_user(session_id).await
+                                {
+                                    Some(mumbleproto::UserState {
                                         session: Some(user.session_id),
                                         user_id: if user.user_id > 0 {
                                             Some(user.user_id)
@@ -432,9 +465,19 @@ pub(crate) async fn hub_event_listener(
                                         },
                                         recording: if user.recording { Some(true) } else { None },
                                         hash: user.cert_hash.clone(),
+                                        listening_channel_add: user.listening_channels.clone(),
                                         ..Default::default()
-                                    },
-                                );
+                                    })
+                                } else {
+                                    state.client_manager.get_client(session_id).await.map(
+                                        |client| {
+                                            let mut msg = handler::build_user_state_msg(&client);
+                                            msg.listening_channel_add =
+                                                client.listening_channels.clone();
+                                            msg
+                                        },
+                                    )
+                                };
                             let move_msg = mumbleproto::UserState {
                                 session: Some(session_id),
                                 channel_id: Some(channel_id),

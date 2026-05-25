@@ -539,21 +539,21 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
             // Channel Ninja: only send join announcement to observers who can see this channel
             let all_clients = edge_state.client_manager.get_all_clients().await;
             let visible_cache = edge_state.ninja_visible_to.read().await;
-            for observer in &all_clients {
-                if observer.session == sid {
-                    continue;
-                }
-                let can_see = visible_cache
-                    .get(&observer.session)
-                    .map(|set| set.contains(&client.channel_id))
-                    .unwrap_or(false);
-                if can_see {
-                    edge_state
-                        .client_manager
-                        .send_to(observer.session, MessageType::UserState, &user_join_msg)
-                        .await;
-                }
-            }
+            let observer_sessions: Vec<u32> = all_clients
+                .iter()
+                .filter(|observer| observer.session != sid)
+                .filter(|observer| {
+                    visible_cache
+                        .get(&observer.session)
+                        .map(|set| set.contains(&client.channel_id))
+                        .unwrap_or(false)
+                })
+                .map(|observer| observer.session)
+                .collect();
+            edge_state
+                .client_manager
+                .broadcast_to_sessions(observer_sessions, MessageType::UserState, &user_join_msg)
+                .await;
         } else {
             edge_state
                 .client_manager

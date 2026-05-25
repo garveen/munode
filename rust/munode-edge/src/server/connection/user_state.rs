@@ -233,6 +233,47 @@ pub(super) async fn handle_user_state_update(
                     .client_manager
                     .send_to(session_id, MessageType::UserState, &local_self_state_msg)
                     .await;
+
+                let ninja_channels_snap = edge_state.ninja_channels.read().await.clone();
+                if ninja_channels_snap.contains(&client.channel_id) {
+                    let all_clients = edge_state.client_manager.get_all_clients().await;
+                    let visible_cache = edge_state.ninja_visible_to.read().await;
+                    for observer in &all_clients {
+                        if observer.session == session_id {
+                            continue;
+                        }
+
+                        let can_see = visible_cache
+                            .get(&observer.session)
+                            .map(|set| set.contains(&client.channel_id))
+                            .unwrap_or(false);
+                        if can_see {
+                            edge_state
+                                .client_manager
+                                .send_to(
+                                    observer.session,
+                                    MessageType::UserState,
+                                    &local_self_state_msg,
+                                )
+                                .await;
+                        }
+                    }
+                } else {
+                    edge_state
+                        .client_manager
+                        .broadcast_to_sessions(
+                            edge_state
+                                .client_manager
+                                .get_all_clients()
+                                .await
+                                .into_iter()
+                                .filter(|observer| observer.session != session_id)
+                                .map(|observer| observer.session),
+                            MessageType::UserState,
+                            &local_self_state_msg,
+                        )
+                        .await;
+                }
             }
         }
 
@@ -1137,7 +1178,7 @@ pub(super) async fn handle_admin_user_state_update(
 mod tests {
     use super::handle_user_state_update;
     use crate::channel_manager::ChannelManager;
-    use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
+    use crate::client::{ClientInfo, ClientManager, ClientState};
     use crate::hub_client::HubClient;
     use crate::state::EdgeState;
     use bytes::BytesMut;
@@ -1152,8 +1193,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Instant;
-    use tokio::sync::mpsc;
-
     fn test_config() -> EdgeConfig {
         EdgeConfig {
             server_id: 1,
@@ -1229,11 +1268,11 @@ mod tests {
     async fn local_self_mute_updates_client_state_without_hub_echo() {
         let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
         let hub_client = HubClient::new(&test_config(), Arc::clone(&edge_state));
-        let (tx, mut rx) = mpsc::channel(16);
+        let (sender, mut rx, _voice_rx) = crate::client::test_client_sender();
 
         edge_state
             .client_manager
-            .add_client(make_test_client(7, 0), ClientSender::new(tx))
+            .add_client(make_test_client(7, 0), sender)
             .await;
 
         handle_user_state_update(
@@ -1271,11 +1310,11 @@ mod tests {
     async fn local_self_move_without_hub_returns_permission_denied() {
         let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
         let hub_client = HubClient::new(&test_config(), Arc::clone(&edge_state));
-        let (tx, mut rx) = mpsc::channel(16);
+        let (sender, mut rx, _voice_rx) = crate::client::test_client_sender();
 
         edge_state
             .client_manager
-            .add_client(make_test_client(9, 0), ClientSender::new(tx))
+            .add_client(make_test_client(9, 0), sender)
             .await;
 
         handle_user_state_update(
@@ -1328,14 +1367,11 @@ mod tests {
         let edge_state =
             EdgeState::new_with_config(ChannelManager::new(), ClientManager::new(), true, 1, 8);
         let hub_client = HubClient::new(&test_config(), Arc::clone(&edge_state));
-        let (tx, mut rx) = mpsc::channel(16);
+        let (sender, mut rx, _voice_rx) = crate::client::test_client_sender();
 
         let mut client = make_test_client(11, 0);
         client.listening_channels.push(7);
-        edge_state
-            .client_manager
-            .add_client(client, ClientSender::new(tx))
-            .await;
+        edge_state.client_manager.add_client(client, sender).await;
 
         handle_user_state_update(
             &edge_state,
