@@ -14,23 +14,31 @@ use crate::harness::{
     random_voice_data, single_edge_env, sleep_ms, standard_env,
 };
 
+async fn wait_for_voice_from_rx(
+    rx: &mut tokio::sync::broadcast::Receiver<ClientEvent>,
+    sender_session: u32,
+    timeout: Duration,
+) -> bool {
+    tokio::time::timeout(timeout, async {
+        loop {
+            match rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
 async fn wait_for_voice_from(
     receiver: &munode_client::MumbleClient,
     sender_session: u32,
     timeout: Duration,
 ) -> bool {
     let mut rx = receiver.subscribe();
-    tokio::time::timeout(timeout, async move {
-        loop {
-            match rx.recv().await {
-                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
-                Ok(_) => continue,
-                Err(_) => break false,
-            }
-        }
-    })
-    .await
-    .unwrap_or(false)
+    wait_for_voice_from_rx(&mut rx, sender_session, timeout).await
 }
 
 async fn wait_for_voice_target_from(
@@ -256,6 +264,135 @@ async fn test_send_voice_tcp_does_not_panic() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_udp_loopback_voice_returns_to_sender_only() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig {
+                username: "user1",
+                edge: 1,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+            ClientConfig {
+                username: "user2",
+                edge: 1,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+        ],
+    )
+    .await?;
+    let (sender, bystander) = (&clients[0], &clients[1]);
+
+    sender.channel(1).join().await?;
+    bystander.channel(1).join().await?;
+    sleep_ms(500).await;
+
+    let mut sender_rx = sender.subscribe();
+    let mut bystander_rx = bystander.subscribe();
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut sender_received = false;
+
+    while tokio::time::Instant::now() < deadline && !sender_received {
+        sender.voice().send(4, 31, 1, &audio).await?;
+        sender_received =
+            wait_for_voice_from_rx(&mut sender_rx, sender_session, Duration::from_millis(400))
+                .await;
+
+        if !sender_received {
+            sleep_ms(150).await;
+        }
+    }
+
+    sleep_ms(200).await;
+
+    let mut bystander_received = false;
+    while let Ok(event) = bystander_rx.try_recv() {
+        if let ClientEvent::Voice(v) = event
+            && v.session == sender_session
+        {
+            bystander_received = true;
+            break;
+        }
+    }
+
+    assert!(
+        sender_received,
+        "UDP loopback voice should be routed back to the sender"
+    );
+    assert!(
+        !bystander_received,
+        "UDP loopback voice should not leak to other users in the channel"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_tcp_loopback_voice_returns_to_sender_only() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[ClientConfig::new("user1", 1), ClientConfig::new("user2", 1)],
+    )
+    .await?;
+    let (sender, bystander) = (&clients[0], &clients[1]);
+
+    sender.channel(1).join().await?;
+    bystander.channel(1).join().await?;
+    sleep_ms(500).await;
+
+    let mut sender_rx = sender.subscribe();
+    let mut bystander_rx = bystander.subscribe();
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut sender_received = false;
+
+    while tokio::time::Instant::now() < deadline && !sender_received {
+        sender.voice().send(4, 31, 1, &audio).await?;
+        sender_received =
+            wait_for_voice_from_rx(&mut sender_rx, sender_session, Duration::from_millis(400))
+                .await;
+
+        if !sender_received {
+            sleep_ms(150).await;
+        }
+    }
+
+    sleep_ms(200).await;
+
+    let mut bystander_received = false;
+    while let Ok(event) = bystander_rx.try_recv() {
+        if let ClientEvent::Voice(v) = event
+            && v.session == sender_session
+        {
+            bystander_received = true;
+            break;
+        }
+    }
+
+    assert!(
+        sender_received,
+        "TCP loopback voice should be routed back to the sender"
+    );
+    assert!(
+        !bystander_received,
+        "TCP loopback voice should not leak to other users in the channel"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
 // ── Voice routing — same Edge ─────────────────────────────────────────────
 
 #[tokio::test]
@@ -289,6 +426,43 @@ async fn test_voice_received_by_same_channel_user() -> Result<()> {
     .unwrap_or(false);
 
     assert!(received, "Voice should be received by user in same channel");
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_tcp_sender_reaches_udp_ready_receiver_same_channel() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user1", 1),
+            ClientConfig {
+                username: "user2",
+                edge: 1,
+                channel_id: None,
+                use_udp_voice: true,
+                pre_connect_state: None,
+            },
+        ],
+    )
+    .await?;
+    let (sender, receiver) = (&clients[0], &clients[1]);
+
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    sender.voice().send(4, 0, 1, &audio).await?;
+
+    let received = wait_for_voice_from(receiver, sender_session, Duration::from_secs(5)).await;
+
+    assert!(
+        received,
+        "TCP sender should still reach a UDP-ready receiver in the same channel"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }

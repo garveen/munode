@@ -22,7 +22,6 @@ use crate::handler::{self, LoginHandler};
 use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::EdgeState;
 use crate::transport::TransportKind;
-use crate::voice::{deliver_voice_tcp, inject_session_into_voice, wrap_udptunnel};
 use crate::voice_target::{
     apply_voice_target_proto, clear_session_voice_targets, mumble_voice_target_to_proto,
 };
@@ -1094,46 +1093,41 @@ pub(crate) async fn run_connection_inner(
                             }
                         }
                         if let Some(client) = edge_state.client_manager.get_client(sid).await {
-                            let voice_target = if !frame.payload.is_empty() {
-                                (frame.payload[0] & 0x1F) as u32
-                            } else {
-                                0
+                            let Some(target) = crate::voice::parse_voice_target(&frame.payload)
+                            else {
+                                continue;
                             };
+                            let client_udp_socket = {
+                                let socket_guard = edge_state.client_udp_socket.load();
+                                match &**socket_guard {
+                                    Some(socket) => Some(Arc::clone(socket)),
+                                    None => None,
+                                }
+                            };
+                            let local_dispatch = crate::voice::LocalVoiceDispatch::new(
+                                client_udp_socket.as_ref(),
+                                edge_state.udp_session_to_addr.as_ref(),
+                            );
 
                             if (client.suppress || client.mute || client.self_mute)
-                                && voice_target != 31
+                                && target != crate::voice::ParsedVoiceTarget::Loopback
                             {
                                 // Suppressed/muted users cannot speak — silently drop.
-                            } else if voice_target == 31 {
-                                // Loopback: send back to the sender (inject session ID per protocol)
-                                let data = wrap_udptunnel(&inject_session_into_voice(
-                                    &frame.payload,
+                            } else if let Some(distribution) =
+                                crate::voice::distribute_checked_voice_packet(
+                                    crate::voice::CheckedInboundVoice::Client(&frame.payload),
                                     sid,
-                                    0,
-                                ));
-                                if let Some(sender_tx) =
-                                    edge_state.client_manager.get_sender(sid).await
-                                {
-                                    sender_tx.try_send_voice_raw(data);
-                                }
-                            } else if let Some(targets) = crate::routing::compute_voice_targets(
-                                &frame.payload,
-                                sid,
-                                client.channel_id,
-                                &edge_state,
-                                &hub_client,
-                            )
-                            .await
+                                    client.channel_id,
+                                    local_dispatch,
+                                    crate::voice::LoopbackBehavior::DeliverToSender,
+                                    &edge_state,
+                                    &hub_client,
+                                )
+                                .await
                             {
-                                // Shared routing: compute_voice_targets handles VoiceTarget
-                                // lookup, channel expansion, and deaf filtering.
-                                for group in crate::voice::local_delivery_groups(&targets) {
-                                    let data = wrap_udptunnel(&inject_session_into_voice(
-                                        &frame.payload,
-                                        sid,
-                                        group.context,
-                                    ));
-                                    deliver_voice_tcp(group.sessions, &data);
+                                if distribution.target == crate::voice::ParsedVoiceTarget::Loopback
+                                {
+                                    continue;
                                 }
 
                                 // Cross-edge forwarding now uses the source-rooted
@@ -1141,14 +1135,16 @@ pub(crate) async fn run_connection_inner(
                                 let forward_state = Arc::clone(&edge_state);
                                 let forward_hub = Arc::clone(&hub_client);
                                 let forward_payload = frame.payload.clone();
+                                let forward_target = distribution.target.id();
+                                let relay_edge_ids = distribution.relay_edge_ids;
                                 tokio::spawn(async move {
                                     crate::cluster_voice::forward_source_voice_packet(
                                         &forward_state,
                                         &forward_hub,
                                         sid,
                                         &forward_payload,
-                                        voice_target as u8,
-                                        targets.relay_edge_ids.as_slice(),
+                                        forward_target,
+                                        relay_edge_ids.as_slice(),
                                     )
                                     .await;
                                 });

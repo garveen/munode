@@ -15,9 +15,181 @@ pub const AUDIO_CONTEXT_NORMAL: u8 = 0;
 pub const AUDIO_CONTEXT_SHOUT: u8 = 1;
 pub const AUDIO_CONTEXT_WHISPER: u8 = 2;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParsedVoiceTarget {
+    Regular,
+    Whisper(u8),
+    Loopback,
+}
+
+impl ParsedVoiceTarget {
+    #[inline]
+    pub fn id(self) -> u8 {
+        match self {
+            Self::Regular => 0,
+            Self::Whisper(target) => target,
+            Self::Loopback => 31,
+        }
+    }
+}
+
+#[inline]
+pub fn parse_voice_target(packet: &[u8]) -> Option<ParsedVoiceTarget> {
+    match packet.first().map(|header| header & 0x1F)? {
+        0 => Some(ParsedVoiceTarget::Regular),
+        1..=30 => Some(ParsedVoiceTarget::Whisper(packet[0] & 0x1F)),
+        31 => Some(ParsedVoiceTarget::Loopback),
+        _ => None,
+    }
+}
+
 pub struct LocalDeliveryGroup<'a> {
     pub sessions: &'a [u32],
     pub context: u8,
+}
+
+pub enum CheckedInboundVoice<'a> {
+    Client(&'a [u8]),
+    Relayed(bytes::Bytes),
+}
+
+impl CheckedInboundVoice<'_> {
+    #[inline]
+    fn packet(&self) -> &[u8] {
+        match self {
+            Self::Client(packet) => packet,
+            Self::Relayed(packet) => packet.as_ref(),
+        }
+    }
+
+    #[inline]
+    fn target(&self) -> Option<ParsedVoiceTarget> {
+        parse_voice_target(self.packet())
+    }
+
+    #[inline]
+    fn receiver_payload(&self, sender_session: u32, context: u8) -> bytes::Bytes {
+        match self {
+            Self::Client(packet) => inject_session_into_voice(packet, sender_session, context),
+            Self::Relayed(packet) => {
+                if context == AUDIO_CONTEXT_NORMAL {
+                    packet.clone()
+                } else {
+                    rewrite_voice_context(packet.as_ref(), context)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum LoopbackBehavior {
+    DeliverToSender,
+    Drop,
+}
+
+pub struct DistributedCheckedVoice {
+    pub target: ParsedVoiceTarget,
+    pub relay_edge_ids: SmallVec<[u32; 8]>,
+    pub delivered: usize,
+    pub is_whisper: bool,
+    pub local_target_count: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct LocalVoiceDispatch<'a> {
+    udp_socket: Option<&'a Arc<UdpSocket>>,
+    session_to_addr: &'a DashMap<u32, SocketAddr>,
+}
+
+impl<'a> LocalVoiceDispatch<'a> {
+    #[inline]
+    pub fn new(
+        udp_socket: Option<&'a Arc<UdpSocket>>,
+        session_to_addr: &'a DashMap<u32, SocketAddr>,
+    ) -> Self {
+        Self {
+            udp_socket,
+            session_to_addr,
+        }
+    }
+
+    #[inline]
+    fn deliver_server_voice(self, sessions: &[u32], payload: &bytes::Bytes) -> usize {
+        deliver_voice_locally_prefer_udp(sessions, payload, self.udp_socket, self.session_to_addr)
+    }
+}
+
+#[inline]
+fn deliver_resolved_voice_targets(
+    dispatch: LocalVoiceDispatch<'_>,
+    packet: &CheckedInboundVoice<'_>,
+    targets: &crate::routing::VoiceTargets,
+    sender_session: u32,
+) -> usize {
+    let mut delivered = 0;
+    for group in local_delivery_groups(targets) {
+        delivered += dispatch.deliver_server_voice(
+            group.sessions,
+            &packet.receiver_payload(sender_session, group.context),
+        );
+    }
+    delivered
+}
+
+pub async fn distribute_checked_voice_packet(
+    packet: CheckedInboundVoice<'_>,
+    sender_session: u32,
+    sender_channel: u32,
+    dispatch: LocalVoiceDispatch<'_>,
+    loopback_behavior: LoopbackBehavior,
+    edge_state: &crate::state::EdgeState,
+    hub_client: &HubClient,
+) -> Option<DistributedCheckedVoice> {
+    let target = packet.target()?;
+
+    if target == ParsedVoiceTarget::Loopback {
+        if matches!(loopback_behavior, LoopbackBehavior::Drop) {
+            return None;
+        }
+
+        let delivered = dispatch.deliver_server_voice(
+            std::slice::from_ref(&sender_session),
+            &packet.receiver_payload(sender_session, AUDIO_CONTEXT_NORMAL),
+        );
+
+        return Some(DistributedCheckedVoice {
+            target,
+            relay_edge_ids: SmallVec::new(),
+            delivered,
+            is_whisper: false,
+            local_target_count: usize::from(delivered > 0),
+        });
+    }
+
+    let targets = crate::routing::compute_voice_targets(
+        packet.packet(),
+        sender_session,
+        sender_channel,
+        edge_state,
+        hub_client,
+    )
+    .await?;
+
+    let local_target_count = if targets.is_whisper {
+        targets.direct_sessions.len() + targets.channel_sessions.len()
+    } else {
+        targets.local_sessions.len()
+    };
+    let delivered = deliver_resolved_voice_targets(dispatch, &packet, &targets, sender_session);
+
+    Some(DistributedCheckedVoice {
+        target,
+        relay_edge_ids: targets.relay_edge_ids,
+        delivered,
+        is_whisper: targets.is_whisper,
+        local_target_count,
+    })
 }
 
 pub fn local_delivery_groups<'a>(
@@ -199,13 +371,13 @@ pub async fn deliver_relayed_voice(
     if voice_packet.len() < 2 {
         return;
     }
-    let raw_target = voice_packet[0] & 0x1F;
-    if raw_target == 31 {
-        // Loopback — ignore cross-edge loopback
-        return;
-    }
 
-    let (sender_session, _) = match decode_varint(&voice_packet[1..]) {
+    let packet = CheckedInboundVoice::Relayed(voice_packet);
+    let Some(target) = packet.target() else {
+        return;
+    };
+
+    let (sender_session, _) = match decode_varint(&packet.packet()[1..]) {
         Some(v) => v,
         None => {
             debug!("deliver_relayed_voice: failed to parse sender session varint");
@@ -216,14 +388,14 @@ pub async fn deliver_relayed_voice(
     trace!(
         "edge={} RelayedVoice recv: len={} header=0x{:02X} target={} session={}",
         state.get_edge_id(),
-        voice_packet.len(),
-        voice_packet[0],
-        raw_target,
+        packet.packet().len(),
+        packet.packet()[0],
+        target.id(),
         sender_session
     );
 
     // For PTT (target=0), the sender's channel is required by compute_voice_targets.
-    let sender_channel = if raw_target == 0 {
+    let sender_channel = if target == ParsedVoiceTarget::Regular {
         match state.channel_manager.get_remote_user(sender_session).await {
             Some(ru) => ru.channel_id,
             None => {
@@ -239,14 +411,25 @@ pub async fn deliver_relayed_voice(
         0 // unused for whisper (target 1..=30)
     };
 
-    // compute_voice_targets handles VoiceTarget lookup, channel + listener expansion,
-    // and deaf filtering — identical logic to the local TCP path.
-    // relay_edge_ids is intentionally ignored: the sending edge already handled
-    // inter-edge relay for this packet.
-    let Some(targets) = crate::routing::compute_voice_targets(
-        &voice_packet,
+    let client_udp_socket = {
+        let socket_guard = state.client_udp_socket.load();
+        match &**socket_guard {
+            Some(socket) => Some(Arc::clone(socket)),
+            None => None,
+        }
+    };
+
+    let local_dispatch = LocalVoiceDispatch::new(
+        client_udp_socket.as_ref(),
+        state.udp_session_to_addr.as_ref(),
+    );
+
+    let Some(distribution) = distribute_checked_voice_packet(
+        packet,
         sender_session,
         sender_channel,
+        local_dispatch,
+        LoopbackBehavior::Drop,
         state,
         hub_client,
     )
@@ -256,50 +439,24 @@ pub async fn deliver_relayed_voice(
             "edge={} RelayedVoice: no targets for session {} target {}",
             state.get_edge_id(),
             sender_session,
-            raw_target
+            target.id()
         );
         return;
     };
 
-    let client_udp_socket = {
-        let socket_guard = state.client_udp_socket.load();
-        match &**socket_guard {
-            Some(socket) => Some(Arc::clone(socket)),
-            None => None,
-        }
-    };
-
-    let mut delivered = 0;
-    for group in local_delivery_groups(&targets) {
-        let payload = if group.context == AUDIO_CONTEXT_NORMAL {
-            // Relay payloads already preserve the original regular-speech context.
-            voice_packet.clone()
-        } else {
-            // Relayed whisper payloads preserve the original target slot; rewrite to
-            // receiver-facing AudioContext before local delivery.
-            rewrite_voice_context(voice_packet.as_ref(), group.context)
-        };
-        delivered += deliver_voice_locally_prefer_udp(
-            group.sessions,
-            &payload,
-            client_udp_socket.as_ref(),
-            state.udp_session_to_addr.as_ref(),
-        );
-    }
-
-    if targets.is_whisper {
+    if distribution.is_whisper {
         trace!(
             "edge={} Delivered relayed whisper from session {} to {} targets",
             state.get_edge_id(),
             sender_session,
-            delivered
+            distribution.delivered
         );
     } else {
         trace!(
             "edge={} Delivered relayed broadcast from session {} to {} local clients",
             state.get_edge_id(),
             sender_session,
-            delivered
+            distribution.delivered
         );
     }
 }

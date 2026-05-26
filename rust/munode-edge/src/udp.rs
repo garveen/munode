@@ -858,46 +858,41 @@ impl UdpServer {
         }
 
         // Block suppressed or muted users from speaking
-        let voice_target = if !plaintext.is_empty() {
-            (plaintext[0] & 0x1F) as u32
-        } else {
-            0
+        let Some(target) = crate::voice::parse_voice_target(plaintext) else {
+            return;
         };
-        if (suppress || muted) && voice_target != 31 {
+        if (suppress || muted) && target != crate::voice::ParsedVoiceTarget::Loopback {
             return;
         }
 
-        // --- Shared routing: compute target sessions and relay edges ---
-        // `compute_voice_targets` handles VoiceTarget lookup, channel expansion,
-        // deaf/suppress filtering.  Returns None for loopback (31) → drop.
-        let Some(targets) = crate::routing::compute_voice_targets(
-            plaintext,
+        let local_dispatch = crate::voice::LocalVoiceDispatch::new(
+            Some(&self.socket),
+            self.session_to_addr.as_ref(),
+        );
+
+        let Some(distribution) = crate::voice::distribute_checked_voice_packet(
+            crate::voice::CheckedInboundVoice::Client(plaintext),
             sender_session,
             sender_channel,
+            local_dispatch,
+            crate::voice::LoopbackBehavior::DeliverToSender,
             &self.edge_state,
             &self.hub_client,
         )
         .await
         else {
-            return; // loopback or no VoiceTarget config
+            return;
         };
 
-        // --- Local delivery ------------------------------------------------
-        if !targets.is_whisper {
-            trace!(
-                "route_voice: {} local targets",
-                targets.local_sessions.len()
-            );
+        if distribution.target == crate::voice::ParsedVoiceTarget::Loopback {
+            return;
         }
 
-        for group in crate::voice::local_delivery_groups(&targets) {
-            let forwarded =
-                crate::voice::inject_session_into_voice(plaintext, sender_session, group.context);
-            crate::voice::deliver_voice_locally_prefer_udp(
-                group.sessions,
-                &forwarded,
-                Some(&self.socket),
-                self.session_to_addr.as_ref(),
+        // --- Local delivery ------------------------------------------------
+        if !distribution.is_whisper {
+            trace!(
+                "route_voice: {} local targets",
+                distribution.local_target_count
             );
         }
 
@@ -906,8 +901,8 @@ impl UdpServer {
             &self.hub_client,
             sender_session,
             plaintext,
-            voice_target as u8,
-            targets.relay_edge_ids.as_slice(),
+            distribution.target.id(),
+            distribution.relay_edge_ids.as_slice(),
         )
         .await;
     }

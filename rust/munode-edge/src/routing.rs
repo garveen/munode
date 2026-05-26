@@ -103,15 +103,14 @@ pub async fn compute_voice_targets(
     edge_state: &crate::state::EdgeState,
     hub_client: &HubClient,
 ) -> Option<VoiceTargets> {
-    if voice_packet.is_empty() {
-        return None;
-    }
-    let voice_target = (voice_packet[0] & 0x1F) as u32;
-
-    if voice_target == 31 {
-        // Loopback: caller handles this.
-        return None;
-    }
+    let voice_target = match crate::voice::parse_voice_target(voice_packet)? {
+        crate::voice::ParsedVoiceTarget::Regular => 0,
+        crate::voice::ParsedVoiceTarget::Whisper(target) => u32::from(target),
+        crate::voice::ParsedVoiceTarget::Loopback => {
+            // Loopback: caller handles this.
+            return None;
+        }
+    };
 
     let my_edge_id = edge_state.get_edge_id();
     let current_version = edge_state.topology_version.load(Ordering::Acquire);
