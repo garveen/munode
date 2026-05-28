@@ -87,18 +87,12 @@ impl<'a> Me<'a> {
 
     /// Begin listening to an additional channel.
     pub async fn add_listener(&self, channel_id: u32) -> Result<()> {
-        self.send_user_state(mumbleproto::UserState {
-            listening_channel_add: vec![channel_id],
-            ..Default::default()
-        })
+        self.client.add_listening_channel(channel_id).await
     }
 
     /// Stop listening to a channel.
     pub async fn remove_listener(&self, channel_id: u32) -> Result<()> {
-        self.send_user_state(mumbleproto::UserState {
-            listening_channel_remove: vec![channel_id],
-            ..Default::default()
-        })
+        self.client.remove_listening_channel(channel_id).await
     }
 
     /// Drop all listening channels at once.

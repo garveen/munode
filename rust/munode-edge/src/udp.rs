@@ -89,8 +89,12 @@ const MEDIA_LIKE_PROBE_PADDING_BYTES: usize = 160;
 /// 1. Client authenticates via TCP → CryptState registered in ClientManager.
 /// 2. Client sends first OCB2-encrypted UDP packet (typically a ping).
 /// 3. Server tries decrypting with each authenticated session's CryptState;
-///    on success the UDP address is mapped to that session.
-/// 4. Subsequent packets are decrypted, routed, and re-encrypted per-recipient.
+///    on success the UDP address is remembered for future decrypt fast-paths
+///    and ping replies.
+/// 4. Only the first successfully decrypted UDP audio packet promotes that
+///    remembered address into the server->client UDP media send path, matching
+///    Murmur's `aiUdpFlag` behaviour.
+/// 5. Subsequent packets are decrypted, routed, and re-encrypted per-recipient.
 ///
 /// Edge-to-Edge voice uses a separate `edge_socket` bound on `edge_port`.
 /// All datagrams on that socket are Edge-to-Edge; a single type byte distinguishes:
@@ -108,14 +112,26 @@ pub struct UdpServer {
     edge_socket: Arc<UdpSocket>,
     edge_state: Arc<EdgeState>,
     hub_client: Arc<HubClient>,
-    /// Maps UDP source address → session ID.
+    /// Maps any remembered UDP source address → session ID.
+    ///
+    /// This fast-path receive index is updated when we can decrypt a packet,
+    /// even if the packet is only a connectivity ping. That lets future packets
+    /// from the same address skip the all-sessions decrypt scan.
     addr_to_session: Arc<DashMap<SocketAddr, u32>>,
-    /// Maps session ID → UDP source address.
+    /// Maps session ID → last remembered UDP source address.
+    ///
+    /// This is separate from the media-delivery map below: a successfully
+    /// decrypted UDP ping proves we know where the client is, but it does not
+    /// yet prove that server->client UDP media delivery is working.
+    known_session_to_addr: Arc<DashMap<u32, SocketAddr>>,
+    /// Reverse index for `udp_session_to_addr`, kept local to `UdpServer`.
+    media_addr_to_session: Arc<DashMap<SocketAddr, u32>>,
+    /// Maps session ID → UDP source address eligible for server->client media.
     ///
     /// Shared with `EdgeState::udp_session_to_addr` so that the TCP read loop
     /// can clear an entry when the client falls back to `UdpTunnel`, mirroring
     /// Murmur's `aiUdpFlag = 0` behaviour.
-    session_to_addr: Arc<DashMap<u32, SocketAddr>>,
+    udp_session_to_addr: Arc<DashMap<u32, SocketAddr>>,
     /// Per-edge quality tracking for UDP probes.
     peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
     /// Channel for client voice packets: capacity 65536.
@@ -157,7 +173,9 @@ impl UdpServer {
             socket,
             edge_socket,
             addr_to_session: Arc::new(DashMap::new()),
-            session_to_addr: Arc::clone(&edge_state.udp_session_to_addr),
+            known_session_to_addr: Arc::new(DashMap::new()),
+            media_addr_to_session: Arc::new(DashMap::new()),
+            udp_session_to_addr: Arc::clone(&edge_state.udp_session_to_addr),
             edge_state,
             hub_client,
             peer_quality,
@@ -169,22 +187,51 @@ impl UdpServer {
         })
     }
 
-    /// Register a client's UDP address.
-    pub fn register_client(&self, session_id: u32, addr: SocketAddr) {
+    /// Remember a client's most recently identified UDP address.
+    ///
+    /// This is a receive-side fast-path and ping-reply aid only. It does not
+    /// make the client eligible for server->client UDP media delivery.
+    fn remember_client_addr(&self, session_id: u32, addr: SocketAddr) {
         bind_session_addr(
             self.addr_to_session.as_ref(),
-            self.session_to_addr.as_ref(),
+            self.known_session_to_addr.as_ref(),
             session_id,
             addr,
         );
 
-        debug!("Registered UDP client: session {} at {}", session_id, addr);
+        debug!(
+            "Remembered UDP client addr: session {} at {}",
+            session_id, addr
+        );
+    }
+
+    /// Promote a remembered UDP address into the media send path.
+    ///
+    /// Only decrypted UDP audio packets should call this. UDP ping alone must
+    /// not make the server start sending voice over UDP, matching Murmur's
+    /// `aiUdpFlag` semantics.
+    fn activate_udp_media(&self, session_id: u32, addr: SocketAddr) {
+        self.remember_client_addr(session_id, addr);
+        bind_session_addr(
+            self.media_addr_to_session.as_ref(),
+            self.udp_session_to_addr.as_ref(),
+            session_id,
+            addr,
+        );
+
+        debug!(
+            "Activated UDP media path: session {} at {}",
+            session_id, addr
+        );
     }
 
     /// Unregister a client's UDP address on TCP disconnect.
     pub fn unregister_client(&self, session_id: u32) {
-        if let Some((_, addr)) = self.session_to_addr.remove(&session_id) {
+        if let Some((_, addr)) = self.known_session_to_addr.remove(&session_id) {
             self.addr_to_session.remove(&addr);
+        }
+        if let Some((_, addr)) = self.udp_session_to_addr.remove(&session_id) {
+            self.media_addr_to_session.remove(&addr);
         }
     }
 
@@ -698,12 +745,12 @@ impl UdpServer {
             // in TCP mode, so ping alone must not restore server->client audio
             // delivery to UDP.
             if self
-                .session_to_addr
+                .udp_session_to_addr
                 .get(&session_id)
                 .map(|entry| *entry.value())
                 != Some(peer_addr)
             {
-                self.register_client(session_id, peer_addr);
+                self.activate_udp_media(session_id, peer_addr);
             }
 
             // Rate check already done above; pass None to skip it in route_voice.
@@ -756,14 +803,24 @@ impl UdpServer {
             };
 
             if identified {
-                self.register_client(session_id, peer_addr);
-                debug!("Identified UDP session {} at {}", session_id, peer_addr);
-
                 if plain.is_empty() {
                     return;
                 }
                 let pkt_type = plain[0] >> 5;
                 if pkt_type == 1 {
+                    self.remember_client_addr(session_id, peer_addr);
+                    if self.udp_session_to_addr.contains_key(&session_id) {
+                        bind_session_addr(
+                            self.media_addr_to_session.as_ref(),
+                            self.udp_session_to_addr.as_ref(),
+                            session_id,
+                            peer_addr,
+                        );
+                    }
+                    debug!(
+                        "Identified UDP ping session {} at {}",
+                        session_id, peer_addr
+                    );
                     if self
                         .edge_state
                         .allow_ping
@@ -772,6 +829,11 @@ impl UdpServer {
                         self.send_encrypted(session_id, &plain).await;
                     }
                 } else {
+                    self.activate_udp_media(session_id, peer_addr);
+                    debug!(
+                        "Identified UDP audio session {} at {}",
+                        session_id, peer_addr
+                    );
                     self.route_voice(
                         session_id,
                         &plain,
@@ -867,7 +929,7 @@ impl UdpServer {
 
         let local_dispatch = crate::voice::LocalVoiceDispatch::new(
             Some(&self.socket),
-            self.session_to_addr.as_ref(),
+            self.udp_session_to_addr.as_ref(),
         );
 
         let Some(distribution) = crate::voice::distribute_checked_voice_packet(
@@ -909,7 +971,11 @@ impl UdpServer {
 
     /// Send encrypted data to a specific session's UDP address.
     async fn send_encrypted(&self, session_id: u32, plaintext: &[u8]) {
-        let addr = match self.session_to_addr.get(&session_id).map(|r| *r.value()) {
+        let addr = match self
+            .known_session_to_addr
+            .get(&session_id)
+            .map(|r| *r.value())
+        {
             Some(a) => a,
             None => return,
         };
@@ -1597,6 +1663,84 @@ mod tests {
         );
         assert_eq!(
             session_to_addr.get(&10_002).map(|entry| *entry.value()),
+            Some(new_addr)
+        );
+    }
+
+    #[test]
+    fn remembered_udp_addr_does_not_imply_media_udp_is_active() {
+        let addr_to_session = DashMap::new();
+        let known_session_to_addr = DashMap::new();
+        let media_addr_to_session = DashMap::new();
+        let media_session_to_addr = DashMap::new();
+        let addr = localhost(42_001);
+
+        bind_session_addr(&addr_to_session, &known_session_to_addr, 10_003, addr);
+
+        assert_eq!(
+            addr_to_session.get(&addr).map(|entry| *entry.value()),
+            Some(10_003)
+        );
+        assert_eq!(
+            known_session_to_addr
+                .get(&10_003)
+                .map(|entry| *entry.value()),
+            Some(addr)
+        );
+        assert!(media_addr_to_session.get(&addr).is_none());
+        assert!(media_session_to_addr.get(&10_003).is_none());
+
+        bind_session_addr(&media_addr_to_session, &media_session_to_addr, 10_003, addr);
+
+        assert_eq!(
+            media_addr_to_session.get(&addr).map(|entry| *entry.value()),
+            Some(10_003)
+        );
+        assert_eq!(
+            media_session_to_addr
+                .get(&10_003)
+                .map(|entry| *entry.value()),
+            Some(addr)
+        );
+    }
+
+    #[test]
+    fn active_media_udp_can_rebind_without_reactivation() {
+        let addr_to_session = DashMap::new();
+        let known_session_to_addr = DashMap::new();
+        let media_addr_to_session = DashMap::new();
+        let media_session_to_addr = DashMap::new();
+        let old_addr = localhost(43_001);
+        let new_addr = localhost(43_002);
+
+        bind_session_addr(&addr_to_session, &known_session_to_addr, 10_004, old_addr);
+        bind_session_addr(
+            &media_addr_to_session,
+            &media_session_to_addr,
+            10_004,
+            old_addr,
+        );
+
+        bind_session_addr(&addr_to_session, &known_session_to_addr, 10_004, new_addr);
+        bind_session_addr(
+            &media_addr_to_session,
+            &media_session_to_addr,
+            10_004,
+            new_addr,
+        );
+
+        assert!(addr_to_session.get(&old_addr).is_none());
+        assert!(media_addr_to_session.get(&old_addr).is_none());
+        assert_eq!(
+            known_session_to_addr
+                .get(&10_004)
+                .map(|entry| *entry.value()),
+            Some(new_addr)
+        );
+        assert_eq!(
+            media_session_to_addr
+                .get(&10_004)
+                .map(|entry| *entry.value()),
             Some(new_addr)
         );
     }
