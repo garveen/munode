@@ -227,12 +227,16 @@ impl UdpServer {
 
     /// Unregister a client's UDP address on TCP disconnect.
     pub fn unregister_client(&self, session_id: u32) {
-        if let Some((_, addr)) = self.known_session_to_addr.remove(&session_id) {
-            self.addr_to_session.remove(&addr);
-        }
-        if let Some((_, addr)) = self.udp_session_to_addr.remove(&session_id) {
-            self.media_addr_to_session.remove(&addr);
-        }
+        unbind_session_addr(
+            self.addr_to_session.as_ref(),
+            self.known_session_to_addr.as_ref(),
+            session_id,
+        );
+        unbind_session_addr(
+            self.media_addr_to_session.as_ref(),
+            self.udp_session_to_addr.as_ref(),
+            session_id,
+        );
     }
 
     async fn request_crypt_resync(&self, session_id: u32) {
@@ -1250,6 +1254,16 @@ fn bind_session_addr(
     }
 }
 
+fn unbind_session_addr(
+    addr_to_session: &DashMap<SocketAddr, u32>,
+    session_to_addr: &DashMap<u32, SocketAddr>,
+    session_id: u32,
+) {
+    if let Some((_, addr)) = session_to_addr.remove(&session_id) {
+        addr_to_session.remove(&addr);
+    }
+}
+
 /// Parse a Mumble UDP protobuf `Ping` payload (the bytes after the `0x01` header).
 /// Returns `(timestamp, request_extended_information)`.
 fn parse_mumble_udp_ping(payload: &[u8]) -> (u64, bool) {
@@ -1615,7 +1629,7 @@ pub async fn test_send_relay_packet(
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_session_addr, quality_report_metrics};
+    use super::{bind_session_addr, quality_report_metrics, unbind_session_addr};
     use crate::state::PeerQualityState;
     use dashmap::DashMap;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -1743,6 +1757,19 @@ mod tests {
                 .map(|entry| *entry.value()),
             Some(new_addr)
         );
+    }
+
+    #[test]
+    fn unbind_session_addr_removes_forward_and_reverse_mappings() {
+        let addr_to_session = DashMap::new();
+        let session_to_addr = DashMap::new();
+        let addr = localhost(44_001);
+
+        bind_session_addr(&addr_to_session, &session_to_addr, 10_005, addr);
+        unbind_session_addr(&addr_to_session, &session_to_addr, 10_005);
+
+        assert!(addr_to_session.get(&addr).is_none());
+        assert!(session_to_addr.get(&10_005).is_none());
     }
 
     #[test]

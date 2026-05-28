@@ -22,6 +22,7 @@ use crate::handler::{self, LoginHandler};
 use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::EdgeState;
 use crate::transport::TransportKind;
+use crate::udp::UdpServer;
 use crate::voice_target::{
     apply_voice_target_proto, clear_session_voice_targets, mumble_voice_target_to_proto,
 };
@@ -79,6 +80,7 @@ pub(super) async fn handle_client_connection(
     config: &EdgeConfig,
     hub_client: Arc<HubClient>,
     edge_state: Arc<EdgeState>,
+    udp_server: Arc<UdpServer>,
 ) -> Result<()> {
     // Disable Nagle's algorithm for real-time voice delivery
     stream.set_nodelay(true)?;
@@ -210,6 +212,7 @@ pub(super) async fn handle_client_connection(
         config,
         hub_client,
         edge_state,
+        Some(udp_server),
     )
     .await
 }
@@ -305,6 +308,7 @@ pub(crate) async fn run_connection_inner(
     config: &EdgeConfig,
     hub_client: Arc<HubClient>,
     edge_state: Arc<EdgeState>,
+    udp_server: Option<Arc<UdpServer>>,
 ) -> Result<()> {
     // Mumble protocol: server sends Version first (immediately after TLS handshake),
     // then the client responds with its own Version + Authenticate.
@@ -2241,9 +2245,14 @@ pub(crate) async fn run_connection_inner(
         clear_session_voice_targets(&edge_state, sid).await;
         // Clean up permission cache for this session
         edge_state.permission_cache.retain(|&(s, _), _| s != sid);
-        // Clear cached UDP source address so the routing fast-path no longer
-        // sends voice toward a now-dead UDP endpoint.
-        edge_state.udp_session_to_addr.remove(&sid);
+        // Native UDP transports keep additional known-address indexes inside
+        // UdpServer; clear them together with the shared media map. Other
+        // transports only need the shared map cleanup.
+        if let Some(udp_server) = udp_server.as_ref() {
+            udp_server.unregister_client(sid);
+        } else {
+            edge_state.udp_session_to_addr.remove(&sid);
+        }
         // Capture the disconnected channel from the removed client record.
         // Previously this used get_client() AFTER remove_client(), which always
         // returned None (the session was already gone), causing ninja-channel

@@ -283,6 +283,7 @@ async fn handle_wt_session(
         config,
         hub_client,
         edge_state,
+        None,
     )
     .await
 }

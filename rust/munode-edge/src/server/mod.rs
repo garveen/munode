@@ -386,6 +386,7 @@ impl EdgeServer {
                             let config = self.config.clone();
                             let hub = hub_client.clone();
                             let state = edge_state.clone();
+                            let udp = udp_server.clone();
                             let proxy_protocol = self.config.network.proxy_protocol;
                             let trusted_proxies = trusted_proxies.clone();
 
@@ -483,7 +484,7 @@ impl EdgeServer {
                                     peer_addr
                                 };
                                 if let Err(e) = connection::handle_client_connection(
-                                    stream, real_addr, acceptor, &config, hub, state,
+                                    stream, real_addr, acceptor, &config, hub, state, udp,
                                 ).await {
                                     debug!("Client connection error from {}: {}", real_addr, e);
                                 }

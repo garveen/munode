@@ -591,6 +591,7 @@ where
         config,
         hub_client,
         edge_state,
+        None,
     )
     .await
 }
