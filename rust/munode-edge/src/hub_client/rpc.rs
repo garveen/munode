@@ -970,7 +970,17 @@ impl HubClient {
 
     /// Relay a voice packet to a target Edge via Hub TCP tunnel.
     /// Called when a local sender needs to reach a remote user on another edge.
-    pub async fn relay_voice_via_hub(&self, target_edge_id: u32, voice_packet: bytes::Bytes) {
+    ///
+    /// Returns `true` if the packet was successfully enqueued to the Hub voice
+    /// channel; returns `false` if the Hub is unreachable or the voice channel
+    /// is full.  Callers use this signal to track per-peer forwarding failures
+    /// and trigger partition detection when all paths (UDP, TCP, Hub relay) are
+    /// consistently down.
+    pub async fn relay_voice_via_hub(
+        &self,
+        target_edge_id: u32,
+        voice_packet: bytes::Bytes,
+    ) -> bool {
         let from_edge_id = self.edge_id();
 
         // Voice relay is fire-and-forget: UDP voice is inherently unreliable and should
@@ -994,6 +1004,9 @@ impl HubClient {
                 target_edge_id,
                 "relay_voice_via_hub to edge {target_edge_id} failed (send): {e}"
             );
+            false
+        } else {
+            true
         }
     }
 

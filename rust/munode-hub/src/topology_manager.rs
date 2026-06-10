@@ -661,14 +661,23 @@ impl TopologyManager {
                 continue;
             }
 
-            explicit_quality_peers.insert(b);
-
             if let Some(config) = config
                 && (quality.packet_loss > config.failed_packet_loss
                     || quality.rtt_ms > config.failed_rtt_ms)
             {
+                // Quality is too poor to use as a direct path, but the
+                // connected_peers fallback must not be blocked — the edge pair
+                // has confirmed mutual reachability via joinComplete, and Hub
+                // relay / peer TCP can still carry voice when direct UDP is
+                // degraded.  Skipping the fallback (by adding b to
+                // explicit_quality_peers before this `continue`) creates an
+                // asymmetric partition: if one direction's quality is poor and
+                // the other's is fine, the poor side becomes unreachable even
+                // though the edges are mutually reachable at the control level.
                 continue;
             }
+
+            explicit_quality_peers.insert(b);
 
             let penalty = config.map(|cfg| cfg.relay_hop_penalty_ms).unwrap_or(0.0);
             let link_weight =

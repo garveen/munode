@@ -746,8 +746,9 @@ pub(crate) async fn hub_event_listener(
                     }
                     EdgeEvent::PeerVoiceTcpFailed { peer_edge_id } => {
                         // All TCP voice connections to this peer have been down for an
-                        // extended period.  Before reporting to Hub for partition arbitration,
-                        // verify that NO viable path to this peer exists through any means.
+                        // extended period (timer-based), OR all voice forwarding methods
+                        // (UDP, peer TCP, Hub relay) have failed for enough consecutive
+                        // packets to trigger immediate partition arbitration.
                         //
                         // Partition arbitration (hub.peerLeft + potential hub.shutdownRequest)
                         // is a drastic, irreversible action that disconnects clients.  We must
@@ -755,21 +756,32 @@ pub(crate) async fn hub_event_listener(
                         //   1. DirectTcp: already confirmed down (this event was emitted)
                         //   2. HubTcp relay: must also be unavailable (Hub unreachable)
                         //   3. RelayChain: must have no working intermediate-hop routes
+                        //
+                        // Exception: if the event was triggered by the voice-forwarding
+                        // all-methods failure counter (UDP + peer TCP + Hub relay all
+                        // failed), we already know Hub relay is not working — skip the
+                        // "Hub relay is available" guard and go straight to arbitration.
+
+                        let already_verified_voice_partition =
+                            state.voice_forward_partition_threshold_exceeded(peer_edge_id);
 
                         // Check 1: Hub TCP relay.
-                        // If Hub is still reachable and hub_tcp_fallback is enabled, voice CAN
-                        // still flow via Hub relay → the cluster is degraded but not partitioned.
-                        // In this case the DirectTcp pool will continue retrying silently.
-                        let hub_reachable = state
-                            .accepting_connections
-                            .load(std::sync::atomic::Ordering::Relaxed);
-                        if hub_reachable && state.hub_tcp_relay_allowed() {
-                            debug!(
-                                "Peer edge {} DirectTcp down but Hub TCP relay is available — \
-                                 skipping partition report (voice flows via Hub relay)",
-                                peer_edge_id
-                            );
-                            continue;
+                        // If Hub is still reachable and hub_tcp_fallback is enabled, AND we
+                        // have NOT already confirmed that Hub relay also fails for voice,
+                        // voice CAN still flow via Hub relay → the cluster is degraded but
+                        // not partitioned.  The DirectTcp pool will continue retrying.
+                        if !already_verified_voice_partition {
+                            let hub_reachable = state
+                                .accepting_connections
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                            if hub_reachable && state.hub_tcp_relay_allowed() {
+                                debug!(
+                                    "Peer edge {} DirectTcp down but Hub TCP relay is available — \
+                                     skipping partition report (voice flows via Hub relay)",
+                                    peer_edge_id
+                                );
+                                continue;
+                            }
                         }
 
                         // Check 2: RelayChain and DirectUdp routes.

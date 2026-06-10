@@ -4,7 +4,7 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use munode_protocol::transport::EDGE_MAGIC;
 
@@ -344,11 +344,33 @@ async fn forward_logical_frame(
         routes.get(&parsed.source_edge_id).cloned()
     };
     let Some(plan) = plan else {
+        // No dissemination plan for this source — fall back to Hub relay
+        // for every edge that has remote listeners (hub_escape_targets).
+        // Track failures here as well: if Hub relay is the only path and
+        // it consistently fails, the peer is partitioned.
         if state.hub_tcp_relay_allowed() {
             for target_edge_id in hub_escape_targets {
-                hub_client
+                if hub_client
                     .relay_voice_via_hub(target_edge_id, frame.clone())
-                    .await;
+                    .await
+                {
+                    state.reset_voice_forward_failure(target_edge_id);
+                } else if let Some(count) = state.incr_voice_forward_failure(target_edge_id)
+                    && count >= crate::state::VOICE_FORWARD_FAILURE_PARTITION_THRESHOLD
+                {
+                    warn!(
+                        target_edge_id,
+                        consecutive_failures = count,
+                        "All voice forwarding paths failed for peer edge \
+                         {target_edge_id} (no dissemination plan) — \
+                         triggering partition arbitration"
+                    );
+                    let _ = state
+                        .event_tx
+                        .send(crate::state::EdgeEvent::PeerVoiceTcpFailed {
+                            peer_edge_id: target_edge_id,
+                        });
+                }
             }
         }
         return;
@@ -368,11 +390,31 @@ async fn forward_logical_frame(
         "Cluster voice forward plan"
     );
     if next_hops.is_empty() {
+        // Dissemination plan exists but has no active children for this
+        // source — fall back to Hub relay via hub_escape_targets.
         if state.hub_tcp_relay_allowed() {
             for target_edge_id in hub_escape_targets {
-                hub_client
+                if hub_client
                     .relay_voice_via_hub(target_edge_id, frame.clone())
-                    .await;
+                    .await
+                {
+                    state.reset_voice_forward_failure(target_edge_id);
+                } else if let Some(count) = state.incr_voice_forward_failure(target_edge_id)
+                    && count >= crate::state::VOICE_FORWARD_FAILURE_PARTITION_THRESHOLD
+                {
+                    warn!(
+                        target_edge_id,
+                        consecutive_failures = count,
+                        "All voice forwarding paths failed for peer edge \
+                         {target_edge_id} (empty plan) — triggering \
+                         partition arbitration"
+                    );
+                    let _ = state
+                        .event_tx
+                        .send(crate::state::EdgeEvent::PeerVoiceTcpFailed {
+                            peer_edge_id: target_edge_id,
+                        });
+                }
             }
         }
         return;
@@ -438,15 +480,43 @@ async fn forward_logical_frame(
         // receive the frame. Keep the failed primary child on the reliable
         // fallback ladder (peer TCP -> Hub relay -> emergency flood).
 
-        if dispatch_peer_tcp(state, next_hop, &frame) {
+        let peer_tcp_ok = dispatch_peer_tcp(state, next_hop, &frame);
+        let hub_relay_ok = if !peer_tcp_ok && state.hub_tcp_relay_allowed() {
+            hub_client
+                .relay_voice_via_hub(next_hop, frame.clone())
+                .await
+        } else {
+            false
+        };
+
+        if peer_tcp_ok || hub_relay_ok {
+            // At least one path reached the peer — reset the all-methods failure
+            // counter so that a transient blip does not trigger partition.
+            state.reset_voice_forward_failure(next_hop);
             continue;
         }
 
-        if state.hub_tcp_relay_allowed() {
-            hub_client
-                .relay_voice_via_hub(next_hop, frame.clone())
-                .await;
-        } else {
+        // Neither peer TCP nor Hub relay succeeded for this next_hop.
+        // Track the failure so the system can detect a true partition when
+        // every available forwarding path is consistently down.
+        if let Some(count) = state.incr_voice_forward_failure(next_hop)
+            && count >= crate::state::VOICE_FORWARD_FAILURE_PARTITION_THRESHOLD
+        {
+            warn!(
+                next_hop,
+                consecutive_failures = count,
+                "All voice forwarding paths (UDP, peer TCP, Hub relay) failed \
+                 for peer edge {next_hop} — threshold exceeded, triggering \
+                 partition arbitration"
+            );
+            let _ = state
+                .event_tx
+                .send(crate::state::EdgeEvent::PeerVoiceTcpFailed {
+                    peer_edge_id: next_hop,
+                });
+        }
+
+        if !state.hub_tcp_relay_allowed() {
             need_emergency_flood = true;
         }
     }
@@ -520,7 +590,7 @@ async fn forward_emergency_flood(
             continue;
         }
         if state.hub_tcp_relay_allowed() {
-            hub_client
+            let _ = hub_client
                 .relay_voice_via_hub(next_hop, flood_frame.clone())
                 .await;
         }

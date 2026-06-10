@@ -519,6 +519,12 @@ pub enum EdgeEvent {
 /// Default TTL cap for relay packets when no Hub-provided cap is available.
 pub const DEFAULT_MAX_TTL: u32 = 4;
 
+/// Number of consecutive voice-forwarding failures (UDP + peer TCP + Hub relay
+/// all failed for the same peer) before `PeerVoiceTcpFailed` is emitted.
+/// This threshold is intentionally low to trigger partition arbitration quickly
+/// when a peer becomes truly unreachable through every available path.
+pub const VOICE_FORWARD_FAILURE_PARTITION_THRESHOLD: u32 = 3;
+
 /// Transport layer for a hop in a relay chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HopTransport {
@@ -715,6 +721,16 @@ pub struct EdgeState {
     /// the hot path only needs a *read* lock to do an atomic increment/reset, keeping
     /// write locks exclusively for new edge registrations (peerJoined) which are rare.
     pub next_hop_failures: std::sync::RwLock<HashMap<u32, std::sync::atomic::AtomicU32>>,
+    /// Per-peer consecutive voice-forwarding failures across ALL methods
+    /// (UDP, peer TCP, Hub relay).  When every available path to a peer
+    /// fails for this many consecutive voice packets, `PeerVoiceTcpFailed`
+    /// is emitted to trigger partition arbitration — even when Hub relay
+    /// appears reachable at the control-plane level.
+    ///
+    /// Only the **last-resort** failure is counted: `dispatch_peer_tcp`
+    /// returned `false` AND `relay_voice_via_hub` returned `false` for the
+    /// same next-hop within `forward_logical_frame`.
+    pub voice_forward_failures: std::sync::RwLock<HashMap<u32, std::sync::atomic::AtomicU32>>,
     /// Hub-pushed cluster-level TTL cap for relay packets.
     pub max_ttl: std::sync::atomic::AtomicU32,
     /// Maximum number of channels a single user may listen to simultaneously.
@@ -882,6 +898,7 @@ impl EdgeState {
             hub_tcp_relay_enabled: AtomicBool::new(true),
             consecutive_failure_threshold: 2,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
+            voice_forward_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user: AtomicU32::new(0),
             listeners_per_channel: AtomicU32::new(0),
@@ -947,6 +964,7 @@ impl EdgeState {
             hub_tcp_relay_enabled: AtomicBool::new(true),
             consecutive_failure_threshold: 2,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
+            voice_forward_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user: AtomicU32::new(listeners_per_user),
             listeners_per_channel: AtomicU32::new(listeners_per_channel),
@@ -1014,6 +1032,7 @@ impl EdgeState {
             hub_tcp_relay_enabled: AtomicBool::new(true),
             consecutive_failure_threshold: config.consecutive_failure_threshold,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
+            voice_forward_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user: AtomicU32::new(config.listeners_per_user),
             listeners_per_channel: AtomicU32::new(config.listeners_per_channel),
@@ -1091,6 +1110,57 @@ impl EdgeState {
         self.peer_quality_sample_window_size
             .load(Ordering::Relaxed)
             .max(1) as usize
+    }
+
+    // ── Voice-forwarding all-methods failure tracking ─────────────────────
+
+    /// Atomically increment the all-methods voice-forwarding failure counter
+    /// for `peer_edge_id` and return the new count.  Returns `None` on a
+    /// poisoned lock (should never happen).
+    pub(crate) fn incr_voice_forward_failure(&self, peer_edge_id: u32) -> Option<u32> {
+        use std::sync::atomic::Ordering;
+        if let Ok(map) = self.voice_forward_failures.read()
+            && let Some(counter) = map.get(&peer_edge_id)
+        {
+            Some(counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
+        } else if let Ok(mut map) = self.voice_forward_failures.write() {
+            Some(
+                map.entry(peer_edge_id)
+                    .or_insert_with(|| std::sync::atomic::AtomicU32::new(0))
+                    .fetch_add(1, Ordering::Relaxed)
+                    .wrapping_add(1),
+            )
+        } else {
+            None
+        }
+    }
+
+    /// Atomically reset the all-methods voice-forwarding failure counter for
+    /// `peer_edge_id` to 0.  Silently no-ops when the edge ID is not in the
+    /// map — no need to insert a zero entry.
+    pub(crate) fn reset_voice_forward_failure(&self, peer_edge_id: u32) {
+        use std::sync::atomic::Ordering;
+        if let Ok(map) = self.voice_forward_failures.read()
+            && let Some(counter) = map.get(&peer_edge_id)
+        {
+            counter.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Returns `true` when the all-methods failure counter for `peer_edge_id`
+    /// has reached or exceeded `VOICE_FORWARD_FAILURE_PARTITION_THRESHOLD`,
+    /// meaning every available forwarding path (UDP, peer TCP, Hub relay) has
+    /// failed for enough consecutive voice packets to warrant partition
+    /// arbitration.
+    pub(crate) fn voice_forward_partition_threshold_exceeded(&self, peer_edge_id: u32) -> bool {
+        use std::sync::atomic::Ordering;
+        if let Ok(map) = self.voice_forward_failures.read()
+            && let Some(counter) = map.get(&peer_edge_id)
+        {
+            counter.load(Ordering::Relaxed) >= VOICE_FORWARD_FAILURE_PARTITION_THRESHOLD
+        } else {
+            false
+        }
     }
 
     #[inline]
