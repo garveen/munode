@@ -584,18 +584,30 @@ pub fn fanout_voice_target_to_peers(
 /// Keepalive ping interval for outbound peer voice TCP connections.
 /// A WebSocket-level Ping is sent at this interval to detect silent TCP failures
 /// (e.g. NAT table expiry with no RST) before the OS retransmission timeout fires.
-const VOICE_TCP_KEEPALIVE: Duration = Duration::from_secs(30);
+///
+/// Set to 10 s so that a silently-dead connection is detected by the reader
+/// idle timeout (3 × keepalive = 30 s) rather than the default 90 s, speeding
+/// up slot-reconnect healing to the 1–5 s target window.
+const VOICE_TCP_KEEPALIVE: Duration = Duration::from_secs(10);
 
 /// Minimum and maximum retry delay for the voice TCP reconnect loop.
+///
+/// Start at 1 s and double each failure (2 s, 4 s), then cap at 5 s.
+/// With a typical cross-region RTT of ≤ 2 s this keeps the worst-case
+/// healing window (last retry → next retry) within ~5 s so that a
+/// recovered peer is reconnected in at most two retry cycles.
 const VOICE_TCP_MIN_RETRY_MS: u64 = 1_000;
-const VOICE_TCP_MAX_RETRY_MS: u64 = 30_000;
+const VOICE_TCP_MAX_RETRY_MS: u64 = 5_000;
 
 /// How long all voice TCP slots must be simultaneously disconnected before this
 /// Edge reports the peer disconnect to Hub via `edge.reportPeerDisconnect`.
 /// Hub then runs partition-arbitration: if the peer also reports the disconnect,
 /// Hub broadcasts `hub.peerLeft` and may issue `hub.shutdownRequest` to the
 /// smaller partition.
-pub const PEER_DISCONNECT_REPORT_AFTER_MS: u64 = 60_000;
+///
+/// Reduced from 60 s to 10 s so that the timer-based partition detection path
+/// (no voice activity) still triggers well before the old minute-long window.
+pub const PEER_DISCONNECT_REPORT_AFTER_MS: u64 = 10_000;
 
 /// Build a voice WebSocket URL.
 ///
@@ -897,7 +909,12 @@ async fn run_voice_tcp_once_pooled(
     pool: Arc<crate::peer_registry::PeerVoiceTcpPool>,
     hmac_secret: Option<&str>,
 ) -> anyhow::Result<()> {
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+    /// TCP connect + WebSocket upgrade + challenge-response auth requires at
+    /// most 3 RTTs.  With a worst-case RTT of 2 s the handshake completes in
+    /// ≤ 6 s; 8 s gives a 2 s margin.  Keeping this tight prevents dead-peer
+    /// attempts from blocking the retry loop for 15 s, so the slot can move
+    /// to the next backoff step sooner.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 
     let mut ws = match timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url)).await {
         Ok(Ok((ws, _))) => ws,
