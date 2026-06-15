@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Context;
 use serde::Deserialize;
 
@@ -214,6 +216,12 @@ pub struct EdgeConfig {
     /// WebTransport (QUIC/HTTP3) listener configuration.
     #[serde(default)]
     pub webtransport: WebtransportConfig,
+    /// Per-peer cluster access configuration (multi-endpoint + tags).
+    /// Maps remote edge server_id → access config.  When absent for a given
+    /// peer, only the implicit default endpoint (from the peer's advertised
+    /// `external_host` + `edge_port`) is used.
+    #[serde(default)]
+    pub cluster_peer_access: HashMap<u32, ClusterPeerAccessConfig>,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -296,6 +304,69 @@ pub struct EdgeVoiceRoutingConfig {
     /// Relay node configuration.
     #[serde(default)]
     pub relay: EdgeVoiceRelayConfig,
+    /// Endpoint scoring configuration.  Controls how the sending Edge selects
+    /// the best endpoint among multiple candidates based on receiver-reported
+    /// quality feedback (loss + jitter).
+    #[serde(default)]
+    pub endpoint_scoring: EndpointScoringConfig,
+}
+
+/// Configuration for per-endpoint quality scoring and switching hysteresis.
+///
+/// When a peer Edge exposes multiple endpoints, the sending Edge scores each
+/// candidate using receiver-reported packet loss and jitter, then selects the
+/// best-scoring endpoint as the active send path.  Hysteresis prevents
+/// oscillation between near-tie candidates.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EndpointScoringConfig {
+    /// Weight for packet loss ratio in the composite score (default: 1000.0).
+    /// Higher values make loss dominate the selection.
+    #[serde(default = "default_endpoint_score_loss_weight")]
+    pub loss_weight: f32,
+    /// Weight for jitter (ms) in the composite score (default: 4.0).
+    #[serde(default = "default_endpoint_score_jitter_weight")]
+    pub jitter_weight: f32,
+    /// Penalty added per local send failure (default: 200.0).
+    #[serde(default = "default_endpoint_score_local_failure_penalty")]
+    pub local_failure_penalty: f32,
+    /// Penalty added when quality feedback is stale (default: 300.0).
+    #[serde(default = "default_endpoint_score_stale_penalty")]
+    pub stale_feedback_penalty: f32,
+    /// Minimum time (ms) an endpoint must be active before a normal switch
+    /// is allowed (default: 300).
+    #[serde(default = "default_endpoint_min_dwell_ms")]
+    pub min_dwell_ms: u64,
+    /// Score improvement margin required to trigger a switch from the current
+    /// active endpoint to a better candidate (default: 15.0).
+    #[serde(default = "default_endpoint_switch_margin")]
+    pub switch_margin: f32,
+    /// Packet loss ratio above which an endpoint is immediately excluded
+    /// from the candidate set (default: 0.40).
+    #[serde(default = "default_failed_packet_loss")]
+    pub failed_packet_loss: f64,
+    /// Jitter (ms) above which an endpoint is immediately excluded (default: 500.0).
+    #[serde(default = "default_endpoint_failed_jitter_ms")]
+    pub failed_jitter_ms: f64,
+    /// Maximum age (ms) of quality feedback before it is considered stale and
+    /// the endpoint is penalised (default: 3000).
+    #[serde(default = "default_endpoint_feedback_stale_ms")]
+    pub feedback_stale_ms: u64,
+}
+
+impl Default for EndpointScoringConfig {
+    fn default() -> Self {
+        Self {
+            loss_weight: default_endpoint_score_loss_weight(),
+            jitter_weight: default_endpoint_score_jitter_weight(),
+            local_failure_penalty: default_endpoint_score_local_failure_penalty(),
+            stale_feedback_penalty: default_endpoint_score_stale_penalty(),
+            min_dwell_ms: default_endpoint_min_dwell_ms(),
+            switch_margin: default_endpoint_switch_margin(),
+            failed_packet_loss: default_failed_packet_loss(),
+            failed_jitter_ms: default_endpoint_failed_jitter_ms(),
+            feedback_stale_ms: default_endpoint_feedback_stale_ms(),
+        }
+    }
 }
 
 impl Default for EdgeVoiceRoutingConfig {
@@ -307,6 +378,7 @@ impl Default for EdgeVoiceRoutingConfig {
             peer_voice_tcp_pool_size: default_peer_voice_tcp_pool_size(),
             quality: EdgeVoiceQualityConfig::default(),
             relay: EdgeVoiceRelayConfig::default(),
+            endpoint_scoring: EndpointScoringConfig::default(),
         }
     }
 }
@@ -361,6 +433,49 @@ pub struct TlsConfig {
     pub key: String,
     /// Optional CA chain PEM file.
     pub ca: Option<String>,
+}
+
+/// A single endpoint (address + port) exposed by a peer Edge for cluster
+/// communication.  Multiple endpoints per peer Edge are supported and treated
+/// as equal-weight candidates; the sending Edge selects the best endpoint at
+/// runtime based on receiver-reported quality (loss + jitter).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClusterPeerEndpoint {
+    /// Optional stable identifier for this endpoint.  When set, quality
+    /// feedback is tracked and reported per-endpoint; when absent the
+    /// endpoint participates as an unnamed default candidate.
+    pub id: Option<String>,
+    /// Hostname or IP address of this endpoint.
+    pub host: String,
+    /// UDP port of this endpoint (typically the peer's `edge_port`).
+    pub port: u16,
+    /// Optional link-category tag.  When set, only Edges that declare the
+    /// same tag in their own `tags` list will consider this endpoint.
+    /// Endpoints without a tag are tried by every Edge.
+    #[serde(default)]
+    pub tag: Option<String>,
+}
+
+/// Per-peer Edge access configuration declaring which endpoints of a remote
+/// Edge are reachable from this Edge and which link-category tags this Edge
+/// belongs to.
+///
+/// All endpoints are treated as equal-weight candidates — there is no static
+/// preference order.  The active endpoint for each `(target_edge, traffic_class)`
+/// is selected at runtime based on receiver-reported loss + jitter scores.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClusterPeerAccessConfig {
+    /// Link-category tags that this Edge belongs to.  When a remote Edge
+    /// exposes an endpoint with a matching `tag`, this Edge will consider
+    /// that endpoint as a candidate.  Endpoints without a tag are always
+    /// considered regardless of this list.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Explicitly declared peer Edge endpoints.  These supplement (not replace)
+    /// the implicit default endpoint synthesised from `network.external_host`
+    /// and `external_edge_port`/`edge_port`.
+    #[serde(default)]
+    pub endpoints: Vec<ClusterPeerEndpoint>,
 }
 
 /// A statically configured peer Edge for control-channel relay bootstrap.
@@ -1177,6 +1292,30 @@ fn default_quality_probe_timeout_secs() -> u64 {
 }
 fn default_quality_sample_window_size() -> usize {
     30
+}
+fn default_endpoint_score_loss_weight() -> f32 {
+    1000.0
+}
+fn default_endpoint_score_jitter_weight() -> f32 {
+    4.0
+}
+fn default_endpoint_score_local_failure_penalty() -> f32 {
+    200.0
+}
+fn default_endpoint_score_stale_penalty() -> f32 {
+    300.0
+}
+fn default_endpoint_min_dwell_ms() -> u64 {
+    300
+}
+fn default_endpoint_switch_margin() -> f32 {
+    15.0
+}
+fn default_endpoint_failed_jitter_ms() -> f64 {
+    500.0
+}
+fn default_endpoint_feedback_stale_ms() -> u64 {
+    3000
 }
 
 /// GeoIP configuration.

@@ -219,6 +219,55 @@ sample_window_size = 30                       # Default: 30
 # Enable Hub-mediated voice relay
 enabled            = true              # Default: true
 
+# Per-endpoint scoring configuration for multi-address peer Edges.
+# Controls how the sending Edge scores and selects among multiple candidate
+# endpoints (e.g. a public IP + a VPC internal IP) for outbound voice traffic.
+[voice_routing.endpoint_scoring]
+# Weight for packet loss ratio (0.0–1.0) in the composite score.
+loss_weight = 1000.0                   # Default: 1000.0
+# Weight for jitter (ms) in the composite score.
+jitter_weight = 4.0                    # Default: 4.0
+# Penalty per local send failure.
+local_failure_penalty = 200.0          # Default: 200.0
+# Penalty when quality feedback is stale.
+stale_feedback_penalty = 300.0         # Default: 300.0
+# Minimum time (ms) an endpoint must be active before switching.
+min_dwell_ms = 300                     # Default: 300
+# Score improvement margin required to trigger a switch.
+switch_margin = 15.0                   # Default: 15.0
+# Packet loss above which an endpoint is excluded.
+failed_packet_loss = 0.40              # Default: 0.40
+# Jitter (ms) above which an endpoint is excluded.
+failed_jitter_ms = 500.0               # Default: 500.0
+# Max age (ms) of feedback before penalty.
+feedback_stale_ms = 3000               # Default: 3000
+
+# ---------------------------------------------------------------------------
+# Cluster Peer Access — per-peer endpoint configuration
+# ---------------------------------------------------------------------------
+# Declares which endpoints of each remote Edge are reachable, and which
+# link-category tags this Edge belongs to.  All endpoints are treated as
+# equal-weight candidates — the sending Edge selects the best one at runtime
+# based on receiver-reported quality scores.
+#
+# Each entry keyed by the remote Edge's `server_id`.
+#
+# Example:
+# [cluster_peer_access]
+# [cluster_peer_access.2]
+# tags = ["hz-vpc"]
+# [[cluster_peer_access.2.endpoints]]
+# host = "edge-2.hz-vpc.internal"
+# port = 64739
+# id = "hz-vpc"
+# tag = "hz-vpc"
+# [[cluster_peer_access.2.endpoints]]
+# host = "edge-2-backup.example.com"
+# port = 64739
+# id = "backup-line"
+
+# ---------------------------------------------------------------------------
+# Web API
 # ---------------------------------------------------------------------------
 # Web API
 # ---------------------------------------------------------------------------

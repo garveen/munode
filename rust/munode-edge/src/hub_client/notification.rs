@@ -25,6 +25,64 @@ use super::HubClient;
 
 const WHISPER_PERMISSION_PREFETCH_CONCURRENCY: usize = 8;
 
+/// Resolve additional peer endpoints from `cluster_peer_access` config.
+///
+/// Called when a peer Edge joins.  Looks up the remote edge's configured
+/// endpoints and performs DNS resolution for each, returning resolved
+/// `PeerEndpoint` entries that are added to `PeerEdgeInfo`.
+pub(super) async fn resolve_peer_endpoints(
+    state: &crate::state::EdgeState,
+    peer_edge_id: u32,
+) -> Vec<crate::peer_registry::PeerEndpoint> {
+    let configs = state.cluster_peer_access.read().await;
+    let Some(access) = configs.get(&peer_edge_id) else {
+        return Vec::new();
+    };
+
+    let mut endpoints = Vec::with_capacity(access.endpoints.len());
+    for ep_cfg in &access.endpoints {
+        let addr = resolve_peer_udp_addr(&ep_cfg.host, ep_cfg.port).await;
+        let Some(addr) = addr else {
+            warn!(
+                peer_edge_id,
+                host = %ep_cfg.host,
+                port = ep_cfg.port,
+                endpoint_id = ?ep_cfg.id,
+                "Failed to resolve peer endpoint address"
+            );
+            continue;
+        };
+        endpoints.push(crate::peer_registry::PeerEndpoint {
+            id: ep_cfg.id.clone(),
+            host: ep_cfg.host.clone(),
+            port: ep_cfg.port,
+            tag: ep_cfg.tag.clone(),
+            udp_addr: addr,
+        });
+        debug!(
+            peer_edge_id,
+            host = %ep_cfg.host,
+            port = ep_cfg.port,
+            endpoint_id = ?ep_cfg.id,
+            "Resolved peer endpoint"
+        );
+    }
+    endpoints
+}
+
+/// Resolve a host:port pair to a UDP SocketAddr for peer Edge communication.
+async fn resolve_peer_udp_addr(host: &str, port: u16) -> Option<std::net::SocketAddr> {
+    use tokio::net::lookup_host;
+    let addr_str = format!("{}:{}", host, port);
+    match lookup_host(&addr_str).await {
+        Ok(mut addrs) => addrs.next(),
+        Err(e) => {
+            debug!(%host, port, error = %e, "Failed to resolve peer UDP address");
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DisseminationEpochDecision {
     Apply {
@@ -815,12 +873,19 @@ impl HubClient {
                                 {
                                     let current = self.edge_state.peer_registry.load_full();
                                     let mut new_reg = (*current).clone();
+
+                                    // Resolve additional endpoints from cluster_peer_access config.
+                                    let endpoints =
+                                        resolve_peer_endpoints(&self.edge_state, peer_edge_id)
+                                            .await;
+
                                     new_reg.upsert(
                                         peer_edge_id,
                                         PeerEdgeInfo {
                                             udp_addr,
                                             host: host.clone(),
                                             relay_port: None,
+                                            endpoints,
                                         },
                                     );
                                     self.edge_state.peer_registry.store(Arc::new(new_reg));
@@ -1059,6 +1124,48 @@ impl HubClient {
                     }
                 }
             }
+            "hub.peerQualityFeedback" => {
+                // Hub forwards receiver-observed quality back to the sending Edge.
+                // This lets the sender score each endpoint independently and choose
+                // the best one for outbound voice traffic.
+                if let Some(params) = &notification.peer_quality_feedback {
+                    let quality_proto = &params.quality;
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let mut pq = self.edge_state.peer_quality.lock().await;
+                    let key = (params.reporter_edge_id, params.target_endpoint_id.clone());
+                    let entry = pq.entry(key).or_default();
+                    let sample = crate::state::PeerQualitySample {
+                        expected_packets: quality_proto.samples.max(1),
+                        received_packets: ((quality_proto.samples as f32)
+                            * (1.0 - quality_proto.packet_loss))
+                            .round()
+                            .max(0.0) as u32,
+                        rtt_ms: Some(quality_proto.rtt),
+                        source: crate::state::PeerQualitySampleSource::Probe,
+                    };
+                    let sw_size = self.edge_state.peer_quality_sample_window_size();
+                    entry.push_sample(sample, sw_size);
+                    entry.last_report_average_rtt_ms = Some(quality_proto.rtt);
+                    entry.last_report_packet_loss = Some(quality_proto.packet_loss);
+                    entry.last_report_jitter_ms = Some(quality_proto.jitter);
+                    entry.last_report_ms = Some(now_ms);
+                    debug!(
+                        reporter = params.reporter_edge_id,
+                        endpoint = ?params.target_endpoint_id,
+                        rtt = quality_proto.rtt,
+                        loss = quality_proto.packet_loss,
+                        "Stored peer quality feedback"
+                    );
+                    // Recompute endpoint selection — may switch active endpoint.
+                    self.edge_state
+                        .endpoint_selector
+                        .recompute(params.reporter_edge_id)
+                        .await;
+                }
+            }
             _ => {
                 // Check for hub.serverConfigUpdate — Hub hot-reload push
                 if method == "hub.serverConfigUpdate" {
@@ -1235,6 +1342,7 @@ mod tests {
             webtransport: WebtransportConfig::default(),
             log_level: "info".to_string(),
             log_format: "text".to_string(),
+            cluster_peer_access: HashMap::new(),
         }
     }
 

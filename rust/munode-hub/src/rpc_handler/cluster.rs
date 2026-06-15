@@ -1,4 +1,5 @@
 use super::*;
+use munode_protocol::hubedge;
 
 impl RpcHandler {
     /// After a disconnect is confirmed by arbitration, detect network partitions
@@ -317,7 +318,38 @@ impl RpcHandler {
         };
         {
             let mut topo = self.state.topology.write().await;
-            topo.report_quality(params.edge_id, params.target_edge_id, quality);
+            topo.report_quality(
+                params.edge_id,
+                params.target_edge_id,
+                params.target_endpoint_id.clone(),
+                quality,
+            );
+        }
+
+        // Forward receiver-observed quality back to the sending Edge so it can
+        // score and select the best endpoint for outbound voice traffic.
+        {
+            let notif = hubedge::TypedRpcNotification {
+                method: "hub.peerQualityFeedback".to_string(),
+                peer_quality_feedback: Some(hubedge::HubPeerQualityFeedbackParams {
+                    reporter_edge_id: params.edge_id,
+                    sender_edge_id: params.target_edge_id,
+                    target_endpoint_id: params.target_endpoint_id.clone(),
+                    quality: quality_proto,
+                }),
+                ..Default::default()
+            };
+            let packet = munode_protocol::hubedge::EdgeHubPacket {
+                r#type: munode_protocol::hubedge::PacketType::RpcNotification as i32,
+                rpc_notification: Some(notif),
+                ..Default::default()
+            };
+            crate::server::send_notification_to_edge(
+                &self.state,
+                params.target_edge_id,
+                packet.encode_to_vec(),
+            )
+            .await;
         }
 
         self.push_route_tables_to_all().await;

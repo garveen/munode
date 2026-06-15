@@ -1011,9 +1011,12 @@ impl HubClient {
     }
 
     /// Report link quality to a peer Edge to Hub for route table computation.
+    /// `target_endpoint_id` identifies which specific endpoint of the target
+    /// Edge the quality data refers to (`None` = default/implicit endpoint).
     pub async fn report_quality(
         &self,
         target_edge_id: u32,
+        target_endpoint_id: Option<String>,
         rtt_ms: f32,
         packet_loss: f32,
         jitter_ms: f32,
@@ -1028,6 +1031,7 @@ impl HubClient {
             edge_report_quality: Some(hubedge::EdgeReportQualityParams {
                 edge_id: from_edge_id,
                 target_edge_id,
+                target_endpoint_id,
                 quality: hubedge::NetworkQualityProto {
                     rtt: rtt_ms,
                     packet_loss,

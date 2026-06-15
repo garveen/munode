@@ -104,6 +104,7 @@ impl EdgeServer {
                     .voice_routing
                     .quality
                     .probe_timeout_secs,
+                cluster_peer_access: self.config.cluster_peer_access.clone(),
             },
         );
 

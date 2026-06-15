@@ -84,6 +84,7 @@ fn edge_state_with_zero_failure_threshold() -> Arc<EdgeState> {
             peer_voice_tcp_pool_size: 1,
             peer_quality_sample_window_size: 32,
             peer_quality_probe_timeout_secs: 3,
+            cluster_peer_access: HashMap::new(),
         },
     )
 }
@@ -123,6 +124,7 @@ fn test_config() -> EdgeConfig {
         webtransport: WebtransportConfig::default(),
         log_level: "info".to_string(),
         log_format: "text".to_string(),
+        cluster_peer_access: HashMap::new(),
     }
 }
 
@@ -165,6 +167,7 @@ fn peer_registry_upsert_and_lookup_by_id() {
             udp_addr: addr,
             host: "10.0.0.2".into(),
             relay_port: Some(64100),
+            endpoints: Vec::new(),
         },
     );
 
@@ -185,6 +188,7 @@ fn peer_registry_remove_clears_entry() {
             udp_addr: addr,
             host: "10.0.0.3".into(),
             relay_port: None,
+            endpoints: Vec::new(),
         },
     );
     reg.remove(8);
@@ -204,6 +208,7 @@ fn peer_registry_relay_peers_filters_by_relay_port() {
             udp_addr: addr,
             host: "10.0.0.4".into(),
             relay_port: Some(9000),
+            endpoints: Vec::new(),
         },
     );
     // No relay_port
@@ -213,6 +218,7 @@ fn peer_registry_relay_peers_filters_by_relay_port() {
             udp_addr: addr,
             host: "10.0.0.5".into(),
             relay_port: None,
+            endpoints: Vec::new(),
         },
     );
 
@@ -237,6 +243,7 @@ fn peer_registry_all_udp_peers_returns_all_entries() {
             udp_addr: a1,
             host: "h1".into(),
             relay_port: Some(9001),
+            endpoints: Vec::new(),
         },
     );
     reg.upsert(
@@ -245,6 +252,7 @@ fn peer_registry_all_udp_peers_returns_all_entries() {
             udp_addr: a2,
             host: "h2".into(),
             relay_port: None,
+            endpoints: Vec::new(),
         },
     );
     reg.upsert(
@@ -253,6 +261,7 @@ fn peer_registry_all_udp_peers_returns_all_entries() {
             udp_addr: a3,
             host: "h3".into(),
             relay_port: None,
+            endpoints: Vec::new(),
         },
     );
 
@@ -689,6 +698,7 @@ async fn failed_primary_child_still_uses_direct_tcp_fallback_when_backup_udp_suc
             udp_addr: backup_addr,
             host: "127.0.0.1".into(),
             relay_port: None,
+            endpoints: Vec::new(),
         },
     );
     state.peer_registry.store(Arc::new(registry));
