@@ -1470,7 +1470,11 @@ impl RpcHandler {
             user_id,
             username: username.clone(),
             channel_id,
-            groups: vec![],
+            groups: if user_id > 0 {
+                vec!["auth".to_string()]
+            } else {
+                vec![]
+            },
             cert_hash: params
                 .client_info
                 .as_ref()

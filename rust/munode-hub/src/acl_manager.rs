@@ -147,6 +147,11 @@ impl AclManager {
     /// `user_id`: The user's ID (-1 for guest/unregistered).
     /// `channel_id`: The target channel.
     /// `groups`: The user's group memberships (from auth).
+    ///
+    /// Channel-group memberships are resolved along the ancestor chain so that
+    /// ACL entries referencing channel-group names work correctly regardless of
+    /// whether the caller is on the `has_permission` path or the
+    /// `handle_permission_query` path.
     pub async fn calculate_permissions(
         &self,
         user_id: i32,
@@ -162,7 +167,9 @@ impl AclManager {
             }
         }
 
-        // SuperUser check: admin/superuser group gets all permissions
+        // SuperUser check: admin/superuser group gets all permissions.
+        // Only auth groups are checked here — channel groups cannot grant
+        // superuser (matches Mumble/Murmur behaviour).
         if groups.iter().any(|g| g == "admin" || g == "superuser") {
             let result = permission::ALL;
             if user_id != 0 {
@@ -191,8 +198,43 @@ impl AclManager {
             flags
         };
 
-        self.calculate_permissions_with_chain(user_id, channel_id, groups, &chain, &inherit_flags)
-            .await
+        // Resolve channel-group memberships along the ancestor chain.
+        // This is the same logic used by handle_batch_permission_query in
+        // rpc_handler/sync.rs.  Without it, ACL entries that reference a group
+        // defined via ChannelGroup (rather than an auth-time group) are silently
+        // ignored on the has_permission / calculate_permissions path.  Because
+        // calculate_permissions_with_chain also reads from the shared cache
+        // (keyed on (user_id, channel_id) only), a stale cache entry produced
+        // by one path poisons the other — unifying the group resolution here
+        // keeps both paths consistent.
+        let mut effective_groups = groups.to_vec();
+        if user_id > 0 {
+            let channel_groups = self.channel_groups.read().await;
+            let uid = user_id as u32;
+            for &ancestor_id in &chain {
+                if let Some(ancestor_groups) = channel_groups.get(&ancestor_id) {
+                    for group in ancestor_groups {
+                        if !group.inherit && ancestor_id != channel_id {
+                            continue;
+                        }
+                        let is_added = group.add.contains(&uid);
+                        let is_removed = group.remove.contains(&uid);
+                        if is_added && !is_removed && !effective_groups.contains(&group.name) {
+                            effective_groups.push(group.name.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        self.calculate_permissions_with_chain(
+            user_id,
+            channel_id,
+            &effective_groups,
+            &chain,
+            &inherit_flags,
+        )
+        .await
     }
 
     /// Core permission calculation given a pre-built ancestor chain.
@@ -811,6 +853,81 @@ mod tests {
         // Guest (id=-1) should NOT have Register
         let perms = mgr.calculate_permissions(-1, 0, &[]).await;
         assert_eq!(perms & permission::REGISTER, 0);
+    }
+
+    /// Root has an ACL for a named auth group with `apply_subs=true`.
+    /// The child channel has no ACL of its own (only inherits).
+    /// A user who is in that auth group should get the inherited permission on the child.
+    ///
+    /// Uses [`permission::MAKE_CHANNEL`] because it is NOT in [`permission::DEFAULT`],
+    /// so we can distinguish "granted by group ACL" from "everyone has this by default".
+    #[tokio::test]
+    async fn test_auth_group_inherited_to_child_without_own_acl() {
+        let (db, cs) = setup().await;
+
+        // Root: group "members" gets MAKE_CHANNEL + MUTE_DEAFEN, apply_subs=true
+        let granted = permission::MAKE_CHANNEL | permission::MUTE_DEAFEN;
+        db.save_acls(
+            0,
+            &[AclEntry {
+                channel_id: 0,
+                user_id: None,
+                group_name: Some("members".to_string()),
+                apply_here: true,
+                apply_subs: true,
+                allow: granted,
+                deny: 0,
+            }],
+        )
+        .unwrap();
+
+        let mgr = AclManager::new(db, cs);
+        mgr.load_all().await.unwrap();
+
+        // --- User 5 is in group "members" ---
+        let perms = mgr
+            .calculate_permissions(5, 1, &["members".to_string()])
+            .await;
+
+        // Should inherit the granted permissions on child
+        assert_ne!(
+            perms & permission::MAKE_CHANNEL,
+            0,
+            "user in 'members' group should inherit MAKE_CHANNEL on child"
+        );
+        assert_ne!(
+            perms & permission::MUTE_DEAFEN,
+            0,
+            "user in 'members' group should inherit MUTE_DEAFEN on child"
+        );
+        // DEFAULT permissions should still be present
+        assert_ne!(perms & permission::SPEAK, 0);
+
+        // Should also have the permissions on root (apply_here=true)
+        let perms = mgr
+            .calculate_permissions(5, 0, &["members".to_string()])
+            .await;
+        assert_ne!(
+            perms & permission::MAKE_CHANNEL,
+            0,
+            "user in 'members' group should have MAKE_CHANNEL on root"
+        );
+
+        // --- User 6 is NOT in any group ---
+        let perms = mgr.calculate_permissions(6, 1, &[]).await;
+        // Should NOT get the group-granted permissions
+        assert_eq!(
+            perms & permission::MAKE_CHANNEL,
+            0,
+            "user not in group should NOT get MAKE_CHANNEL on child"
+        );
+        assert_eq!(
+            perms & permission::MUTE_DEAFEN,
+            0,
+            "user not in group should NOT get MUTE_DEAFEN on child"
+        );
+        // DEFAULT permissions should still be present
+        assert_ne!(perms & permission::SPEAK, 0);
     }
 
     #[tokio::test]
