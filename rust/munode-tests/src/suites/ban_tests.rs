@@ -12,6 +12,23 @@ use crate::harness::{
 };
 use munode_client::{ConnectOptions, MumbleClient};
 
+async fn wait_for_ban_count(
+    admin: &MumbleClient,
+    wait: Duration,
+) -> Result<Vec<munode_client::domain::Ban>> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let bans = admin.server().list_bans(Duration::from_secs(5)).await?;
+        if !bans.is_empty() {
+            return Ok(bans);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(bans);
+        }
+        sleep_ms(100).await;
+    }
+}
+
 // ── Ban list query ────────────────────────────────────────────────────────
 
 /// Admin can request the ban list and receives a BanList response.
@@ -300,23 +317,7 @@ async fn test_certificate_hash_ban_round_trip() -> Result<()> {
             query: Some(false),
         })
         .await?;
-    sleep_ms(400).await;
-
-    // Re-query
-    let mut rx = admin.subscribe();
-    admin.server().request_bans().await?;
-    let retrieved = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match rx.recv().await {
-                Ok(ClientEvent::BanList(list)) => break list,
-                Ok(_) => continue,
-                Err(_) => break vec![],
-            }
-        }
-    })
-    .await
-    .unwrap_or_default();
-    let all_bans: Vec<_> = retrieved.iter().flat_map(|b| b.bans.iter()).collect();
+    let all_bans = wait_for_ban_count(admin, Duration::from_secs(5)).await?;
     let found = all_bans
         .iter()
         .any(|b| b.hash.as_deref() == Some(hash.as_str()));

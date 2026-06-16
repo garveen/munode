@@ -91,6 +91,7 @@ impl RpcHandler {
             host: params.host.clone(),
             port: params.port,
             voice_port: params.voice_port,
+            peer_endpoints: params.peer_endpoints.clone(),
             capacity: params.capacity,
             joined_at: std::time::Instant::now(),
             connected_peers: std::collections::HashSet::new(),
@@ -107,6 +108,7 @@ impl RpcHandler {
                     port: p.port,
                     voice_port: p.voice_port,
                     cert_hash: None,
+                    peer_endpoints: p.peer_endpoints.clone(),
                 })
                 .collect()
         };
@@ -120,6 +122,7 @@ impl RpcHandler {
                 name: params.name.clone(),
                 host: params.host.clone(),
                 voice_port: params.voice_port,
+                peer_endpoints: params.peer_endpoints.clone(),
             }),
             ..Default::default()
         };
@@ -317,7 +320,13 @@ impl RpcHandler {
         };
         {
             let mut topo = self.state.topology.write().await;
-            topo.report_quality(params.edge_id, params.target_edge_id, quality);
+            topo.report_quality(
+                params.edge_id,
+                params.target_edge_id,
+                params.target_host.clone().unwrap_or_default(),
+                params.target_port.unwrap_or_default() as u16,
+                quality,
+            );
         }
 
         self.push_route_tables_to_all().await;

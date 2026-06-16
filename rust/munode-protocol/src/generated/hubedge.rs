@@ -1352,6 +1352,8 @@ pub struct EdgeJoinParams {
     pub voice_port: u32,
     #[prost(uint32, required, tag = "6")]
     pub capacity: u32,
+    #[prost(message, repeated, tag = "7")]
+    pub peer_endpoints: ::prost::alloc::vec::Vec<ClusterPeerEndpointProto>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeJoinResult {
@@ -1380,6 +1382,15 @@ pub struct PeerInfoProto {
     pub voice_port: u32,
     #[prost(string, optional, tag = "6")]
     pub cert_hash: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "7")]
+    pub peer_endpoints: ::prost::alloc::vec::Vec<ClusterPeerEndpointProto>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClusterPeerEndpointProto {
+    #[prost(string, required, tag = "1")]
+    pub host: ::prost::alloc::string::String,
+    #[prost(uint32, required, tag = "2")]
+    pub port: u32,
 }
 /// ---------------------------------------------------------------------------
 /// edge.joinComplete - Edge 完成集群加入
@@ -1558,7 +1569,7 @@ pub struct EdgeReportPeerDisconnectResult {
 /// ---------------------------------------------------------------------------
 /// edge.reportQuality - Edge 上报网络质量
 /// ---------------------------------------------------------------------------
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeReportQualityParams {
     #[prost(uint32, required, tag = "1")]
     pub edge_id: u32,
@@ -1566,6 +1577,10 @@ pub struct EdgeReportQualityParams {
     pub target_edge_id: u32,
     #[prost(message, required, tag = "3")]
     pub quality: NetworkQualityProto,
+    #[prost(string, optional, tag = "4")]
+    pub target_host: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, optional, tag = "5")]
+    pub target_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct NetworkQualityProto {
@@ -2116,6 +2131,8 @@ pub struct HubClusterPeerJoinedParams {
     pub host: ::prost::alloc::string::String,
     #[prost(uint32, required, tag = "4")]
     pub voice_port: u32,
+    #[prost(message, repeated, tag = "5")]
+    pub peer_endpoints: ::prost::alloc::vec::Vec<ClusterPeerEndpointProto>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct HubClusterPeerLeftParams {

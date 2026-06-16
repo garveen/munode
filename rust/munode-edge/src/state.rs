@@ -133,6 +133,32 @@ pub struct PeerQualitySample {
     pub source: PeerQualitySampleSource,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PeerQualityKey {
+    pub edge_id: u32,
+    pub target_host: String,
+    pub target_port: u16,
+}
+
+impl PeerQualityKey {
+    pub fn new(edge_id: u32, target_host: impl Into<String>, target_port: u16) -> Option<Self> {
+        if edge_id == 0 || target_port == 0 {
+            return None;
+        }
+
+        let target_host = target_host.into();
+        if target_host.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            edge_id,
+            target_host,
+            target_port,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PeerQualityState {
     /// Pending ping sequences: seq → sent_ms.
@@ -370,12 +396,14 @@ impl PeerQualityState {
         (count > 0).then_some(diffs / count as f32)
     }
 
-    pub fn snapshot(&self, edge_id: u32) -> PeerQualitySnapshot {
+    pub fn snapshot(&self, key: &PeerQualityKey) -> PeerQualitySnapshot {
         let rtt_samples_ms = self.rtt_samples_ms();
         let (direct_voice_expected_packets, direct_voice_received_packets) =
             self.direct_voice_totals();
         PeerQualitySnapshot {
-            edge_id,
+            edge_id: key.edge_id,
+            target_host: key.target_host.clone(),
+            target_port: key.target_port,
             average_rtt_ms: self.average_rtt_ms(),
             packet_loss: self.packet_loss(),
             jitter_ms: self.jitter_ms(),
@@ -404,6 +432,8 @@ impl PeerQualityState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeerQualitySnapshot {
     pub edge_id: u32,
+    pub target_host: String,
+    pub target_port: u16,
     pub average_rtt_ms: Option<f32>,
     pub packet_loss: Option<f32>,
     pub jitter_ms: Option<f32>,
@@ -800,7 +830,7 @@ pub struct EdgeState {
     pub test_network_faults: TestNetworkFaults,
     /// Locally held UDP probe quality state keyed by peer edge ID.
     /// Shared between `udp.rs`, `cluster_voice.rs`, and the Web API for local observability.
-    pub peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
+    pub peer_quality: Arc<Mutex<HashMap<PeerQualityKey, PeerQualityState>>>,
     /// Rolling observation window size for peer-quality samples.
     pub peer_quality_sample_window_size: AtomicU32,
     /// Probe timeout used when converting unanswered pings into loss samples.
@@ -1215,14 +1245,28 @@ impl EdgeState {
         }
     }
 
-    pub async fn observe_direct_peer_voice_packet(&self, ingress_peer: u32, seq: u16) {
-        if ingress_peer == 0 {
+    pub async fn observe_direct_peer_voice_packet(
+        &self,
+        ingress_peer: u32,
+        endpoint_host: Option<&str>,
+        endpoint_port: Option<u16>,
+        seq: u16,
+    ) {
+        let Some(endpoint_host) = endpoint_host else {
             return;
-        }
+        };
+        let Some(endpoint_port) = endpoint_port else {
+            return;
+        };
+
+        let Some(key) = PeerQualityKey::new(ingress_peer, endpoint_host.to_string(), endpoint_port)
+        else {
+            return;
+        };
 
         let sample_window_size = self.peer_quality_sample_window_size();
         let mut quality = self.peer_quality.lock().await;
-        let entry = quality.entry(ingress_peer).or_default();
+        let entry = quality.entry(key).or_default();
         entry.record_direct_voice_packet(seq, sample_window_size);
     }
 
@@ -1266,9 +1310,14 @@ impl EdgeState {
         let mut quality = self.peer_quality.lock().await;
         let mut snapshots: Vec<_> = quality
             .iter_mut()
-            .map(|(&edge_id, state)| state.snapshot(edge_id))
+            .map(|(key, state)| state.snapshot(key))
             .collect();
-        snapshots.sort_by_key(|snapshot| snapshot.edge_id);
+        snapshots.sort_by(|a, b| {
+            a.edge_id
+                .cmp(&b.edge_id)
+                .then_with(|| a.target_host.cmp(&b.target_host))
+                .then_with(|| a.target_port.cmp(&b.target_port))
+        });
         snapshots
     }
 

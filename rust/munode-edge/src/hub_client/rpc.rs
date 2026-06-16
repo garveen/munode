@@ -20,6 +20,16 @@ use super::{
     SaveChannelRequest, UserStateChangeRequest,
 };
 
+pub struct PeerQualityReport {
+    pub target_edge_id: u32,
+    pub target_host: Option<String>,
+    pub target_port: Option<u16>,
+    pub rtt_ms: f32,
+    pub packet_loss: f32,
+    pub jitter_ms: f32,
+    pub samples: u32,
+}
+
 impl HubClient {
     async fn permission_query_actor_identity(&self, session_id: u32) -> (u32, String) {
         if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
@@ -1011,14 +1021,7 @@ impl HubClient {
     }
 
     /// Report link quality to a peer Edge to Hub for route table computation.
-    pub async fn report_quality(
-        &self,
-        target_edge_id: u32,
-        rtt_ms: f32,
-        packet_loss: f32,
-        jitter_ms: f32,
-        samples: u32,
-    ) {
+    pub async fn report_quality(&self, report: PeerQualityReport) {
         let from_edge_id = self.edge_id();
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
@@ -1027,18 +1030,23 @@ impl HubClient {
             timeout_ms: Some(5000),
             edge_report_quality: Some(hubedge::EdgeReportQualityParams {
                 edge_id: from_edge_id,
-                target_edge_id,
+                target_edge_id: report.target_edge_id,
+                target_host: report.target_host,
+                target_port: report.target_port.map(u32::from),
                 quality: hubedge::NetworkQualityProto {
-                    rtt: rtt_ms,
-                    packet_loss,
-                    jitter: jitter_ms,
-                    samples,
+                    rtt: report.rtt_ms,
+                    packet_loss: report.packet_loss,
+                    jitter: report.jitter_ms,
+                    samples: report.samples,
                 },
             }),
             ..Default::default()
         };
         if let Err(e) = self.rpc_call(request).await {
-            debug!("report_quality to edge {} failed: {}", target_edge_id, e);
+            debug!(
+                "report_quality to edge {} failed: {}",
+                report.target_edge_id, e
+            );
         }
     }
 

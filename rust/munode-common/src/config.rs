@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::Context;
 use serde::Deserialize;
 
@@ -268,6 +270,31 @@ impl Default for EdgeVoiceQualityConfig {
     }
 }
 
+/// A single advertised inbound peer-access endpoint for Edge-to-Edge traffic.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash)]
+pub struct PeerAccessEndpointConfig {
+    /// Hostname or IP address other Edges should use for this inbound endpoint.
+    pub host: String,
+    /// UDP/TCP port other Edges should use for this inbound endpoint.
+    pub port: u16,
+}
+
+/// Network-facing peer-access configuration for Edge-to-Edge traffic.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NetworkPeerAccessConfig {
+    /// External Edge-to-Edge port mapping for the implicit default endpoint.
+    ///
+    /// When unset, the implicit default endpoint uses `network.edge_port`
+    /// (or `network.port + 1` when `edge_port` is omitted).
+    pub external_port: Option<u16>,
+    /// Additional peer-access endpoints advertised to other Edges.
+    #[serde(default)]
+    pub endpoints: Vec<PeerAccessEndpointConfig>,
+    /// UDP link-quality probing and reporting configuration for peer access.
+    #[serde(default)]
+    pub quality: EdgeVoiceQualityConfig,
+}
+
 /// Voice routing configuration for the Edge server.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EdgeVoiceRoutingConfig {
@@ -290,7 +317,9 @@ pub struct EdgeVoiceRoutingConfig {
     /// voice until the failed connection reconnects.  Default: 2.
     #[serde(default = "default_peer_voice_tcp_pool_size")]
     pub peer_voice_tcp_pool_size: u32,
-    /// UDP link-quality probe and reporting configuration.
+    /// Deprecated: UDP link-quality probe and reporting configuration.
+    ///
+    /// Prefer `[network.peer_access.quality]` for new configurations.
     #[serde(default)]
     pub quality: EdgeVoiceQualityConfig,
     /// Relay node configuration.
@@ -327,6 +356,9 @@ pub struct NetworkConfig {
     pub external_host: String,
     /// External port (for NAT).
     pub external_port: Option<u16>,
+    /// Edge-to-Edge peer-access advertisement and quality probing settings.
+    #[serde(default)]
+    pub peer_access: NetworkPeerAccessConfig,
     /// Geographic region identifier.
     pub region: Option<String>,
     /// Enable PROXY Protocol support (v1 and v2) for connections behind nginx/HAProxy.
@@ -350,6 +382,50 @@ pub struct NetworkConfig {
     /// audit-trail purposes by simply prefixing a forged PROXY header.
     #[serde(default)]
     pub trusted_proxy_ips: Vec<String>,
+}
+
+impl NetworkConfig {
+    /// Resolve the effective dedicated Edge-to-Edge port.
+    pub fn effective_edge_port(&self) -> u16 {
+        self.edge_port
+            .unwrap_or_else(|| self.port.saturating_add(1))
+    }
+
+    /// Resolve the externally advertised port for the implicit peer-access endpoint.
+    pub fn effective_peer_access_port(&self) -> u16 {
+        self.peer_access
+            .external_port
+            .unwrap_or_else(|| self.effective_edge_port())
+    }
+
+    /// Return the full advertised peer-access endpoint set.
+    ///
+    /// The implicit default endpoint derived from `external_host` and the
+    /// effective peer-access port is always included first. Explicit endpoints
+    /// are additive and deduplicated by exact `host:port` pair.
+    pub fn advertised_peer_endpoints(&self) -> Vec<PeerAccessEndpointConfig> {
+        let mut seen = HashSet::new();
+        let mut endpoints = Vec::new();
+
+        let implicit = PeerAccessEndpointConfig {
+            host: self.external_host.clone(),
+            port: self.effective_peer_access_port(),
+        };
+        if !implicit.host.is_empty() && seen.insert((implicit.host.clone(), implicit.port)) {
+            endpoints.push(implicit);
+        }
+
+        for endpoint in &self.peer_access.endpoints {
+            if endpoint.host.is_empty() {
+                continue;
+            }
+            if seen.insert((endpoint.host.clone(), endpoint.port)) {
+                endpoints.push(endpoint.clone());
+            }
+        }
+
+        endpoints
+    }
 }
 
 /// TLS certificate configuration.

@@ -5,6 +5,7 @@ use std::time::Instant;
 use tracing::{debug, info, warn};
 
 use munode_common::config::HubVoiceRoutingConfig;
+use munode_protocol::hubedge::ClusterPeerEndpointProto;
 
 /// Weight applied to packet loss (0.0–1.0) when computing link cost.
 /// A value of 500.0 means 100% packet loss is penalised as 500ms extra RTT.
@@ -24,6 +25,7 @@ pub struct TopologyEdge {
     pub host: String,
     pub port: u32,
     pub voice_port: u32,
+    pub peer_endpoints: Vec<ClusterPeerEndpointProto>,
     pub capacity: u32,
     pub joined_at: Instant,
     /// Set of connected peer IDs (confirmed via joinComplete)
@@ -76,8 +78,8 @@ pub enum ArbitrationResult {
 pub struct TopologyManager {
     /// All known edges in the cluster.
     edges: HashMap<u32, TopologyEdge>,
-    /// Directional link quality: (from, to) → quality.
-    link_quality: HashMap<(u32, u32), LinkQuality>,
+    /// Directional link quality: (from, to, target_host, target_port) → quality.
+    link_quality: HashMap<(u32, u32, String, u16), LinkQuality>,
     /// Pending disconnect reports: reporter_id → set of reported-edge-ids.
     disconnect_reports: HashMap<u32, HashSet<u32>>,
 }
@@ -128,7 +130,7 @@ impl TopologyManager {
     pub fn remove_edge(&mut self, edge_id: u32) -> Option<TopologyEdge> {
         // Clean up link quality entries
         self.link_quality
-            .retain(|(a, b), _| *a != edge_id && *b != edge_id);
+            .retain(|(a, b, _, _), _| *a != edge_id && *b != edge_id);
         // Clean up disconnect reports
         self.disconnect_reports.remove(&edge_id);
         for reporters in self.disconnect_reports.values_mut() {
@@ -168,7 +170,14 @@ impl TopologyManager {
     }
 
     /// Report link quality from one edge to another.
-    pub fn report_quality(&mut self, from: u32, to: u32, quality: LinkQuality) {
+    pub fn report_quality(
+        &mut self,
+        from: u32,
+        to: u32,
+        target_host: String,
+        target_port: u16,
+        quality: LinkQuality,
+    ) {
         debug!(
             "Topology: quality {}->{}: rtt={:.1}ms loss={:.1}%",
             from,
@@ -176,7 +185,20 @@ impl TopologyManager {
             quality.rtt_ms,
             quality.packet_loss * 100.0
         );
-        self.link_quality.insert((from, to), quality);
+        self.link_quality
+            .insert((from, to, target_host, target_port), quality);
+    }
+
+    fn best_quality(&self, from: u32, to: u32) -> Option<&LinkQuality> {
+        self.link_quality
+            .iter()
+            .filter(|((source, target, _, _), _)| *source == from && *target == to)
+            .map(|(_, quality)| quality)
+            .min_by(|a, b| {
+                let a_cost = a.rtt_ms + a.packet_loss * PACKET_LOSS_PENALTY_MS;
+                let b_cost = b.rtt_ms + b.packet_loss * PACKET_LOSS_PENALTY_MS;
+                a_cost.total_cmp(&b_cost)
+            })
     }
 
     /// Find the best forwarding path from `from` to `to` using Dijkstra's algorithm.
@@ -279,7 +301,7 @@ impl TopologyManager {
         }
 
         // Edges are connected if they have link quality data between them
-        for &(a, b) in self.link_quality.keys() {
+        for &(a, b, _, _) in self.link_quality.keys() {
             if self.edges.contains_key(&a) && self.edges.contains_key(&b) {
                 union(&mut parent, a, b);
             }
@@ -381,8 +403,8 @@ impl TopologyManager {
     /// Hub relay or relay-chain routes.
     pub fn remove_direct_link(&mut self, a: u32, b: u32) {
         // Drop link quality data in both directions.
-        self.link_quality.remove(&(a, b));
-        self.link_quality.remove(&(b, a));
+        self.link_quality
+            .retain(|(from, to, _, _), _| !(*from == a && *to == b || *from == b && *to == a));
         // Remove each node from the other's connected_peers set.
         if let Some(edge) = self.edges.get_mut(&a) {
             edge.connected_peers.remove(&b);
@@ -415,7 +437,7 @@ impl TopologyManager {
     }
 
     /// Get the raw link quality map for read-only inspection (e.g., Web API).
-    pub fn get_link_qualities(&self) -> &HashMap<(u32, u32), LinkQuality> {
+    pub fn get_link_qualities(&self) -> &HashMap<(u32, u32, String, u16), LinkQuality> {
         &self.link_quality
     }
 
@@ -456,8 +478,7 @@ impl TopologyManager {
                 2 => {
                     // Direct route
                     let cost = self
-                        .link_quality
-                        .get(&(for_edge_id, target_id))
+                        .best_quality(for_edge_id, target_id)
                         .map(|q| (q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS) as f32)
                         .unwrap_or(100.0);
                     result.push((target_id, 0, vec![], cost));
@@ -506,8 +527,7 @@ impl TopologyManager {
         target_id: u32,
         config: &HubVoiceRoutingConfig,
     ) -> f32 {
-        self.link_quality
-            .get(&(for_edge_id, target_id))
+        self.best_quality(for_edge_id, target_id)
             .map(|q| {
                 ((q.rtt_ms * 1.5 + config.edge_tcp_penalty_ms) as f32)
                     .max(DEFAULT_DIRECT_TCP_COST_MS)
@@ -557,8 +577,7 @@ impl TopologyManager {
                 }
 
                 let degraded = self
-                    .link_quality
-                    .get(&(for_edge_id, primary_child))
+                    .best_quality(for_edge_id, primary_child)
                     .map(|quality| {
                         quality.packet_loss > config.degraded_packet_loss
                             || quality.rtt_ms > config.degraded_rtt_ms
@@ -599,8 +618,7 @@ impl TopologyManager {
             let a = path[i];
             let b = path[i + 1];
             let cost = self
-                .link_quality
-                .get(&(a, b))
+                .best_quality(a, b)
                 .map(|q| {
                     q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS + config.relay_hop_penalty_ms
                 })
@@ -656,7 +674,7 @@ impl TopologyManager {
         let mut seen = HashSet::new();
         let mut explicit_quality_peers = HashSet::new();
 
-        for (&(a, b), quality) in &self.link_quality {
+        for (&(a, b, _, _), quality) in &self.link_quality {
             if a != from || excluded_edge == Some((a, b)) {
                 continue;
             }
@@ -764,6 +782,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 64_738 + edge_id,
             voice_port: 65_738 + edge_id,
+            peer_endpoints: Vec::new(),
             capacity: 128,
             joined_at: Instant::now(),
             connected_peers: HashSet::new(),
@@ -787,8 +806,8 @@ mod tests {
         topo.add_edge(edge(2));
         topo.add_edge(edge(3));
 
-        topo.report_quality(1, 2, quality(10.0));
-        topo.report_quality(2, 3, quality(10.0));
+        topo.report_quality(1, 2, "edge-2".into(), 64740, quality(10.0));
+        topo.report_quality(2, 3, "edge-3".into(), 64741, quality(10.0));
 
         let config = HubVoiceRoutingConfig {
             relay_hop_penalty_ms: 0.0,
@@ -826,6 +845,8 @@ mod tests {
         topo.report_quality(
             1,
             2,
+            "edge-2".into(),
+            64740,
             LinkQuality {
                 rtt_ms: 0.0,
                 packet_loss: 1.0,
@@ -877,6 +898,8 @@ mod tests {
         topo.report_quality(
             4,
             1,
+            "edge-1".into(),
+            64739,
             LinkQuality {
                 rtt_ms: 10.0,
                 packet_loss: 0.9,
@@ -885,8 +908,8 @@ mod tests {
                 last_update: Instant::now(),
             },
         );
-        topo.report_quality(4, 2, quality(10.0));
-        topo.report_quality(2, 1, quality(10.0));
+        topo.report_quality(4, 2, "edge-2".into(), 64740, quality(10.0));
+        topo.report_quality(2, 1, "edge-1".into(), 64739, quality(10.0));
 
         let edge4_source4 = topo
             .compute_dissemination_plan(4, &config)

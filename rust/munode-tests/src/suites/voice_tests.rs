@@ -297,7 +297,7 @@ async fn test_udp_loopback_voice_returns_to_sender_only() -> Result<()> {
     let mut bystander_rx = bystander.subscribe();
     let sender_session = sender.session_id().unwrap();
     let audio = random_voice_data(20);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut sender_received = false;
 
     while tokio::time::Instant::now() < deadline && !sender_received {

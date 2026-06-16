@@ -261,7 +261,7 @@ pub fn deliver_voice_locally_prefer_udp(
         }
 
         if !client_batch.is_empty() {
-            let sent = {
+            let mut sent = {
                 #[cfg(target_os = "linux")]
                 {
                     crate::udp::batch_sendmmsg(socket.as_raw_fd(), &client_batch)
@@ -271,6 +271,18 @@ pub fn deliver_voice_locally_prefer_udp(
                     crate::udp::batch_sendmmsg_fallback_seq(socket, &client_batch)
                 }
             };
+
+            #[cfg(target_os = "linux")]
+            if sent == 0 {
+                for (data, addr) in &client_batch {
+                    match socket.try_send_to(data, *addr) {
+                        Ok(_) => {
+                            sent += 1;
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
 
             if sent < client_batch.len() {
                 debug!(
@@ -543,8 +555,15 @@ mod tests {
     use munode_protocol::message_type::MessageType;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use tokio::net::UdpSocket;
     use tokio::time::{Duration, timeout};
+
+    static NEXT_TEST_SESSION: AtomicU32 = AtomicU32::new(98_000);
+
+    fn unique_test_session() -> u32 {
+        NEXT_TEST_SESSION.fetch_add(1, Ordering::Relaxed)
+    }
 
     fn ready_client(session: u32) -> ClientInfo {
         ClientInfo {
@@ -581,7 +600,7 @@ mod tests {
 
     #[tokio::test]
     async fn deliver_voice_locally_prefer_udp_uses_udp_when_mapping_exists() {
-        let session = 90_001;
+        let session = unique_test_session();
         let client_manager = ClientManager::new();
         let (sender, _control_rx, mut voice_rx) = crate::client::test_client_sender();
 
@@ -621,7 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn deliver_voice_locally_prefer_udp_falls_back_to_tcp_without_mapping() {
-        let session = 90_002;
+        let session = unique_test_session();
         let client_manager = ClientManager::new();
         let (sender, _control_rx, mut voice_rx) = crate::client::test_client_sender();
 

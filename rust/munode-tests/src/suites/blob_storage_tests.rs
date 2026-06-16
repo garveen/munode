@@ -17,6 +17,24 @@ fn find_user_by_name<'a>(users: &'a [User], name: &str) -> Option<&'a User> {
         .find(|u| u.name == name || (name == "admin" && u.name == "Administrator"))
 }
 
+async fn wait_for_user<F>(
+    client: &munode_client::MumbleClient,
+    wait: Duration,
+    predicate: F,
+) -> Option<User>
+where
+    F: Fn(&User) -> bool,
+{
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if let Some(user) = client.users().into_iter().find(|user| predicate(user)) {
+            return Some(user);
+        }
+        sleep_ms(100).await;
+    }
+    None
+}
+
 #[tokio::test]
 async fn test_texture_hash_broadcast_for_large_textures() -> Result<()> {
     let env = single_edge_env().await?;
@@ -29,10 +47,15 @@ async fn test_texture_hash_broadcast_for_large_textures() -> Result<()> {
 
     let texture: Vec<u8> = (0..200u32).map(|i| (i % 256) as u8).collect();
     clients[0].me().set_texture(texture).await?;
-    sleep_ms(900).await;
-
-    let users = clients[1].users();
-    let admin = find_user_by_name(&users, "admin").expect("admin user visible");
+    let admin = wait_for_user(&clients[1], Duration::from_secs(5), |user| {
+        (user.name == "admin" || user.name == "Administrator")
+            && user
+                .texture_hash
+                .as_ref()
+                .is_some_and(|hash| !hash.is_empty())
+    })
+    .await
+    .expect("admin user visible");
     assert!(
         admin.texture_hash.as_ref().is_some_and(|h| !h.is_empty()),
         "admin should have a texture_hash for large texture"
@@ -54,20 +77,26 @@ async fn test_identical_textures_produce_same_hash() -> Result<()> {
 
     let texture = vec![0xab_u8; 200];
     clients[0].me().set_texture(texture.clone()).await?;
-    sleep_ms(600).await;
-    let hash0 = clients[1]
-        .users()
-        .into_iter()
-        .find(|u| u.name == "admin" || u.name == "Administrator")
-        .and_then(|u| u.texture_hash.clone());
+    let hash0 = wait_for_user(&clients[1], Duration::from_secs(5), |user| {
+        (user.name == "admin" || user.name == "Administrator")
+            && user
+                .texture_hash
+                .as_ref()
+                .is_some_and(|hash| !hash.is_empty())
+    })
+    .await
+    .and_then(|user| user.texture_hash.clone());
 
     clients[1].me().set_texture(texture).await?;
-    sleep_ms(600).await;
-    let hash1 = clients[0]
-        .users()
-        .into_iter()
-        .find(|u| u.name == "user1")
-        .and_then(|u| u.texture_hash.clone());
+    let hash1 = wait_for_user(&clients[0], Duration::from_secs(5), |user| {
+        user.name == "user1"
+            && user
+                .texture_hash
+                .as_ref()
+                .is_some_and(|hash| !hash.is_empty())
+    })
+    .await
+    .and_then(|user| user.texture_hash.clone());
 
     assert!(hash0.is_some(), "admin texture_hash missing");
     assert!(hash1.is_some(), "user1 texture_hash missing");

@@ -42,7 +42,23 @@ external_port = 64738                   # Default: same as port
 
 # External edge-to-edge port mapping (if different from edge_port)
 # If not set, uses the same value as 'edge_port'
-# external_edge_port = 64739            # Default: same as edge_port
+# [network.peer_access]
+# external_port = 64739                 # Default: same as edge_port
+#
+# Optional additional peer-access endpoints advertised to other Edges.
+# The implicit default endpoint synthesized from
+#   network.external_host + network.peer_access.external_port/edge_port
+# is always included first. Explicit endpoints are additive and equally ranked.
+#
+# [[network.peer_access.endpoints]]
+# host = "edge1.hz-vpc.internal"
+# port = 64739
+#
+# [network.peer_access.quality]
+# probe_interval_secs = 3
+# report_interval_secs = 5
+# probe_timeout_secs = 3
+# sample_window_size = 30
 
 # Geographic region identifier (used for proximity-based routing)
 # Used for proximity-based client assignment and routing optimization

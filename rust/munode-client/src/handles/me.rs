@@ -58,15 +58,7 @@ impl<'a> Me<'a> {
 
     /// Move the local user to a different channel.
     pub async fn move_to(&self, channel_id: u32) -> Result<()> {
-        let session = self.session_id_required()?;
-        self.client.send_proto(
-            MessageType::UserState,
-            &mumbleproto::UserState {
-                session: Some(session),
-                channel_id: Some(channel_id),
-                ..Default::default()
-            },
-        )
+        self.client.join_channel(channel_id).await
     }
 
     /// Set the local user's comment (UTF-8).
@@ -149,11 +141,6 @@ impl<'a> Me<'a> {
                 ..Default::default()
             },
         )
-    }
-
-    fn session_id_required(&self) -> Result<u32> {
-        self.session_id()
-            .ok_or_else(|| crate::error::ClientError::NotConnected.into())
     }
 
     fn send_user_state(&self, mut msg: mumbleproto::UserState) -> Result<()> {

@@ -112,6 +112,7 @@ fn test_config() -> EdgeConfig {
             edge_port: None,
             external_host: "127.0.0.1".to_string(),
             external_port: None,
+            peer_access: Default::default(),
             region: None,
             proxy_protocol: false,
             trusted_proxy_ips: Vec::new(),

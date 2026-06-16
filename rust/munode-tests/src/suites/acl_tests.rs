@@ -6,6 +6,28 @@ use std::time::Duration;
 
 use crate::harness::{ClientConfig, cleanup_clients, create_clients, single_edge_env, sleep_ms};
 
+async fn wait_for_acl_state<F>(
+    client: &munode_client::MumbleClient,
+    channel_id: u32,
+    wait: Duration,
+    predicate: F,
+) -> Result<munode_protocol::mumbleproto::Acl>
+where
+    F: Fn(&munode_protocol::mumbleproto::Acl) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let acl = client.acl(channel_id).fetch(Duration::from_secs(5)).await?;
+        if predicate(&acl) {
+            return Ok(acl);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timeout waiting for ACL state on channel {}", channel_id);
+        }
+        sleep_ms(100).await;
+    }
+}
+
 // Permission flag constants (from Mumble protocol)
 const PERM_WRITE: u32 = 0x1;
 const PERM_TRAVERSE: u32 = 0x2;
@@ -348,9 +370,10 @@ async fn test_channel_group_lifecycle() -> Result<()> {
             Duration::from_secs(5),
         )
         .await?;
-    sleep_ms(200).await;
-
-    let acl = client.acl(ch).fetch(Duration::from_secs(5)).await?;
+    let acl = wait_for_acl_state(client, ch, Duration::from_secs(5), |acl| {
+        acl.groups.iter().any(|g| g.name == "team")
+    })
+    .await?;
     assert!(
         acl.groups.iter().any(|g| g.name == "team"),
         "group 'team' should exist"
@@ -361,9 +384,13 @@ async fn test_channel_group_lifecycle() -> Result<()> {
         .acl(ch)
         .add_user_to_group("team", 1, Duration::from_secs(5))
         .await?;
-    sleep_ms(200).await;
-
-    let acl = client.acl(ch).fetch(Duration::from_secs(5)).await?;
+    let acl = wait_for_acl_state(client, ch, Duration::from_secs(5), |acl| {
+        acl.groups
+            .iter()
+            .find(|g| g.name == "team")
+            .is_some_and(|g| g.add.contains(&1))
+    })
+    .await?;
     let team = acl
         .groups
         .iter()
@@ -379,9 +406,13 @@ async fn test_channel_group_lifecycle() -> Result<()> {
         .acl(ch)
         .remove_user_from_group("team", 1, Duration::from_secs(5))
         .await?;
-    sleep_ms(200).await;
-
-    let acl = client.acl(ch).fetch(Duration::from_secs(5)).await?;
+    let acl = wait_for_acl_state(client, ch, Duration::from_secs(5), |acl| {
+        acl.groups
+            .iter()
+            .find(|g| g.name == "team")
+            .is_some_and(|g| !g.add.contains(&1))
+    })
+    .await?;
     let team = acl.groups.iter().find(|g| g.name == "team");
     if let Some(t) = team {
         assert!(
@@ -395,9 +426,10 @@ async fn test_channel_group_lifecycle() -> Result<()> {
         .acl(ch)
         .remove_group("team", Duration::from_secs(5))
         .await?;
-    sleep_ms(200).await;
-
-    let acl = client.acl(ch).fetch(Duration::from_secs(5)).await?;
+    let acl = wait_for_acl_state(client, ch, Duration::from_secs(5), |acl| {
+        !acl.groups.iter().any(|g| g.name == "team")
+    })
+    .await?;
     assert!(
         !acl.groups.iter().any(|g| g.name == "team"),
         "group 'team' should be removed"

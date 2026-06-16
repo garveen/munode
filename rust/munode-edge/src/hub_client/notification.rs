@@ -561,6 +561,7 @@ impl HubClient {
                     }
                     if remote_user_changed
                         || local_client_changed
+                        || moved_suppress.is_some()
                         || (!had_remote_user && !had_local_client)
                     {
                         // actor_session: 0 means server-initiated; fall back to session_id for user self-moves
@@ -769,10 +770,13 @@ impl HubClient {
                             "Peer edge joined cluster: {} (id {}) at {}:{}",
                             name, peer_edge_id, host, voice_port
                         );
-                        if !host.is_empty() && voice_port > 0 {
-                            if let Some(udp_addr) =
-                                super::resolve_peer_udp_addr(host, voice_port).await
-                            {
+                        let resolved_endpoints = super::resolve_peer_endpoints(
+                            &p.peer_endpoints,
+                            Some((host, voice_port)),
+                        )
+                        .await;
+                        if !resolved_endpoints.is_empty() {
+                            if let Some(preferred_endpoint) = resolved_endpoints.first() {
                                 // Detect address change for an already-managed peer.
                                 // If the peer restarted at a new host/port while the Hub was down,
                                 // the running slot loops still hold the stale address — we must
@@ -786,14 +790,15 @@ impl HubClient {
                                 };
                                 let addr_changed = already_managed && {
                                     let current = self.edge_state.peer_registry.load();
-                                    current
-                                        .get(peer_edge_id)
-                                        .is_none_or(|info| info.udp_addr != udp_addr)
+                                    current.get(peer_edge_id).is_none_or(|info| {
+                                        info.preferred_endpoint().map(|e| e.udp_addr)
+                                            != Some(preferred_endpoint.udp_addr)
+                                    })
                                 };
                                 if addr_changed {
                                     warn!(
                                         "Peer edge {} address changed to {}, restarting voice TCP pool",
-                                        peer_edge_id, udp_addr
+                                        peer_edge_id, preferred_endpoint.udp_addr
                                     );
                                     // Close all existing pool slots (slot loops will exit via Ok(())).
                                     let pool_opt = {
@@ -818,8 +823,7 @@ impl HubClient {
                                     new_reg.upsert(
                                         peer_edge_id,
                                         PeerEdgeInfo {
-                                            udp_addr,
-                                            host: host.clone(),
+                                            endpoints: resolved_endpoints.clone(),
                                             relay_port: None,
                                         },
                                     );
@@ -827,7 +831,7 @@ impl HubClient {
                                 }
                                 info!(
                                     "Registered direct UDP route to peer edge {} at {}",
-                                    peer_edge_id, udp_addr
+                                    peer_edge_id, preferred_endpoint.udp_addr
                                 );
                             } else {
                                 warn!(
@@ -850,7 +854,14 @@ impl HubClient {
                                     .contains(&peer_edge_id)
                             };
                             if !already_managed {
-                                let peer_host = host.clone();
+                                let peer_host = resolved_endpoints
+                                    .first()
+                                    .map(|endpoint| endpoint.host.clone())
+                                    .unwrap_or_else(|| host.clone());
+                                let peer_voice_port = resolved_endpoints
+                                    .first()
+                                    .map(|endpoint| endpoint.udp_addr.port())
+                                    .unwrap_or(voice_port);
                                 let self_id = self.edge_state.get_edge_id();
                                 let state_clone = self.edge_state.clone();
                                 let secret = self.config.hmac_secret.clone();
@@ -858,7 +869,7 @@ impl HubClient {
                                     crate::relay_server::connect_peer_voice_tcp(
                                         peer_edge_id,
                                         peer_host,
-                                        voice_port,
+                                        peer_voice_port,
                                         self_id,
                                         state_clone,
                                         secret,
@@ -1210,6 +1221,7 @@ mod tests {
                 edge_port: None,
                 external_host: "127.0.0.1".to_string(),
                 external_port: None,
+                peer_access: Default::default(),
                 region: None,
                 proxy_protocol: false,
                 trusted_proxy_ips: Vec::new(),
@@ -1290,6 +1302,15 @@ mod tests {
             .expect("frame present");
         assert_eq!(frame.message_type, MessageType::UserState);
         mumbleproto::UserState::decode(&frame.payload[..]).expect("decode UserState")
+    }
+
+    fn decode_permission_query(data: &[u8]) -> mumbleproto::PermissionQuery {
+        let mut buf = BytesMut::from(data);
+        let frame = decode_frame(&mut buf)
+            .expect("decode_frame ok")
+            .expect("frame present");
+        assert_eq!(frame.message_type, MessageType::PermissionQuery);
+        mumbleproto::PermissionQuery::decode(&frame.payload[..]).expect("decode PermissionQuery")
     }
 
     #[test]
@@ -1424,6 +1445,7 @@ mod tests {
             .client_manager
             .add_client(make_test_client(7, 0), observer_sender)
             .await;
+        edge_state.permission_cache.insert((42, 9), 0x1234);
 
         let edge_state = run_event_listener_task(edge_state).await;
 
@@ -1460,12 +1482,114 @@ mod tests {
         assert_eq!(observer_msg.channel_id, Some(9));
         assert_eq!(observer_msg.actor, Some(42));
 
+        let permission_query = decode_permission_query(
+            &rx_target
+                .recv()
+                .await
+                .expect("moved local client should receive immediate PermissionQuery refresh"),
+        );
+        assert_eq!(permission_query.channel_id, Some(9));
+        assert_ne!(permission_query.permissions, Some(0x1234));
+
         let updated = edge_state
             .client_manager
             .get_client(42)
             .await
             .expect("moved local client should remain present");
         assert_eq!(updated.channel_id, 9);
+    }
+
+    #[tokio::test]
+    async fn hub_user_moved_with_suppress_updates_local_client_and_broadcasts() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        let hub = HubClient::new(&test_config(), edge_state.clone());
+
+        let (target_sender, mut rx_target, _target_voice_rx) = crate::client::test_client_sender();
+
+        edge_state
+            .client_manager
+            .add_client(make_test_client(42, 0), target_sender)
+            .await;
+
+        let edge_state = run_event_listener_task(edge_state).await;
+
+        hub.handle_notification(TypedRpcNotification {
+            method: "hub.userMoved".to_string(),
+            user_moved: Some(HubUserMovedParams {
+                session_id: 42,
+                edge_id: 1,
+                channel_id: 9,
+                actor_session: Some(42),
+                suppress: Some(true),
+            }),
+            ..Default::default()
+        })
+        .await;
+
+        let target_msg = decode_user_state(
+            &rx_target
+                .recv()
+                .await
+                .expect("moved local client should receive authoritative move"),
+        );
+        assert_eq!(target_msg.session, Some(42));
+        assert_eq!(target_msg.channel_id, Some(9));
+        assert_eq!(target_msg.suppress, Some(true));
+
+        let updated = edge_state
+            .client_manager
+            .get_client(42)
+            .await
+            .expect("moved local client should remain present");
+        assert_eq!(updated.channel_id, 9);
+        assert!(updated.suppress);
+    }
+
+    #[tokio::test]
+    async fn hub_user_state_broadcast_preserves_false_suppress_for_local_client() {
+        let edge_state = EdgeState::new(ChannelManager::new(), ClientManager::new(), true);
+        let hub = HubClient::new(&test_config(), edge_state.clone());
+
+        let (target_sender, mut rx_target, _target_voice_rx) = crate::client::test_client_sender();
+
+        let mut target = make_test_client(42, 9);
+        target.suppress = true;
+        edge_state
+            .client_manager
+            .add_client(target, target_sender)
+            .await;
+
+        let _edge_state = run_event_listener_task(edge_state.clone()).await;
+
+        hub.handle_notification(TypedRpcNotification {
+            method: "hub.userStateBroadcast".to_string(),
+            user_state_broadcast: Some(HubUserStateBroadcastParams {
+                session_id: 42,
+                edge_id: 1,
+                suppress: Some(false),
+                actor_session: Some(7),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await;
+
+        let target_msg = decode_user_state(
+            &rx_target
+                .recv()
+                .await
+                .expect("target should receive authoritative suppress update"),
+        );
+        assert_eq!(target_msg.session, Some(42));
+        assert_eq!(target_msg.suppress, Some(false));
+        assert_eq!(target_msg.actor, Some(7));
+
+        let updated = edge_state
+            .client_manager
+            .get_client(42)
+            .await
+            .expect("target should remain present");
+        assert!(!updated.suppress);
     }
 
     #[tokio::test]

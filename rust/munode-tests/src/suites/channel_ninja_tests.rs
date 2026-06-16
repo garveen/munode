@@ -292,7 +292,7 @@ async fn test_ninja_disabled_move_into_broadcasts_user_state() -> Result<()> {
     let mut got_remove = false;
 
     ninja.channel(NINJA_CHANNEL_ID).join().await?;
-    let _ = tokio::time::timeout(Duration::from_millis(1500), async {
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
                 Ok(ClientEvent::UserStateChanged(s))

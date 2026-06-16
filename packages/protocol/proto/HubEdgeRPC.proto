@@ -455,6 +455,7 @@ message EdgeJoinParams {
   required uint32 port = 4;
   required uint32 voice_port = 5;
   required uint32 capacity = 6;
+  repeated ClusterPeerEndpointProto peer_endpoints = 7;
 }
 
 message EdgeJoinResult {
@@ -472,6 +473,12 @@ message PeerInfoProto {
   required uint32 port = 4;
   required uint32 voice_port = 5;
   optional string cert_hash = 6;
+  repeated ClusterPeerEndpointProto peer_endpoints = 7;
+}
+
+message ClusterPeerEndpointProto {
+  required string host = 1;
+  required uint32 port = 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +614,8 @@ message EdgeReportQualityParams {
   required uint32 edge_id = 1;
   required uint32 target_edge_id = 2;
   required NetworkQualityProto quality = 3;
+  optional string target_host = 4;
+  optional uint32 target_port = 5;
 }
 
 message NetworkQualityProto {
@@ -983,6 +992,7 @@ message HubClusterPeerJoinedParams {
   required string name = 2;
   required string host = 3;
   required uint32 voice_port = 4;
+  repeated ClusterPeerEndpointProto peer_endpoints = 5;
 }
 
 message HubClusterPeerLeftParams {

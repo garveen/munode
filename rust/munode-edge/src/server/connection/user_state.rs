@@ -18,6 +18,7 @@ pub(super) async fn handle_user_state_update(
     let mut needs_broadcast = false;
     let mut channel_moved = false;
     let mut pending_move_channel_id = None;
+    let mut pending_move_suppress = None;
 
     if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
         let original_self_mute = client.self_mute;
@@ -31,7 +32,12 @@ pub(super) async fn handle_user_state_update(
                 "User {} moving to channel {}",
                 session_id, target_channel_id
             );
+            let can_speak =
+                get_perm_cached(hub_client, edge_state, session_id, target_channel_id, true).await
+                    & perm::SPEAK
+                    != 0;
             pending_move_channel_id = Some(target_channel_id);
+            pending_move_suppress = Some(!can_speak);
             needs_broadcast = true;
             channel_moved = true;
         }
@@ -499,6 +505,38 @@ pub(super) async fn handle_user_state_update(
                         "rpc_user_moved failed (self move, session {}): {:#}",
                         session_id, e
                     );
+                } else if let Some(target_channel_id) = pending_move_channel_id {
+                    let new_suppress = pending_move_suppress.unwrap_or(false);
+                    if let Some(current_client) =
+                        edge_state.client_manager.get_client(session_id).await
+                        && (current_client.channel_id != target_channel_id
+                            || current_client.suppress != new_suppress)
+                    {
+                        edge_state
+                            .client_manager
+                            .move_client_to_channel(session_id, target_channel_id, new_suppress)
+                            .await;
+                        edge_state
+                            .topology_version
+                            .fetch_add(1, std::sync::atomic::Ordering::Release);
+                    }
+
+                    // Hub broadcasts userMoved before replying to the source edge.
+                    // If that echo updates local state first, the cache may already
+                    // be converged by the time this RPC returns, but the actor still
+                    // needs an immediate self-visible channel update rather than
+                    // waiting for the broadcast fan-out to reach their client.
+                    let local_move_msg = mumbleproto::UserState {
+                        session: Some(session_id),
+                        actor: Some(session_id),
+                        channel_id: Some(target_channel_id),
+                        suppress: Some(new_suppress),
+                        ..Default::default()
+                    };
+                    edge_state
+                        .client_manager
+                        .send_to(session_id, MessageType::UserState, &local_move_msg)
+                        .await;
                 }
 
                 if (state_update.self_mute.is_some()
@@ -1203,6 +1241,7 @@ mod tests {
                 edge_port: None,
                 external_host: "127.0.0.1".to_string(),
                 external_port: None,
+                peer_access: Default::default(),
                 region: None,
                 proxy_protocol: false,
                 trusted_proxy_ips: Vec::new(),

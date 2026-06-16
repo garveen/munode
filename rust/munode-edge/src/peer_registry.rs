@@ -4,6 +4,12 @@ use std::net::SocketAddr;
 use smallvec::SmallVec;
 use tokio::sync::mpsc;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerEndpointInfo {
+    pub host: String,
+    pub udp_addr: SocketAddr,
+}
+
 /// Outbound TCP voice connection pool for a single peer Edge.
 ///
 /// `pool_size` independent WebSocket connections are maintained.  Outbound
@@ -163,10 +169,8 @@ impl PeerVoiceTcpPool {
 /// Information about a peer Edge node.
 #[derive(Debug, Clone)]
 pub struct PeerEdgeInfo {
-    /// Edge-to-Edge UDP endpoint (dedicated `edge_port`).
-    pub udp_addr: SocketAddr,
-    /// Hostname of the peer Edge (same as used for UDP routing).
-    pub host: String,
+    /// Advertised inbound peer-access endpoints for Edge-to-Edge UDP/TCP.
+    pub endpoints: Vec<PeerEndpointInfo>,
     /// Control-relay port of the peer Edge.
     /// Every Edge exposes a relay server on this port; it transparently
     /// forwards WebSocket traffic to Hub on behalf of Edges that cannot reach
@@ -186,15 +190,21 @@ impl PeerRegistry {
     pub fn upsert(&mut self, edge_id: u32, info: PeerEdgeInfo) {
         // Remove stale reverse-index entry if the peer's address changed.
         if let Some(old) = self.peers.get(&edge_id) {
-            self.addr_to_id.remove(&old.udp_addr);
+            for endpoint in &old.endpoints {
+                self.addr_to_id.remove(&endpoint.udp_addr);
+            }
         }
-        self.addr_to_id.insert(info.udp_addr, edge_id);
+        for endpoint in &info.endpoints {
+            self.addr_to_id.insert(endpoint.udp_addr, edge_id);
+        }
         self.peers.insert(edge_id, info);
     }
 
     pub fn remove(&mut self, edge_id: u32) {
         if let Some(old) = self.peers.remove(&edge_id) {
-            self.addr_to_id.remove(&old.udp_addr);
+            for endpoint in &old.endpoints {
+                self.addr_to_id.remove(&endpoint.udp_addr);
+            }
         }
     }
 
@@ -216,6 +226,18 @@ impl PeerRegistry {
         self.addr_to_id.get(&addr).copied()
     }
 
+    pub fn find_endpoint_by_addr(&self, addr: SocketAddr) -> Option<(u32, PeerEndpointInfo)> {
+        let edge_id = self.addr_to_id.get(&addr).copied()?;
+        let endpoint = self
+            .peers
+            .get(&edge_id)?
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.udp_addr == addr)?
+            .clone();
+        Some((edge_id, endpoint))
+    }
+
     /// Collect all peers that can serve as Hub relay candidates.
     ///
     /// The relay/voice WebSocket server now listens on `edge_port`, which is
@@ -230,18 +252,49 @@ impl PeerRegistry {
         self.peers
             .iter()
             .map(|(id, info)| {
-                let relay_port = info.relay_port.unwrap_or_else(|| info.udp_addr.port());
-                (*id, info.host.clone(), relay_port)
+                let relay_port = info.relay_port.unwrap_or_else(|| {
+                    info.preferred_endpoint()
+                        .map(|e| e.udp_addr.port())
+                        .unwrap_or(0)
+                });
+                let host = info
+                    .preferred_endpoint()
+                    .map(|endpoint| endpoint.host.clone())
+                    .unwrap_or_default();
+                (*id, host, relay_port)
             })
             .collect()
     }
 
-    /// Returns all known peer edge IDs and their UDP addresses (for voice relay).
-    pub fn all_udp_peers(&self) -> Vec<(u32, SocketAddr)> {
+    /// Returns all known peer edge IDs and their advertised UDP endpoint addresses.
+    pub fn all_udp_peers(&self) -> Vec<(u32, Vec<SocketAddr>)> {
         self.peers
             .iter()
-            .map(|(id, info)| (*id, info.udp_addr))
+            .map(|(id, info)| {
+                (
+                    *id,
+                    info.endpoints
+                        .iter()
+                        .map(|endpoint| endpoint.udp_addr)
+                        .collect(),
+                )
+            })
             .collect()
+    }
+
+    pub fn resolve_endpoint_addr(&self, edge_id: u32, host: &str, port: u16) -> Option<SocketAddr> {
+        self.peers.get(&edge_id).and_then(|info| {
+            info.endpoints
+                .iter()
+                .find(|endpoint| endpoint.host == host && endpoint.udp_addr.port() == port)
+                .map(|endpoint| endpoint.udp_addr)
+        })
+    }
+
+    pub fn preferred_udp_addr(&self, edge_id: u32) -> Option<SocketAddr> {
+        self.peers
+            .get(&edge_id)
+            .and_then(|info| info.preferred_endpoint().map(|endpoint| endpoint.udp_addr))
     }
 
     /// Collect all known peer edge IDs except `excluded_edge_id`.
@@ -257,9 +310,15 @@ impl PeerRegistry {
     }
 }
 
+impl PeerEdgeInfo {
+    pub fn preferred_endpoint(&self) -> Option<&PeerEndpointInfo> {
+        self.endpoints.first()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PeerEdgeInfo, PeerRegistry};
+    use super::{PeerEdgeInfo, PeerEndpointInfo, PeerRegistry};
 
     #[test]
     fn relay_peers_falls_back_to_udp_port_when_metadata_missing() {
@@ -267,16 +326,20 @@ mod tests {
         registry.upsert(
             10,
             PeerEdgeInfo {
-                udp_addr: "10.0.0.4:64002".parse().unwrap(),
-                host: "10.0.0.4".into(),
+                endpoints: vec![PeerEndpointInfo {
+                    udp_addr: "10.0.0.4:64002".parse().unwrap(),
+                    host: "10.0.0.4".into(),
+                }],
                 relay_port: Some(9000),
             },
         );
         registry.upsert(
             11,
             PeerEdgeInfo {
-                udp_addr: "10.0.0.5:64003".parse().unwrap(),
-                host: "10.0.0.5".into(),
+                endpoints: vec![PeerEndpointInfo {
+                    udp_addr: "10.0.0.5:64003".parse().unwrap(),
+                    host: "10.0.0.5".into(),
+                }],
                 relay_port: None,
             },
         );

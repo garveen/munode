@@ -14,19 +14,21 @@ use tokio::time;
 use tokio_tungstenite::tungstenite;
 use tracing::{debug, error, info, warn};
 
-use munode_common::config::{EdgeConfig, HubServerConfig};
+use munode_common::config::{EdgeConfig, HubServerConfig, PeerAccessEndpointConfig};
 use munode_protocol::hubedge::{
-    self, EdgeFullSyncParams, EdgeHubPacket, EdgeJoinCompleteParams, EdgeJoinParams,
-    EdgeRegisterParams, EdgeReportSessionParams, GlobalSessionProto, PacketType,
+    self, ClusterPeerEndpointProto, EdgeFullSyncParams, EdgeHubPacket, EdgeJoinCompleteParams,
+    EdgeJoinParams, EdgeRegisterParams, EdgeReportSessionParams, GlobalSessionProto, PacketType,
     TypedRpcNotification, TypedRpcRequest, TypedRpcResponse,
 };
 
-use crate::peer_registry::PeerEdgeInfo;
+use crate::peer_registry::{PeerEdgeInfo, PeerEndpointInfo};
 use crate::state::{EdgeEvent, EdgeState};
 use crate::voice_target::{apply_voice_target_proto_batch, voice_target_config_to_proto};
 
 mod notification;
 mod rpc;
+
+pub(crate) use rpc::PeerQualityReport;
 
 /// Exponential backoff helper for reconnection loops.
 ///
@@ -205,6 +207,40 @@ pub(super) async fn resolve_peer_udp_addr(host: &str, voice_port: u16) -> Option
             None
         }
     }
+}
+
+pub(super) async fn resolve_peer_endpoints(
+    peer_endpoints: &[ClusterPeerEndpointProto],
+    fallback: Option<(&str, u16)>,
+) -> Vec<PeerEndpointInfo> {
+    let mut resolved = Vec::new();
+
+    for endpoint in peer_endpoints {
+        if endpoint.host.is_empty() || endpoint.port == 0 {
+            continue;
+        }
+
+        if let Some(udp_addr) = resolve_peer_udp_addr(&endpoint.host, endpoint.port as u16).await {
+            resolved.push(PeerEndpointInfo {
+                host: endpoint.host.clone(),
+                udp_addr,
+            });
+        }
+    }
+
+    if resolved.is_empty()
+        && let Some((host, port)) = fallback
+        && !host.is_empty()
+        && port > 0
+        && let Some(udp_addr) = resolve_peer_udp_addr(host, port).await
+    {
+        resolved.push(PeerEndpointInfo {
+            host: host.to_string(),
+            udp_addr,
+        });
+    }
+
+    resolved
 }
 
 /// Maximum size of the [`HubClient::pending_notifications`] FIFO queue.
@@ -419,6 +455,8 @@ pub struct HubClient {
     external_port: u16,
     /// Effective port for Edge-to-Edge TLS connections.
     edge_port: u16,
+    /// Advertised inbound peer-access endpoints for this Edge.
+    peer_endpoints: Vec<PeerAccessEndpointConfig>,
     /// Geographic region identifier.
     region: Option<String>,
     /// Maximum number of users for this Edge.
@@ -494,6 +532,7 @@ impl HubClient {
     pub fn new(config: &EdgeConfig, edge_state: Arc<EdgeState>) -> Arc<Self> {
         let external_port = config.network.external_port.unwrap_or(config.network.port);
         let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
+        let peer_endpoints = config.network.advertised_peer_endpoints();
         let pool_size = config.hub_server.pool_size.max(1) as usize;
         let pool_senders = (0..pool_size).map(|_| Mutex::new(None)).collect();
         let pool_registered = (0..pool_size).map(|_| AtomicBool::new(false)).collect();
@@ -512,6 +551,7 @@ impl HubClient {
             external_host: config.network.external_host.clone(),
             external_port,
             edge_port,
+            peer_endpoints,
             region: config.network.region.clone(),
             capacity: config.server.capacity,
             static_relay_peers,
@@ -2428,6 +2468,14 @@ impl HubClient {
             port: self.external_port as u32,
             voice_port: self.edge_port as u32,
             capacity: self.capacity,
+            peer_endpoints: self
+                .peer_endpoints
+                .iter()
+                .map(|endpoint| ClusterPeerEndpointProto {
+                    host: endpoint.host.clone(),
+                    port: endpoint.port as u32,
+                })
+                .collect(),
         };
 
         let request = TypedRpcRequest {
@@ -2460,19 +2508,21 @@ impl HubClient {
                 "  Peer edge: {} (id={}, {}:{})",
                 peer.name, peer.id, peer.host, peer.port
             );
-            // Register each existing peer's UDP address
-            if !peer.host.is_empty() && peer.voice_port > 0 {
-                if let Some(udp_addr) =
-                    resolve_peer_udp_addr(&peer.host, peer.voice_port as u16).await
-                {
+            // Register each existing peer's advertised UDP endpoints.
+            let resolved_endpoints = resolve_peer_endpoints(
+                &peer.peer_endpoints,
+                Some((&peer.host, peer.voice_port as u16)),
+            )
+            .await;
+            if !resolved_endpoints.is_empty() {
+                if let Some(preferred_endpoint) = resolved_endpoints.first() {
                     {
                         let current = self.edge_state.peer_registry.load_full();
                         let mut new_reg = (*current).clone();
                         new_reg.upsert(
                             peer.id,
                             PeerEdgeInfo {
-                                udp_addr,
-                                host: peer.host.clone(),
+                                endpoints: resolved_endpoints.clone(),
                                 relay_port: None,
                             },
                         );
@@ -2480,7 +2530,7 @@ impl HubClient {
                     }
                     info!(
                         "Registered direct UDP route to existing peer edge {} at {}",
-                        peer.id, udp_addr
+                        peer.id, preferred_endpoint.udp_addr
                     );
                 } else {
                     warn!(
@@ -2492,8 +2542,14 @@ impl HubClient {
                 }
                 // Connect TCP voice pool to the existing peer, dedup via voice_tcp_peers.
                 let peer_id = peer.id;
-                let peer_host = peer.host.clone();
-                let voice_port = peer.voice_port as u16;
+                let peer_host = resolved_endpoints
+                    .first()
+                    .map(|endpoint| endpoint.host.clone())
+                    .unwrap_or_else(|| peer.host.clone());
+                let voice_port = resolved_endpoints
+                    .first()
+                    .map(|endpoint| endpoint.udp_addr.port())
+                    .unwrap_or(peer.voice_port as u16);
                 let already_managed = {
                     self.edge_state
                         .voice_tcp_peers
@@ -2763,6 +2819,7 @@ mod tests {
                 edge_port: None,
                 external_host: "127.0.0.1".to_string(),
                 external_port: None,
+                peer_access: Default::default(),
                 region: None,
                 proxy_protocol: false,
                 trusted_proxy_ips: Vec::new(),

@@ -33,7 +33,7 @@ use munode_edge::channel_manager::ChannelManager;
 use munode_edge::client::ClientManager;
 use munode_edge::cluster_voice::forward_source_voice_packet;
 use munode_edge::hub_client::HubClient;
-use munode_edge::peer_registry::{PeerEdgeInfo, PeerRegistry, PeerVoiceTcpPool};
+use munode_edge::peer_registry::{PeerEdgeInfo, PeerEndpointInfo, PeerRegistry, PeerVoiceTcpPool};
 use munode_edge::relay_server::{connect_peer_voice_tcp, run_edge_ws_server_with_listener};
 use munode_edge::state::{
     DisseminationSourceState, EdgeState, EdgeStateConfig, HopTransport, RouteCandidate,
@@ -98,6 +98,7 @@ fn test_config() -> EdgeConfig {
             edge_port: None,
             external_host: "127.0.0.1".to_string(),
             external_port: None,
+            peer_access: Default::default(),
             region: None,
             proxy_protocol: false,
             trusted_proxy_ips: Vec::new(),
@@ -152,6 +153,16 @@ async fn start_voice_ws_server() -> (u16, Arc<EdgeState>) {
     (port, state)
 }
 
+fn peer_edge_info(host: &str, udp_addr: SocketAddr, relay_port: Option<u16>) -> PeerEdgeInfo {
+    PeerEdgeInfo {
+        endpoints: vec![PeerEndpointInfo {
+            host: host.into(),
+            udp_addr,
+        }],
+        relay_port,
+    }
+}
+
 // ── PeerRegistry ─────────────────────────────────────────────────────────────
 
 /// `upsert` and `get` must round-trip correctly for both fields of `PeerEdgeInfo`.
@@ -159,18 +170,12 @@ async fn start_voice_ws_server() -> (u16, Arc<EdgeState>) {
 fn peer_registry_upsert_and_lookup_by_id() {
     let mut reg = PeerRegistry::default();
     let addr: SocketAddr = "10.0.0.2:64000".parse().unwrap();
-    reg.upsert(
-        7,
-        PeerEdgeInfo {
-            udp_addr: addr,
-            host: "10.0.0.2".into(),
-            relay_port: Some(64100),
-        },
-    );
+    reg.upsert(7, peer_edge_info("10.0.0.2", addr, Some(64100)));
 
     let info = reg.get(7).expect("entry must exist after upsert");
-    assert_eq!(info.udp_addr, addr);
-    assert_eq!(info.host, "10.0.0.2");
+    let endpoint = info.preferred_endpoint().expect("peer endpoint must exist");
+    assert_eq!(endpoint.udp_addr, addr);
+    assert_eq!(endpoint.host, "10.0.0.2");
     assert_eq!(info.relay_port, Some(64100));
 }
 
@@ -179,49 +184,28 @@ fn peer_registry_upsert_and_lookup_by_id() {
 fn peer_registry_remove_clears_entry() {
     let mut reg = PeerRegistry::default();
     let addr: SocketAddr = "10.0.0.3:64001".parse().unwrap();
-    reg.upsert(
-        8,
-        PeerEdgeInfo {
-            udp_addr: addr,
-            host: "10.0.0.3".into(),
-            relay_port: None,
-        },
-    );
+    reg.upsert(8, peer_edge_info("10.0.0.3", addr, None));
     reg.remove(8);
 
     assert!(reg.get(8).is_none(), "entry must be absent after remove");
 }
 
-/// `relay_peers()` must only return entries that have a `relay_port` set.
+/// `relay_peers()` falls back to the preferred UDP endpoint when relay metadata is absent.
 #[test]
 fn peer_registry_relay_peers_filters_by_relay_port() {
     let mut reg = PeerRegistry::default();
     let addr: SocketAddr = "10.0.0.4:64002".parse().unwrap();
     // Has relay_port
-    reg.upsert(
-        10,
-        PeerEdgeInfo {
-            udp_addr: addr,
-            host: "10.0.0.4".into(),
-            relay_port: Some(9000),
-        },
-    );
+    reg.upsert(10, peer_edge_info("10.0.0.4", addr, Some(9000)));
     // No relay_port
-    reg.upsert(
-        11,
-        PeerEdgeInfo {
-            udp_addr: addr,
-            host: "10.0.0.5".into(),
-            relay_port: None,
-        },
-    );
+    reg.upsert(11, peer_edge_info("10.0.0.5", addr, None));
 
-    let relay_peers = reg.relay_peers();
-    assert_eq!(relay_peers.len(), 1, "only one peer has a relay_port");
-    let (id, host, port) = &relay_peers[0];
-    assert_eq!(*id, 10);
-    assert_eq!(host, "10.0.0.4");
-    assert_eq!(*port, 9000u16);
+    let mut relay_peers = reg.relay_peers();
+    relay_peers.sort_by_key(|(id, _, _)| *id);
+
+    assert_eq!(relay_peers.len(), 2, "all peers should be relay candidates");
+    assert_eq!(relay_peers[0], (10, "10.0.0.4".into(), 9000));
+    assert_eq!(relay_peers[1], (11, "10.0.0.5".into(), 64002));
 }
 
 /// `all_udp_peers()` must return every registered entry (regardless of relay_port).
@@ -231,34 +215,17 @@ fn peer_registry_all_udp_peers_returns_all_entries() {
     let a1: SocketAddr = "10.0.0.1:1000".parse().unwrap();
     let a2: SocketAddr = "10.0.0.2:2000".parse().unwrap();
     let a3: SocketAddr = "10.0.0.3:3000".parse().unwrap();
-    reg.upsert(
-        1,
-        PeerEdgeInfo {
-            udp_addr: a1,
-            host: "h1".into(),
-            relay_port: Some(9001),
-        },
-    );
-    reg.upsert(
-        2,
-        PeerEdgeInfo {
-            udp_addr: a2,
-            host: "h2".into(),
-            relay_port: None,
-        },
-    );
-    reg.upsert(
-        3,
-        PeerEdgeInfo {
-            udp_addr: a3,
-            host: "h3".into(),
-            relay_port: None,
-        },
-    );
+    reg.upsert(1, peer_edge_info("h1", a1, Some(9001)));
+    reg.upsert(2, peer_edge_info("h2", a2, None));
+    reg.upsert(3, peer_edge_info("h3", a3, None));
 
     let all = reg.all_udp_peers();
     let ids: HashSet<u32> = all.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids, HashSet::from([1, 2, 3]));
+    let addrs_by_id: HashMap<u32, Vec<SocketAddr>> = all.into_iter().collect();
+    assert_eq!(addrs_by_id.get(&1), Some(&vec![a1]));
+    assert_eq!(addrs_by_id.get(&2), Some(&vec![a2]));
+    assert_eq!(addrs_by_id.get(&3), Some(&vec![a3]));
 }
 
 // ── RouteDecision / RouteCandidate / route_table ──────────────────────────────
@@ -683,14 +650,7 @@ async fn failed_primary_child_still_uses_direct_tcp_fallback_when_backup_udp_suc
     let (backup_recv_sock, backup_addr) = udp_socket_on_random_port().await;
 
     let mut registry = PeerRegistry::default();
-    registry.upsert(
-        2,
-        PeerEdgeInfo {
-            udp_addr: backup_addr,
-            host: "127.0.0.1".into(),
-            relay_port: None,
-        },
-    );
+    registry.upsert(2, peer_edge_info("127.0.0.1", backup_addr, None));
     state.peer_registry.store(Arc::new(registry));
 
     state.dissemination_routes.store(Arc::new(HashMap::from([(

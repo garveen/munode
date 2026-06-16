@@ -572,6 +572,15 @@ impl MumbleClient {
     /// Move the authenticated user to `channel_id`.
     pub async fn join_channel(&self, channel_id: u32) -> Result<()> {
         let session = self.my_session()?;
+        if self
+            .session()
+            .map(|state| state.channel_id == channel_id)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        let mut sub = self.subscribe();
         self.send_proto(
             MessageType::UserState,
             &mumbleproto::UserState {
@@ -579,7 +588,10 @@ impl MumbleClient {
                 channel_id: Some(channel_id),
                 ..Default::default()
             },
-        )
+        )?;
+
+        self.wait_for_channel_state(&mut sub, session, channel_id)
+            .await
     }
 
     /// Create a new channel under `parent` and wait for confirmation.
@@ -1225,6 +1237,45 @@ impl MumbleClient {
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!(
                             "event channel lagged while waiting for listener sync, dropped {n} messages"
+                        );
+                    }
+                    Err(e) => return Err(anyhow!("event channel closed: {e}")),
+                }
+            }
+        })
+        .await
+        .map_err(|_| ClientError::Timeout {
+            secs: LISTENER_STATE_SYNC_TIMEOUT.as_secs(),
+        })?
+    }
+
+    async fn wait_for_channel_state(
+        &self,
+        sub: &mut broadcast::Receiver<ClientEvent>,
+        session: u32,
+        channel_id: u32,
+    ) -> Result<()> {
+        timeout(LISTENER_STATE_SYNC_TIMEOUT, async {
+            loop {
+                match sub.recv().await {
+                    Ok(ClientEvent::UserJoined(user)) | Ok(ClientEvent::UserStateChanged(user))
+                        if user.session == session && user.channel_id == channel_id =>
+                    {
+                        return Ok(());
+                    }
+                    Ok(ClientEvent::PermissionDenied {
+                        channel_id: denied_channel,
+                        session: denied_session,
+                        ..
+                    }) if denied_channel == channel_id
+                        && denied_session.is_none_or(|target| target == session) =>
+                    {
+                        return Ok(());
+                    }
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(
+                            "event channel lagged while waiting for channel move, dropped {n} messages"
                         );
                     }
                     Err(e) => return Err(anyhow!("event channel closed: {e}")),

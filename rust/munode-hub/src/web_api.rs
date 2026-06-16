@@ -619,7 +619,7 @@ async fn handle_topology(State(state): State<AppState>) -> Json<TopologyResponse
     }
 
     let mut links = Vec::new();
-    for ((from, to), quality) in topo.get_link_qualities() {
+    for ((from, to, _, _), quality) in topo.get_link_qualities() {
         let last_update_secs = now.duration_since(quality.last_update).as_secs();
         links.push(TopologyLink {
             from_edge_id: *from,

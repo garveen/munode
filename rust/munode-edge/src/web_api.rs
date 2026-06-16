@@ -902,9 +902,21 @@ fn build_known_edge_entries(
                 has_direct_peer_metadata: peer_info.is_some(),
                 known_via_route_table: candidates.is_some(),
                 remote_session_count: remote_edge_counts.get(&edge_id).copied().unwrap_or(0),
-                host: peer_info.map(|info| info.host.clone()),
-                udp_addr: peer_info.map(|info| info.udp_addr.to_string()),
-                relay_port: peer_info.map(|info| info.relay_port.unwrap_or(info.udp_addr.port())),
+                host: peer_info.and_then(|info| {
+                    info.preferred_endpoint()
+                        .map(|endpoint| endpoint.host.clone())
+                }),
+                udp_addr: peer_info.and_then(|info| {
+                    info.preferred_endpoint()
+                        .map(|endpoint| endpoint.udp_addr.to_string())
+                }),
+                relay_port: peer_info.map(|info| {
+                    info.relay_port.unwrap_or_else(|| {
+                        info.preferred_endpoint()
+                            .map(|endpoint| endpoint.udp_addr.port())
+                            .unwrap_or(0)
+                    })
+                }),
                 preferred_link_type: edge_link_type(preferred_route),
                 preferred_route,
                 preferred_relay_hops,
@@ -1999,8 +2011,10 @@ mod tests {
         let peer_snapshot = vec![(
             2,
             PeerEdgeInfo {
-                udp_addr: "10.0.0.2:65000".parse().unwrap(),
-                host: "10.0.0.2".into(),
+                endpoints: vec![crate::peer_registry::PeerEndpointInfo {
+                    udp_addr: "10.0.0.2:65000".parse().unwrap(),
+                    host: "10.0.0.2".into(),
+                }],
                 relay_port: Some(7443),
             },
         )];
@@ -2026,8 +2040,10 @@ mod tests {
         let peer_snapshot = vec![(
             2,
             PeerEdgeInfo {
-                udp_addr: "10.0.0.2:65000".parse().unwrap(),
-                host: "10.0.0.2".into(),
+                endpoints: vec![crate::peer_registry::PeerEndpointInfo {
+                    udp_addr: "10.0.0.2:65000".parse().unwrap(),
+                    host: "10.0.0.2".into(),
+                }],
                 relay_port: None,
             },
         )];

@@ -5,8 +5,17 @@ use munode_common::config::load_edge_config;
 use munode_common::logging::init_logging_with_reload;
 use munode_edge::server::EdgeServer;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+const EDGE_RUNTIME_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(EDGE_RUNTIME_STACK_SIZE)
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     // Explicitly install the aws-lc-rs crypto provider so that rustls does not
     // panic when multiple providers (ring + aws-lc-rs) are present in the
     // dependency graph (e.g. pulled in transitively by tokio-tungstenite).

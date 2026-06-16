@@ -87,8 +87,18 @@ pub async fn handle_incoming_logical_frame(
     );
 
     if ingress_peer == Some(parsed.source_edge_id) {
+        let endpoint = state
+            .peer_registry
+            .load()
+            .get(parsed.source_edge_id)
+            .and_then(|info| info.preferred_endpoint().cloned());
         state
-            .observe_direct_peer_voice_packet(parsed.source_edge_id, parsed.transport_packet_seq)
+            .observe_direct_peer_voice_packet(
+                parsed.source_edge_id,
+                endpoint.as_ref().map(|endpoint| endpoint.host.as_str()),
+                endpoint.as_ref().map(|endpoint| endpoint.udp_addr.port()),
+                parsed.transport_packet_seq,
+            )
             .await;
     }
 
@@ -238,7 +248,7 @@ fn dispatch_udp_batch(state: &Arc<EdgeState>, next_hops: &[u32], frame: &Bytes) 
     let mut unsent = Vec::new();
 
     for &next_hop in next_hops {
-        let Some(addr) = peer_guard.get(next_hop).map(|peer| peer.udp_addr) else {
+        let Some(addr) = peer_guard.preferred_udp_addr(next_hop) else {
             unsent.push(next_hop);
             continue;
         };
