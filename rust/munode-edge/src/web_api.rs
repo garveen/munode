@@ -2002,7 +2002,6 @@ mod tests {
                 udp_addr: "10.0.0.2:65000".parse().unwrap(),
                 host: "10.0.0.2".into(),
                 relay_port: Some(7443),
-                endpoints: Vec::new(),
             },
         )];
         let route_table = HashMap::from([(
@@ -2030,7 +2029,6 @@ mod tests {
                 udp_addr: "10.0.0.2:65000".parse().unwrap(),
                 host: "10.0.0.2".into(),
                 relay_port: None,
-                endpoints: Vec::new(),
             },
         )];
 

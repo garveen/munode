@@ -111,14 +111,6 @@ impl RpcHandler {
                 .collect()
         };
 
-        // Retrieve stored endpoints from the edge registration.
-        let additional_endpoints = {
-            let reg = self.state.edge_registry.read().await;
-            reg.get(&join_edge_id)
-                .map(|r| r.additional_endpoints.clone())
-                .unwrap_or_default()
-        };
-
         // Notify existing edges about the new peer
         let notification = TypedRpcNotification {
             method: "hub.peerJoined".to_string(),
@@ -128,7 +120,6 @@ impl RpcHandler {
                 name: params.name.clone(),
                 host: params.host.clone(),
                 voice_port: params.voice_port,
-                additional_endpoints,
             }),
             ..Default::default()
         };
@@ -327,31 +318,6 @@ impl RpcHandler {
         {
             let mut topo = self.state.topology.write().await;
             topo.report_quality(params.edge_id, params.target_edge_id, quality);
-        }
-
-        // Forward receiver-observed quality back to the sending Edge.
-        {
-            let notif = TypedRpcNotification {
-                method: "hub.peerQualityFeedback".to_string(),
-                peer_quality_feedback: Some(HubPeerQualityFeedbackParams {
-                    reporter_edge_id: params.edge_id,
-                    sender_edge_id: params.target_edge_id,
-                    target_endpoint_id: params.target_endpoint_id.clone(),
-                    quality: quality_proto,
-                }),
-                ..Default::default()
-            };
-            let packet = EdgeHubPacket {
-                r#type: PacketType::RpcNotification as i32,
-                rpc_notification: Some(notif),
-                ..Default::default()
-            };
-            crate::server::send_notification_to_edge(
-                &self.state,
-                params.target_edge_id,
-                packet.encode_to_vec(),
-            )
-            .await;
         }
 
         self.push_route_tables_to_all().await;

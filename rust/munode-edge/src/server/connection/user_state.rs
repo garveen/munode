@@ -1228,7 +1228,6 @@ mod tests {
             webtransport: WebtransportConfig::default(),
             log_level: "info".to_string(),
             log_format: "text".to_string(),
-            cluster_peer_access: Vec::new(),
         }
     }
 

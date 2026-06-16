@@ -238,14 +238,7 @@ fn dispatch_udp_batch(state: &Arc<EdgeState>, next_hops: &[u32], frame: &Bytes) 
     let mut unsent = Vec::new();
 
     for &next_hop in next_hops {
-        // Select best endpoint for this target.
-        let addr = if let Some(ref ep_id) = state.endpoint_selector.active_endpoint(next_hop) {
-            peer_guard.endpoint_addr(next_hop, ep_id)
-        } else {
-            peer_guard.get(next_hop).map(|peer| peer.udp_addr)
-        };
-
-        let Some(addr) = addr else {
+        let Some(addr) = peer_guard.get(next_hop).map(|peer| peer.udp_addr) else {
             unsent.push(next_hop);
             continue;
         };

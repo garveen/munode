@@ -77,7 +77,6 @@ pub struct EdgeRegistration {
     /// Every Edge exposes a relay server; `None` means the relay port was not
     /// advertised (older protocol version).
     pub relay_port: Option<u32>,
-    pub additional_endpoints: Vec<munode_protocol::hubedge::ClusterPeerEndpointProto>,
 }
 
 pub struct PendingEdgeAuth {
@@ -815,29 +814,6 @@ pub async fn broadcast_critical_sequenced(state: &HubState, data: Vec<u8>) {
         }
     });
     join_all(futures).await;
-}
-
-/// Like [`broadcast_critical_sequenced`] but for a single target edge.
-pub async fn send_notification_to_edge(state: &HubState, target_edge_id: u32, data: Vec<u8>) {
-    use tokio::time::{Duration, timeout};
-
-    let pool = {
-        let edges = state.edge_connections.read().await;
-        edges.get(&target_edge_id).cloned()
-    };
-    let Some(pool) = pool else { return };
-
-    let mut data = data;
-    let seq = next_notification_seq(state, target_edge_id);
-    append_notification_seq(&mut data, seq);
-
-    match timeout(Duration::from_secs(2), pool.send_async(data)).await {
-        Ok(true) => {}
-        Ok(false) => {
-            tracing::warn!("send_notification_to_edge: edge {target_edge_id} all senders closed")
-        }
-        Err(_) => tracing::warn!("send_notification_to_edge: edge {target_edge_id} send timeout"),
-    }
 }
 
 /// Like [`broadcast_critical_excluding`] but assigns per-edge sequence numbers.

@@ -5,7 +5,6 @@ pub mod cluster_voice;
 pub(crate) mod control_ws;
 pub mod crypto;
 pub mod edge_crypto;
-pub mod endpoint_selector;
 pub mod handler;
 pub mod hot_slot;
 pub mod hub_client;
