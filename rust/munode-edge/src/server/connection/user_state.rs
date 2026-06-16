@@ -526,11 +526,15 @@ pub(super) async fn handle_user_state_update(
                     // be converged by the time this RPC returns, but the actor still
                     // needs an immediate self-visible channel update rather than
                     // waiting for the broadcast fan-out to reach their client.
+                    // Mumble protocol convention: suppress is only sent as
+                    // Some(true), never Some(false).  Sending Some(false)
+                    // causes clients to display a spurious "you were
+                    // unsuppressed" notification.
                     let local_move_msg = mumbleproto::UserState {
                         session: Some(session_id),
                         actor: Some(session_id),
                         channel_id: Some(target_channel_id),
-                        suppress: Some(new_suppress),
+                        suppress: new_suppress.then_some(true),
                         ..Default::default()
                     };
                     edge_state

@@ -555,8 +555,13 @@ impl HubClient {
                                 params.session_id, params.channel_id, new_suppress
                             );
                         }
-                        if old_suppress != new_suppress {
-                            moved_suppress = Some(new_suppress);
+                        // Only set moved_suppress when the user is actually suppressed
+                        // (new_suppress == true).  Mumble protocol convention:
+                        // suppress is only sent as Some(true), never Some(false).
+                        // Sending Some(false) causes clients to display spurious
+                        // "you were unsuppressed" notifications.
+                        if old_suppress != new_suppress && new_suppress {
+                            moved_suppress = Some(true);
                         }
                     }
                     if remote_user_changed
@@ -1581,7 +1586,9 @@ mod tests {
                 .expect("target should receive authoritative suppress update"),
         );
         assert_eq!(target_msg.session, Some(42));
-        assert_eq!(target_msg.suppress, Some(false));
+        // Mumble protocol convention: suppress is only sent as Some(true),
+        // never Some(false).  When unsuppressing, the field is simply absent.
+        assert_eq!(target_msg.suppress, None);
         assert_eq!(target_msg.actor, Some(7));
 
         let updated = edge_state

@@ -372,7 +372,9 @@ pub(crate) async fn hub_event_listener(
                             self_deaf: delta.self_deaf,
                             mute: delta.mute,
                             deaf: delta.deaf,
-                            suppress: delta.suppress,
+                            // Mumble protocol convention: suppress/mute/deaf are
+                            // only sent as Some(true), never Some(false).
+                            suppress: delta.suppress.and_then(|s| s.then_some(true)),
                             priority_speaker: delta.priority_speaker,
                             recording: delta.recording,
                             ..Default::default()
