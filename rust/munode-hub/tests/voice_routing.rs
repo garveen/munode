@@ -80,10 +80,10 @@ fn remove_edge_cleans_up_link_quality() {
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
     topo.add_edge(make_edge(3));
-    topo.report_quality(1, 2, None, make_quality(10.0, 0.0));
-    topo.report_quality(2, 1, None, make_quality(10.0, 0.0));
-    topo.report_quality(1, 3, None, make_quality(5.0, 0.0));
-    topo.report_quality(3, 1, None, make_quality(5.0, 0.0));
+    topo.report_quality(1, 2, make_quality(10.0, 0.0));
+    topo.report_quality(2, 1, make_quality(10.0, 0.0));
+    topo.report_quality(1, 3, make_quality(5.0, 0.0));
+    topo.report_quality(3, 1, make_quality(5.0, 0.0));
 
     topo.remove_edge(1);
 
@@ -144,7 +144,7 @@ fn isolated_edge_is_its_own_partition() {
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
     // 1 and 2 are connected
-    topo.report_quality(1, 2, None, make_quality(10.0, 0.0));
+    topo.report_quality(1, 2, make_quality(10.0, 0.0));
     // 3 is completely isolated
     topo.add_edge(make_edge(3));
 
@@ -164,7 +164,7 @@ fn direct_path_chosen_for_two_connected_edges() {
     let mut topo = TopologyManager::new();
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
-    topo.report_quality(1, 2, None, make_quality(20.0, 0.0));
+    topo.report_quality(1, 2, make_quality(20.0, 0.0));
 
     let path = topo.find_best_path(1, 2);
     assert_eq!(path, vec![1, 2], "direct path expected");
@@ -182,13 +182,13 @@ fn relay_path_preferred_when_direct_link_is_degraded() {
     topo.add_edge(make_edge(2));
     topo.add_edge(make_edge(3));
 
-    topo.report_quality(1, 2, None, make_quality(100.0, 0.10));
-    topo.report_quality(1, 3, None, make_quality(10.0, 0.01));
-    topo.report_quality(3, 2, None, make_quality(10.0, 0.01));
+    topo.report_quality(1, 2, make_quality(100.0, 0.10));
+    topo.report_quality(1, 3, make_quality(10.0, 0.01));
+    topo.report_quality(3, 2, make_quality(10.0, 0.01));
     // symmetric
-    topo.report_quality(2, 1, None, make_quality(100.0, 0.10));
-    topo.report_quality(3, 1, None, make_quality(10.0, 0.01));
-    topo.report_quality(2, 3, None, make_quality(10.0, 0.01));
+    topo.report_quality(2, 1, make_quality(100.0, 0.10));
+    topo.report_quality(3, 1, make_quality(10.0, 0.01));
+    topo.report_quality(2, 3, make_quality(10.0, 0.01));
 
     let cfg = HubVoiceRoutingConfig::default();
     let routes = topo.compute_route_table(1, &cfg);
@@ -219,11 +219,11 @@ fn failed_link_is_excluded_from_dijkstra_path() {
         ..Default::default()
     };
 
-    topo.report_quality(1, 2, None, make_quality(20.0, 0.60)); // FAILED: above 50%
-    topo.report_quality(1, 3, None, make_quality(10.0, 0.01));
-    topo.report_quality(3, 2, None, make_quality(10.0, 0.01));
-    topo.report_quality(3, 1, None, make_quality(10.0, 0.01));
-    topo.report_quality(2, 3, None, make_quality(10.0, 0.01));
+    topo.report_quality(1, 2, make_quality(20.0, 0.60)); // FAILED: above 50%
+    topo.report_quality(1, 3, make_quality(10.0, 0.01));
+    topo.report_quality(3, 2, make_quality(10.0, 0.01));
+    topo.report_quality(3, 1, make_quality(10.0, 0.01));
+    topo.report_quality(2, 3, make_quality(10.0, 0.01));
 
     let routes = topo.compute_route_table(1, &cfg);
 
@@ -254,12 +254,12 @@ fn high_rtt_link_excluded_by_failed_rtt_threshold() {
     };
 
     // Direct 1→2: RTT=200ms (zero loss but RTT > failed_rtt_ms) → failed
-    topo.report_quality(1, 2, None, make_quality(200.0, 0.0));
+    topo.report_quality(1, 2, make_quality(200.0, 0.0));
     // Good legs via 3
-    topo.report_quality(1, 3, None, make_quality(20.0, 0.0));
-    topo.report_quality(3, 2, None, make_quality(20.0, 0.0));
-    topo.report_quality(3, 1, None, make_quality(20.0, 0.0));
-    topo.report_quality(2, 3, None, make_quality(20.0, 0.0));
+    topo.report_quality(1, 3, make_quality(20.0, 0.0));
+    topo.report_quality(3, 2, make_quality(20.0, 0.0));
+    topo.report_quality(3, 1, make_quality(20.0, 0.0));
+    topo.report_quality(2, 3, make_quality(20.0, 0.0));
 
     let routes = topo.compute_route_table(1, &cfg);
 
@@ -289,12 +289,12 @@ fn relay_hop_penalty_discourages_longer_chains() {
     topo.add_edge(make_edge(2));
     topo.add_edge(make_edge(3));
 
-    topo.report_quality(1, 2, None, make_quality(25.0, 0.0));
-    topo.report_quality(2, 1, None, make_quality(25.0, 0.0));
-    topo.report_quality(1, 3, None, make_quality(5.0, 0.0));
-    topo.report_quality(3, 1, None, make_quality(5.0, 0.0));
-    topo.report_quality(3, 2, None, make_quality(5.0, 0.0));
-    topo.report_quality(2, 3, None, make_quality(5.0, 0.0));
+    topo.report_quality(1, 2, make_quality(25.0, 0.0));
+    topo.report_quality(2, 1, make_quality(25.0, 0.0));
+    topo.report_quality(1, 3, make_quality(5.0, 0.0));
+    topo.report_quality(3, 1, make_quality(5.0, 0.0));
+    topo.report_quality(3, 2, make_quality(5.0, 0.0));
+    topo.report_quality(2, 3, make_quality(5.0, 0.0));
 
     let cfg = HubVoiceRoutingConfig {
         relay_hop_penalty_ms: 30.0, // Large penalty per hop
@@ -343,7 +343,7 @@ fn route_table_always_includes_hub_tcp_fallback() {
     let mut topo = TopologyManager::new();
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
-    topo.report_quality(1, 2, None, make_quality(30.0, 0.0));
+    topo.report_quality(1, 2, make_quality(30.0, 0.0));
 
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
 
@@ -364,7 +364,7 @@ fn route_table_always_includes_direct_tcp_candidate() {
     let mut topo = TopologyManager::new();
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
-    topo.report_quality(1, 2, None, make_quality(30.0, 0.0));
+    topo.report_quality(1, 2, make_quality(30.0, 0.0));
 
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
 
@@ -385,7 +385,7 @@ fn hub_tcp_cost_sorts_after_direct_tcp() {
     let mut topo = TopologyManager::new();
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
-    topo.report_quality(1, 2, None, make_quality(100.0, 0.0));
+    topo.report_quality(1, 2, make_quality(100.0, 0.0));
 
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
     let direct_tcp_cost = routes
@@ -414,7 +414,7 @@ fn route_table_has_direct_udp_for_good_link() {
     let mut topo = TopologyManager::new();
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
-    topo.report_quality(1, 2, None, make_quality(15.0, 0.01));
+    topo.report_quality(1, 2, make_quality(15.0, 0.01));
 
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
 
@@ -435,7 +435,7 @@ fn route_table_direct_udp_cost_equals_rtt_plus_loss_penalty() {
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
     // rtt=40ms, loss=10% → cost = 40 + 0.10×500 = 90ms
-    topo.report_quality(1, 2, None, make_quality(40.0, 0.10));
+    topo.report_quality(1, 2, make_quality(40.0, 0.10));
 
     let routes = topo.compute_route_table(1, &HubVoiceRoutingConfig::default());
 
@@ -471,12 +471,12 @@ fn route_table_has_relay_chain_for_three_edge_topology() {
     };
 
     // A→B direct link is failed
-    topo.report_quality(1, 2, None, make_quality(20.0, 0.60));
+    topo.report_quality(1, 2, make_quality(20.0, 0.60));
     // Good legs via C
-    topo.report_quality(1, 3, None, make_quality(10.0, 0.0));
-    topo.report_quality(3, 1, None, make_quality(10.0, 0.0));
-    topo.report_quality(3, 2, None, make_quality(10.0, 0.0));
-    topo.report_quality(2, 3, None, make_quality(10.0, 0.0));
+    topo.report_quality(1, 3, make_quality(10.0, 0.0));
+    topo.report_quality(3, 1, make_quality(10.0, 0.0));
+    topo.report_quality(3, 2, make_quality(10.0, 0.0));
+    topo.report_quality(2, 3, make_quality(10.0, 0.0));
 
     let routes = topo.compute_route_table(1, &cfg);
 
@@ -507,10 +507,10 @@ fn relay_chain_exceeding_hop_limit_falls_back_to_hub_tcp() {
     };
 
     // Direct 1→5 is failed; only path is via the chain.
-    topo.report_quality(1, 5, None, make_quality(500.0, 0.90));
+    topo.report_quality(1, 5, make_quality(500.0, 0.90));
     for (a, b) in [(1u32, 2u32), (2, 3), (3, 4), (4, 5)] {
-        topo.report_quality(a, b, None, make_quality(5.0, 0.0));
-        topo.report_quality(b, a, None, make_quality(5.0, 0.0));
+        topo.report_quality(a, b, make_quality(5.0, 0.0));
+        topo.report_quality(b, a, make_quality(5.0, 0.0));
     }
 
     let routes = topo.compute_route_table(1, &cfg);
@@ -563,8 +563,8 @@ fn fully_connected_cluster_is_one_partition() {
     topo.add_edge(make_edge(1));
     topo.add_edge(make_edge(2));
     topo.add_edge(make_edge(3));
-    topo.report_quality(1, 2, None, make_quality(10.0, 0.0));
-    topo.report_quality(2, 3, None, make_quality(10.0, 0.0));
+    topo.report_quality(1, 2, make_quality(10.0, 0.0));
+    topo.report_quality(2, 3, make_quality(10.0, 0.0));
 
     let parts = topo.detect_partitions();
     assert_eq!(parts.len(), 1, "one partition expected; got: {parts:?}");
@@ -579,8 +579,8 @@ fn isolated_edge_groups_detected_as_two_partitions() {
     topo.add_edge(make_edge(3));
     topo.add_edge(make_edge(4));
     // {1,2} and {3,4} are isolated islands
-    topo.report_quality(1, 2, None, make_quality(10.0, 0.0));
-    topo.report_quality(3, 4, None, make_quality(10.0, 0.0));
+    topo.report_quality(1, 2, make_quality(10.0, 0.0));
+    topo.report_quality(3, 4, make_quality(10.0, 0.0));
 
     let parts = topo.detect_partitions();
     assert_eq!(parts.len(), 2, "two partitions expected; got: {parts:?}");
@@ -596,7 +596,7 @@ fn partitions_are_sorted_by_aggregated_user_count() {
     topo.add_edge(make_edge(3));
 
     // Partition A = {1,2} with 1 total user.
-    topo.report_quality(1, 2, None, make_quality(10.0, 0.0));
+    topo.report_quality(1, 2, make_quality(10.0, 0.0));
     // Partition B = {3} with 5 total users.
 
     let users_per_edge = std::collections::HashMap::from([(1, 1usize), (2, 0usize), (3, 5usize)]);

@@ -2468,18 +2468,12 @@ impl HubClient {
                     {
                         let current = self.edge_state.peer_registry.load_full();
                         let mut new_reg = (*current).clone();
-
-                        // Resolve additional endpoints from cluster_peer_access config.
-                        let endpoints =
-                            notification::resolve_peer_endpoints(&self.edge_state, peer.id).await;
-
                         new_reg.upsert(
                             peer.id,
                             PeerEdgeInfo {
                                 udp_addr,
                                 host: peer.host.clone(),
                                 relay_port: None,
-                                endpoints,
                             },
                         );
                         self.edge_state.peer_registry.store(Arc::new(new_reg));
@@ -2756,7 +2750,6 @@ mod tests {
         TypedRpcResponse,
     };
     use prost::Message;
-    use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::mpsc;
 
@@ -2795,7 +2788,6 @@ mod tests {
             webtransport: WebtransportConfig::default(),
             log_level: "info".to_string(),
             log_format: "text".to_string(),
-            cluster_peer_access: HashMap::new(),
         }
     }
 

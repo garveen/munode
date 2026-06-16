@@ -11,7 +11,6 @@ use munode_protocol::hubedge::ServerLimitsConfig;
 use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
 use crate::edge_crypto::EdgeCrypto;
-use crate::endpoint_selector::EndpointSelector;
 use crate::peer_registry::{PeerRegistry, PeerVoiceTcpPool};
 use crate::voice_target::{SessionWhisperRouteCache, VoiceTargetConfig, WhisperRouteCacheEntry};
 
@@ -30,9 +29,6 @@ pub struct EdgeStateConfig<'a> {
     pub peer_voice_tcp_pool_size: usize,
     pub peer_quality_sample_window_size: usize,
     pub peer_quality_probe_timeout_secs: u64,
-    /// Per-peer cluster access configuration keyed by remote edge server_id.
-    /// Used to resolve multi-endpoint addresses when a peer joins.
-    pub cluster_peer_access: HashMap<u32, munode_common::config::ClusterPeerAccessConfig>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -164,7 +160,7 @@ pub struct PeerQualityState {
 }
 
 impl PeerQualityState {
-    pub fn push_sample(&mut self, sample: PeerQualitySample, sample_window_size: usize) {
+    fn push_sample(&mut self, sample: PeerQualitySample, sample_window_size: usize) {
         if sample.expected_packets == 0 {
             return;
         }
@@ -175,7 +171,7 @@ impl PeerQualityState {
         }
     }
 
-    pub fn push_probe_rtt_sample(&mut self, rtt_ms: f32, sample_window_size: usize) {
+    fn push_probe_rtt_sample(&mut self, rtt_ms: f32, sample_window_size: usize) {
         self.probe_rtt_samples.push_back(rtt_ms);
         while self.probe_rtt_samples.len() > sample_window_size.max(1) {
             self.probe_rtt_samples.pop_front();
@@ -380,7 +376,6 @@ impl PeerQualityState {
             self.direct_voice_totals();
         PeerQualitySnapshot {
             edge_id,
-            endpoint_id: None,
             average_rtt_ms: self.average_rtt_ms(),
             packet_loss: self.packet_loss(),
             jitter_ms: self.jitter_ms(),
@@ -409,8 +404,6 @@ impl PeerQualityState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeerQualitySnapshot {
     pub edge_id: u32,
-    /// Optional endpoint identifier (`None` = default/implicit endpoint).
-    pub endpoint_id: Option<String>,
     pub average_rtt_ms: Option<f32>,
     pub packet_loss: Option<f32>,
     pub jitter_ms: Option<f32>,
@@ -695,10 +688,6 @@ impl RollingDedupeWindow {
     }
 }
 
-/// Type alias for the per-endpoint quality state map.
-/// Key: `(peer_edge_id, Option<endpoint_id>)` — `None` = default endpoint.
-pub type PeerQualityMap = HashMap<(u32, Option<String>), PeerQualityState>;
-
 /// Shared state accessible by all components of the Edge server.
 pub struct EdgeState {
     /// Our assigned edge ID (from Hub registration).
@@ -809,10 +798,9 @@ pub struct EdgeState {
     pub test_udp_drop_rate: AtomicU32,
     /// Cross-process fault injection loaded from environment variables at Edge startup.
     pub test_network_faults: TestNetworkFaults,
-    /// Locally held UDP probe quality state keyed by (peer edge ID, optional endpoint ID).
-    /// `None` endpoint_id = default/implicit endpoint; `Some(id)` = named endpoint.
+    /// Locally held UDP probe quality state keyed by peer edge ID.
     /// Shared between `udp.rs`, `cluster_voice.rs`, and the Web API for local observability.
-    pub peer_quality: Arc<Mutex<PeerQualityMap>>,
+    pub peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
     /// Rolling observation window size for peer-quality samples.
     pub peer_quality_sample_window_size: AtomicU32,
     /// Probe timeout used when converting unanswered pings into loss samples.
@@ -888,11 +876,6 @@ pub struct EdgeState {
     pub client_udp_socket: ArcSwap<Option<Arc<UdpSocket>>>,
     /// Shared edge-to-edge UDP socket used for source-rooted dissemination.
     pub edge_udp_socket: ArcSwap<Option<Arc<UdpSocket>>>,
-    /// Per-endpoint quality scoring and runtime send-path selection.
-    pub endpoint_selector: EndpointSelector,
-    /// Per-peer cluster access configuration keyed by remote edge server_id.
-    /// Read on peer join to resolve multi-endpoint addresses.
-    pub cluster_peer_access: RwLock<HashMap<u32, munode_common::config::ClusterPeerAccessConfig>>,
 }
 
 impl EdgeState {
@@ -903,11 +886,6 @@ impl EdgeState {
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(4096);
         let test_network_faults = TestNetworkFaults::from_env();
-        let peer_quality: Arc<Mutex<PeerQualityMap>> = Arc::new(Mutex::new(HashMap::new()));
-        let endpoint_selector = EndpointSelector::new(
-            munode_common::config::EndpointScoringConfig::default(),
-            Arc::clone(&peer_quality),
-        );
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -942,7 +920,7 @@ impl EdgeState {
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             test_network_faults,
-            peer_quality,
+            peer_quality: Arc::new(Mutex::new(HashMap::new())),
             peer_quality_sample_window_size: AtomicU32::new(
                 DEFAULT_PEER_QUALITY_SAMPLE_WINDOW_SIZE,
             ),
@@ -961,8 +939,6 @@ impl EdgeState {
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
             client_udp_socket: ArcSwap::new(Arc::new(None)),
             edge_udp_socket: ArcSwap::new(Arc::new(None)),
-            endpoint_selector,
-            cluster_peer_access: RwLock::new(HashMap::new()),
         })
     }
 
@@ -976,11 +952,6 @@ impl EdgeState {
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(4096);
         let test_network_faults = TestNetworkFaults::from_env();
-        let peer_quality: Arc<Mutex<PeerQualityMap>> = Arc::new(Mutex::new(HashMap::new()));
-        let endpoint_selector = EndpointSelector::new(
-            munode_common::config::EndpointScoringConfig::default(),
-            Arc::clone(&peer_quality),
-        );
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -1015,7 +986,7 @@ impl EdgeState {
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             test_network_faults,
-            peer_quality,
+            peer_quality: Arc::new(Mutex::new(HashMap::new())),
             peer_quality_sample_window_size: AtomicU32::new(
                 DEFAULT_PEER_QUALITY_SAMPLE_WINDOW_SIZE,
             ),
@@ -1034,8 +1005,6 @@ impl EdgeState {
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
             client_udp_socket: ArcSwap::new(Arc::new(None)),
             edge_udp_socket: ArcSwap::new(Arc::new(None)),
-            endpoint_selector,
-            cluster_peer_access: RwLock::new(HashMap::new()),
         })
     }
 
@@ -1051,11 +1020,6 @@ impl EdgeState {
             .and_then(EdgeCrypto::from_secret)
             .map(Arc::new);
         let test_network_faults = TestNetworkFaults::from_env();
-        let peer_quality: Arc<Mutex<PeerQualityMap>> = Arc::new(Mutex::new(HashMap::new()));
-        let endpoint_selector = EndpointSelector::new(
-            munode_common::config::EndpointScoringConfig::default(),
-            Arc::clone(&peer_quality),
-        );
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -1090,7 +1054,7 @@ impl EdgeState {
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             test_network_faults,
-            peer_quality,
+            peer_quality: Arc::new(Mutex::new(HashMap::new())),
             peer_quality_sample_window_size: AtomicU32::new(
                 config.peer_quality_sample_window_size.max(1) as u32,
             ),
@@ -1109,8 +1073,6 @@ impl EdgeState {
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
             client_udp_socket: ArcSwap::new(Arc::new(None)),
             edge_udp_socket: ArcSwap::new(Arc::new(None)),
-            endpoint_selector,
-            cluster_peer_access: RwLock::new(config.cluster_peer_access),
         })
     }
 
@@ -1260,8 +1222,7 @@ impl EdgeState {
 
         let sample_window_size = self.peer_quality_sample_window_size();
         let mut quality = self.peer_quality.lock().await;
-        // Direct voice packets arrive on the default endpoint.
-        let entry = quality.entry((ingress_peer, None)).or_default();
+        let entry = quality.entry(ingress_peer).or_default();
         entry.record_direct_voice_packet(seq, sample_window_size);
     }
 
@@ -1305,13 +1266,9 @@ impl EdgeState {
         let mut quality = self.peer_quality.lock().await;
         let mut snapshots: Vec<_> = quality
             .iter_mut()
-            .map(|(&(edge_id, ref endpoint_id), state)| {
-                let mut snapshot = state.snapshot(edge_id);
-                snapshot.endpoint_id = endpoint_id.clone();
-                snapshot
-            })
+            .map(|(&edge_id, state)| state.snapshot(edge_id))
             .collect();
-        snapshots.sort_by_key(|snapshot| (snapshot.edge_id, snapshot.endpoint_id.clone()));
+        snapshots.sort_by_key(|snapshot| snapshot.edge_id);
         snapshots
     }
 

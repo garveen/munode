@@ -160,32 +160,10 @@ impl PeerVoiceTcpPool {
     }
 }
 
-/// A single endpoint (address + port) of a peer Edge.
-///
-/// Each peer Edge may expose multiple endpoints (e.g. a public IP and a VPC
-/// internal IP).  All endpoints are treated as equal-weight candidates;
-/// the sending Edge selects the best one at runtime based on receiver-reported
-/// quality scores.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeerEndpoint {
-    /// Optional stable identifier matching `endpoint.id` in the config.
-    /// `None` represents the implicit/default endpoint.
-    pub id: Option<String>,
-    /// Hostname or IP address of this endpoint.
-    pub host: String,
-    /// UDP port of this endpoint (typically the peer's `edge_port`).
-    pub port: u16,
-    /// Optional link-category tag.
-    pub tag: Option<String>,
-    /// Resolved UDP socket address (populated on first use or from peer join).
-    pub udp_addr: SocketAddr,
-}
-
 /// Information about a peer Edge node.
 #[derive(Debug, Clone)]
 pub struct PeerEdgeInfo {
     /// Edge-to-Edge UDP endpoint (dedicated `edge_port`).
-    /// This is the primary/default endpoint — always present.
     pub udp_addr: SocketAddr,
     /// Hostname of the peer Edge (same as used for UDP routing).
     pub host: String,
@@ -194,10 +172,6 @@ pub struct PeerEdgeInfo {
     /// forwards WebSocket traffic to Hub on behalf of Edges that cannot reach
     /// Hub directly.  `None` means the relay port was not yet advertised.
     pub relay_port: Option<u16>,
-    /// Additional endpoints exposed by this peer Edge (beyond the default).
-    /// When non-empty these are candidates for per-endpoint quality scoring
-    /// and runtime send-path selection.
-    pub endpoints: Vec<PeerEndpoint>,
 }
 
 /// Registry of known peer Edges, populated from `hub.peerJoined` notifications.
@@ -206,43 +180,21 @@ pub struct PeerRegistry {
     peers: HashMap<u32, PeerEdgeInfo>,
     /// Reverse index: UDP address → edge_id, used for O(1) probe-pong lookup.
     addr_to_id: HashMap<SocketAddr, u32>,
-    /// Reverse index: (edge_id, endpoint_id) → UDP address for named endpoints.
-    endpoint_addr: HashMap<(u32, String), SocketAddr>,
 }
 
 impl PeerRegistry {
     pub fn upsert(&mut self, edge_id: u32, info: PeerEdgeInfo) {
-        // Remove stale reverse-index entries.
+        // Remove stale reverse-index entry if the peer's address changed.
         if let Some(old) = self.peers.get(&edge_id) {
             self.addr_to_id.remove(&old.udp_addr);
-            for ep in &old.endpoints {
-                if let Some(ref id) = ep.id {
-                    self.endpoint_addr.remove(&(edge_id, id.clone()));
-                }
-                self.addr_to_id.remove(&ep.udp_addr);
-            }
         }
-        // Insert new entries.
         self.addr_to_id.insert(info.udp_addr, edge_id);
-        for ep in &info.endpoints {
-            self.addr_to_id.insert(ep.udp_addr, edge_id);
-            if let Some(ref id) = ep.id {
-                self.endpoint_addr
-                    .insert((edge_id, id.clone()), ep.udp_addr);
-            }
-        }
         self.peers.insert(edge_id, info);
     }
 
     pub fn remove(&mut self, edge_id: u32) {
         if let Some(old) = self.peers.remove(&edge_id) {
             self.addr_to_id.remove(&old.udp_addr);
-            for ep in &old.endpoints {
-                self.addr_to_id.remove(&ep.udp_addr);
-                if let Some(ref id) = ep.id {
-                    self.endpoint_addr.remove(&(edge_id, id.clone()));
-                }
-            }
         }
     }
 
@@ -262,21 +214,6 @@ impl PeerRegistry {
     /// Used by the probe-pong handler to avoid a linear scan over all peers.
     pub fn find_by_addr(&self, addr: SocketAddr) -> Option<u32> {
         self.addr_to_id.get(&addr).copied()
-    }
-
-    /// O(1) lookup returning both the edge ID and endpoint ID for a given UDP
-    /// address.  Returns `(edge_id, None)` for the default endpoint and
-    /// `(edge_id, Some("id"))` for named endpoints.
-    pub fn find_endpoint_by_addr(&self, addr: SocketAddr) -> Option<(u32, Option<String>)> {
-        let edge_id = self.addr_to_id.get(&addr)?;
-        // Check named endpoints first
-        for (key, ep_addr) in &self.endpoint_addr {
-            if *ep_addr == addr {
-                return Some((key.0, Some(key.1.clone())));
-            }
-        }
-        // Default endpoint
-        Some((*edge_id, None))
     }
 
     /// Collect all peers that can serve as Hub relay candidates.
@@ -300,53 +237,11 @@ impl PeerRegistry {
     }
 
     /// Returns all known peer edge IDs and their UDP addresses (for voice relay).
-    /// Includes the default endpoint plus all additional named endpoints.
     pub fn all_udp_peers(&self) -> Vec<(u32, SocketAddr)> {
         self.peers
             .iter()
-            .flat_map(|(id, info)| {
-                let mut addrs: Vec<(u32, SocketAddr)> =
-                    Vec::with_capacity(1 + info.endpoints.len());
-                addrs.push((*id, info.udp_addr));
-                addrs.extend(info.endpoints.iter().map(|ep| (*id, ep.udp_addr)));
-                addrs
-            })
+            .map(|(id, info)| (*id, info.udp_addr))
             .collect()
-    }
-
-    /// Returns all candidate endpoints for quality probing.
-    /// Each entry is `(edge_id, endpoint_id, SocketAddr)`.
-    /// `endpoint_id` is `None` for the default/implicit endpoint.
-    pub fn all_peer_endpoints(&self) -> Vec<(u32, Option<String>, SocketAddr)> {
-        let mut result = Vec::new();
-        for (id, info) in &self.peers {
-            result.push((*id, None, info.udp_addr));
-            for ep in &info.endpoints {
-                result.push((*id, ep.id.clone(), ep.udp_addr));
-            }
-        }
-        result
-    }
-
-    /// Returns all candidate endpoints for a given peer Edge.
-    /// Each entry is `(edge_id, endpoint_id, SocketAddr)`.
-    /// `endpoint_id` is `None` for the default/implicit endpoint.
-    pub fn peer_endpoints(&self, edge_id: u32) -> Vec<(u32, Option<String>, SocketAddr)> {
-        let mut result = Vec::new();
-        if let Some(info) = self.peers.get(&edge_id) {
-            result.push((edge_id, None, info.udp_addr));
-            for ep in &info.endpoints {
-                result.push((edge_id, ep.id.clone(), ep.udp_addr));
-            }
-        }
-        result
-    }
-
-    /// Look up the UDP address for a specific named endpoint of a peer Edge.
-    pub fn endpoint_addr(&self, edge_id: u32, endpoint_id: &str) -> Option<SocketAddr> {
-        self.endpoint_addr
-            .get(&(edge_id, endpoint_id.to_string()))
-            .copied()
     }
 
     /// Collect all known peer edge IDs except `excluded_edge_id`.
@@ -375,7 +270,6 @@ mod tests {
                 udp_addr: "10.0.0.4:64002".parse().unwrap(),
                 host: "10.0.0.4".into(),
                 relay_port: Some(9000),
-                endpoints: Vec::new(),
             },
         );
         registry.upsert(
@@ -384,7 +278,6 @@ mod tests {
                 udp_addr: "10.0.0.5:64003".parse().unwrap(),
                 host: "10.0.0.5".into(),
                 relay_port: None,
-                endpoints: Vec::new(),
             },
         );
 

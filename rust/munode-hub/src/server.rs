@@ -816,44 +816,6 @@ pub async fn broadcast_critical_sequenced(state: &HubState, data: Vec<u8>) {
     join_all(futures).await;
 }
 
-/// Like [`broadcast_critical_sequenced`] but for a single target edge.
-pub async fn send_notification_to_edge(state: &HubState, target_edge_id: u32, data: Vec<u8>) {
-    use tokio::time::{Duration, timeout};
-
-    let pool = {
-        let edges = state.edge_connections.read().await;
-        edges.get(&target_edge_id).cloned()
-    };
-
-    let Some(pool) = pool else {
-        tracing::debug!(
-            "send_notification_to_edge: edge {} not connected",
-            target_edge_id
-        );
-        return;
-    };
-
-    let mut data = data;
-    let seq = next_notification_seq(state, target_edge_id);
-    append_notification_seq(&mut data, seq);
-
-    match timeout(Duration::from_secs(2), pool.send_async(data)).await {
-        Ok(true) => {}
-        Ok(false) => {
-            tracing::warn!(
-                "send_notification_to_edge: edge {} all senders closed",
-                target_edge_id
-            );
-        }
-        Err(_) => {
-            tracing::warn!(
-                "send_notification_to_edge: edge {} send timeout — message dropped",
-                target_edge_id
-            );
-        }
-    }
-}
-
 /// Like [`broadcast_critical_excluding`] but assigns per-edge sequence numbers.
 pub async fn broadcast_critical_excluding_sequenced(
     state: &HubState,

@@ -1558,7 +1558,7 @@ pub struct EdgeReportPeerDisconnectResult {
 /// ---------------------------------------------------------------------------
 /// edge.reportQuality - Edge 上报网络质量
 /// ---------------------------------------------------------------------------
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct EdgeReportQualityParams {
     #[prost(uint32, required, tag = "1")]
     pub edge_id: u32,
@@ -1566,12 +1566,6 @@ pub struct EdgeReportQualityParams {
     pub target_edge_id: u32,
     #[prost(message, required, tag = "3")]
     pub quality: NetworkQualityProto,
-    /// Optional stable endpoint identifier on the target Edge.
-    /// When set, quality refers to a specific named endpoint (matching the
-    /// `endpoint.id` field in the reporter's `cluster_peer_access` config).
-    /// When absent, quality refers to the target Edge's default/implicit endpoint.
-    #[prost(string, optional, tag = "4")]
-    pub target_endpoint_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct NetworkQualityProto {
@@ -2418,25 +2412,6 @@ pub struct HubDisseminationUpdateParams {
     #[prost(uint32, optional, tag = "3")]
     pub max_ttl: ::core::option::Option<u32>,
 }
-/// ---------------------------------------------------------------------------
-/// hub.peerQualityFeedback — Hub relays receiver-side quality back to sender
-/// ---------------------------------------------------------------------------
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct HubPeerQualityFeedbackParams {
-    /// The Edge that observed and reported the quality (the receiver).
-    #[prost(uint32, required, tag = "1")]
-    pub reporter_edge_id: u32,
-    /// The Edge whose sending quality is being reported (the sender).
-    #[prost(uint32, required, tag = "2")]
-    pub sender_edge_id: u32,
-    /// Optional endpoint ID on the sender's side (matches endpoint.id in config).
-    /// When absent, quality refers to the sender's default/implicit endpoint.
-    #[prost(string, optional, tag = "3")]
-    pub target_endpoint_id: ::core::option::Option<::prost::alloc::string::String>,
-    /// Quality metrics observed by the receiver.
-    #[prost(message, required, tag = "4")]
-    pub quality: NetworkQualityProto,
-}
 /// *
 /// TypedRPCNotification - 类型安全的 RPC 通知
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2517,10 +2492,6 @@ pub struct TypedRpcNotification {
     /// hub.contextActionModify — Hub pushes ContextActionModify to targeted clients
     #[prost(message, optional, tag = "37")]
     pub context_action_modify: ::core::option::Option<HubContextActionModifyParams>,
-    /// hub.peerQualityFeedback — Hub forwards receiver-reported quality back to the
-    /// sending Edge so it can score and select the best endpoint per target peer.
-    #[prost(message, optional, tag = "41")]
-    pub peer_quality_feedback: ::core::option::Option<HubPeerQualityFeedbackParams>,
     /// For unknown notification types, store params as JSON string
     #[prost(string, optional, tag = "99")]
     pub unknown_params_json: ::core::option::Option<::prost::alloc::string::String>,

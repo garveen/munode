@@ -622,8 +622,8 @@ async fn handle_topology(State(state): State<AppState>) -> Json<TopologyResponse
     for ((from, to), quality) in topo.get_link_qualities() {
         let last_update_secs = now.duration_since(quality.last_update).as_secs();
         links.push(TopologyLink {
-            from_edge_id: from,
-            to_edge_id: to,
+            from_edge_id: *from,
+            to_edge_id: *to,
             rtt_ms: quality.rtt_ms,
             packet_loss: quality.packet_loss,
             jitter_ms: quality.jitter_ms,
