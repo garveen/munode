@@ -446,8 +446,9 @@ impl TopologyManager {
     ///   route_type: 0=DirectUdp, 1=RelayChain, 2=HubTcp, 3=DirectTcp
     ///   relay_chain: full intermediate node list (path[1..len-1])
     ///
-    /// Every target always gets at least a DirectTcp (type 3) and a HubTcp (type 2)
-    /// candidate so Edges always have fallback options.
+    /// Every target always gets at least a DirectTcp (type 3) candidate so Edges
+    /// always have a fallback option.  HubTcp (type 2) is only included when
+    /// `config.enable_hub_tcp_relay` is true.
     pub fn compute_route_table(
         &self,
         for_edge_id: u32,
@@ -488,15 +489,18 @@ impl TopologyManager {
                     let relay_chain: Vec<u32> = path[1..path.len() - 1].to_vec();
                     let hop_count = relay_chain.len();
                     if hop_count > config.max_relay_hops {
-                        // Too many hops — fall back to Hub TCP. Model Hub relay as a
-                        // last-resort path that is always more expensive than DirectTcp.
-                        result.push((
-                            target_id,
-                            2,
-                            vec![],
-                            self.hub_tcp_cost(direct_tcp_cost, config),
-                        ));
-                        hub_tcp_emitted = true;
+                        // Too many hops — fall back to Hub TCP when Hub relay is
+                        // enabled.  When Hub relay is disabled, drop this route
+                        // candidate entirely.
+                        if config.enable_hub_tcp_relay {
+                            result.push((
+                                target_id,
+                                2,
+                                vec![],
+                                self.hub_tcp_cost(direct_tcp_cost, config),
+                            ));
+                            hub_tcp_emitted = true;
+                        }
                     } else {
                         let cost = self.path_cost(&path, config) as f32;
                         result.push((target_id, 1, relay_chain, cost));
@@ -507,9 +511,10 @@ impl TopologyManager {
             // DirectTcp candidate: always add so the Edge can choose TCP when UDP is degraded.
             result.push((target_id, 3, vec![], direct_tcp_cost));
 
-            // HubTcp fallback: always present as last resort — but only if not already emitted
-            // above (which happens when a relay chain exceeds max_relay_hops).
-            if !hub_tcp_emitted {
+            // HubTcp fallback: last resort when Hub relay is enabled, but only if
+            // not already emitted above (which happens when a relay chain exceeds
+            // max_relay_hops).
+            if config.enable_hub_tcp_relay && !hub_tcp_emitted {
                 result.push((
                     target_id,
                     2,

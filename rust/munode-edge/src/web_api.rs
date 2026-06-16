@@ -205,12 +205,21 @@ pub struct EdgeRouteCandidateEntry {
     pub relay_hops: Vec<EdgeRelayHopEntry>,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct PeerEndpointEntry {
+    pub host: String,
+    pub udp_addr: String,
+    pub port: u16,
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct KnownEdgeEntry {
     pub edge_id: u32,
     pub has_direct_peer_metadata: bool,
     pub known_via_route_table: bool,
     pub remote_session_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub endpoints: Vec<PeerEndpointEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -342,10 +351,8 @@ pub struct PeerQualitySummary {
 pub struct PeerEntry {
     pub edge_id: u32,
     pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub udp_addr: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub endpoints: Vec<PeerEndpointEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_port: Option<u16>,
     pub remote_session_count: usize,
@@ -902,6 +909,18 @@ fn build_known_edge_entries(
                 has_direct_peer_metadata: peer_info.is_some(),
                 known_via_route_table: candidates.is_some(),
                 remote_session_count: remote_edge_counts.get(&edge_id).copied().unwrap_or(0),
+                endpoints: peer_info
+                    .map(|info| {
+                        info.endpoints
+                            .iter()
+                            .map(|endpoint| PeerEndpointEntry {
+                                host: endpoint.host.clone(),
+                                udp_addr: endpoint.udp_addr.to_string(),
+                                port: endpoint.udp_addr.port(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 host: peer_info.and_then(|info| {
                     info.preferred_endpoint()
                         .map(|endpoint| endpoint.host.clone())
@@ -970,8 +989,7 @@ fn peer_entry(edge: &KnownEdgeEntry, quality: Option<&PeerQualitySnapshot>) -> P
     PeerEntry {
         edge_id: edge.edge_id,
         label: edge_label(edge),
-        host: edge.host.clone(),
-        udp_addr: edge.udp_addr.clone(),
+        endpoints: edge.endpoints.clone(),
         relay_port: edge.relay_port,
         remote_session_count: edge.remote_session_count,
         discovery: PeerDiscoverySummary {
@@ -1970,10 +1988,10 @@ pub async fn run_web_api(
 mod tests {
     use super::{
         ConnectivityState, DisseminationBranchBackupEntry, EdgeLinkType, EdgeRouteCandidateEntry,
-        EdgeRouteKind, VoiceTargetChannelEntry, VoiceTargetResolvedChannelEntry, VoiceTcpSlotEntry,
-        build_connection_entries, build_dissemination_entries, build_known_edge_entries,
-        build_route_stats, build_topology_matrix, build_voice_target_entries, edge_api_endpoints,
-        edge_link_type,
+        EdgeRouteKind, PeerEndpointEntry, VoiceTargetChannelEntry, VoiceTargetResolvedChannelEntry,
+        VoiceTcpSlotEntry, build_connection_entries, build_dissemination_entries,
+        build_known_edge_entries, build_route_stats, build_topology_matrix,
+        build_voice_target_entries, edge_api_endpoints, edge_link_type, peer_entry,
     };
     use crate::peer_registry::{PeerEdgeInfo, PeerVoiceTcpPool};
     use crate::state::{DisseminationSourceState, HopTransport, RouteCandidate, RouteDecision};
@@ -1981,6 +1999,7 @@ mod tests {
         SessionWhisperRouteCache, VoiceTargetChannelConfig, VoiceTargetConfig,
         WhisperRouteCacheEntry,
     };
+    use serde_json::Value;
     use smallvec::smallvec;
     use std::collections::HashMap;
     use std::sync::{Arc, atomic::Ordering};
@@ -1996,6 +2015,11 @@ mod tests {
             has_direct_peer_metadata: true,
             known_via_route_table: !route_candidates.is_empty(),
             remote_session_count: 0,
+            endpoints: vec![PeerEndpointEntry {
+                host: format!("edge-{}", edge_id),
+                udp_addr: format!("10.0.0.{}:65000", edge_id),
+                port: 65000,
+            }],
             host: Some(format!("edge-{}", edge_id)),
             udp_addr: Some(format!("10.0.0.{}:65000", edge_id)),
             relay_port: Some(65000 + edge_id as u16),
@@ -2033,6 +2057,8 @@ mod tests {
         assert_eq!(edges[0].preferred_route, EdgeRouteKind::DirectTcp);
         assert_eq!(edges[0].preferred_link_type, EdgeLinkType::Direct);
         assert_eq!(edges[0].remote_session_count, 3);
+        assert_eq!(edges[0].endpoints.len(), 1);
+        assert_eq!(edges[0].endpoints[0].host, "10.0.0.2");
     }
 
     #[test]
@@ -2040,10 +2066,16 @@ mod tests {
         let peer_snapshot = vec![(
             2,
             PeerEdgeInfo {
-                endpoints: vec![crate::peer_registry::PeerEndpointInfo {
-                    udp_addr: "10.0.0.2:65000".parse().unwrap(),
-                    host: "10.0.0.2".into(),
-                }],
+                endpoints: vec![
+                    crate::peer_registry::PeerEndpointInfo {
+                        udp_addr: "10.0.0.2:65000".parse().unwrap(),
+                        host: "10.0.0.2".into(),
+                    },
+                    crate::peer_registry::PeerEndpointInfo {
+                        udp_addr: "10.0.1.2:65001".parse().unwrap(),
+                        host: "edge2.internal".into(),
+                    },
+                ],
                 relay_port: None,
             },
         )];
@@ -2054,6 +2086,23 @@ mod tests {
         assert_eq!(edges[0].preferred_route, EdgeRouteKind::DirectUdp);
         assert_eq!(edges[0].preferred_link_type, EdgeLinkType::Direct);
         assert_eq!(edges[0].relay_port, Some(65000));
+        assert_eq!(edges[0].host.as_deref(), Some("10.0.0.2"));
+        assert_eq!(edges[0].udp_addr.as_deref(), Some("10.0.0.2:65000"));
+        assert_eq!(
+            edges[0].endpoints,
+            vec![
+                PeerEndpointEntry {
+                    host: "10.0.0.2".into(),
+                    udp_addr: "10.0.0.2:65000".into(),
+                    port: 65000,
+                },
+                PeerEndpointEntry {
+                    host: "edge2.internal".into(),
+                    udp_addr: "10.0.1.2:65001".into(),
+                    port: 65001,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -2077,6 +2126,50 @@ mod tests {
         assert_eq!(edges[0].preferred_relay_hops.len(), 2);
         assert_eq!(edges[0].preferred_relay_hops[0].edge_id, 2);
         assert_eq!(edges[0].preferred_relay_hops[1].edge_id, 3);
+    }
+
+    #[test]
+    fn peer_entry_serializes_multi_endpoint_view_without_single_endpoint_fields() {
+        let edge = super::KnownEdgeEntry {
+            edge_id: 2,
+            has_direct_peer_metadata: true,
+            known_via_route_table: true,
+            remote_session_count: 4,
+            endpoints: vec![
+                PeerEndpointEntry {
+                    host: "edge2.public.example".into(),
+                    udp_addr: "203.0.113.2:64739".into(),
+                    port: 64739,
+                },
+                PeerEndpointEntry {
+                    host: "edge2.internal".into(),
+                    udp_addr: "10.0.2.15:64739".into(),
+                    port: 64739,
+                },
+            ],
+            host: Some("edge2.public.example".into()),
+            udp_addr: Some("203.0.113.2:64739".into()),
+            relay_port: Some(7443),
+            preferred_link_type: EdgeLinkType::Direct,
+            preferred_route: EdgeRouteKind::DirectUdp,
+            preferred_relay_hops: Vec::new(),
+            route_candidates: vec![EdgeRouteCandidateEntry {
+                route: EdgeRouteKind::DirectUdp,
+                link_type: EdgeLinkType::Direct,
+                cost: 1.0,
+                relay_hops: Vec::new(),
+            }],
+        };
+
+        let json = serde_json::to_value(peer_entry(&edge, None)).expect("serialize peer entry");
+        let object = json.as_object().expect("peer entry should be an object");
+
+        assert!(
+            matches!(object.get("endpoints"), Some(Value::Array(endpoints)) if endpoints.len() == 2)
+        );
+        assert!(!object.contains_key("host"));
+        assert!(!object.contains_key("udp_addr"));
+        assert_eq!(object.get("relay_port"), Some(&Value::from(7443)));
     }
 
     #[test]

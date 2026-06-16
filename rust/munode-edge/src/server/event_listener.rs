@@ -16,7 +16,9 @@ async fn refresh_local_move_permissions(
     session_id: u32,
     channel_id: u32,
 ) {
-    state.permission_cache.retain(|&(session, _), _| session != session_id);
+    state
+        .permission_cache
+        .retain(|&(session, _), _| session != session_id);
 
     let permissions = get_perm_cached(hub_client, state, session_id, channel_id, false).await;
     let target_query = mumbleproto::PermissionQuery {
@@ -32,7 +34,8 @@ async fn refresh_local_move_permissions(
     if let Some(channel) = state.channel_manager.get_channel(channel_id).await
         && let Some(parent_id) = channel.parent_id
     {
-        let parent_permissions = get_perm_cached(hub_client, state, session_id, parent_id, false).await;
+        let parent_permissions =
+            get_perm_cached(hub_client, state, session_id, parent_id, false).await;
         let parent_query = mumbleproto::PermissionQuery {
             channel_id: Some(parent_id),
             permissions: Some(parent_permissions),
@@ -580,8 +583,13 @@ pub(crate) async fn hub_event_listener(
                             session_id, from_channel_id, channel_id
                         );
                         if state.client_manager.get_client(session_id).await.is_some() {
-                            refresh_local_move_permissions(&state, &hub_client, session_id, channel_id)
-                                .await;
+                            refresh_local_move_permissions(
+                                &state,
+                                &hub_client,
+                                session_id,
+                                channel_id,
+                            )
+                            .await;
                         }
                     }
                     EdgeEvent::ChannelCreated { channel_id } => {
