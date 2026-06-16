@@ -66,6 +66,15 @@ message EdgeInfo {
 // ============================================================================
 
 // ---------------------------------------------------------------------------
+// ClusterPeerEndpointProto - a single endpoint (address) exposed by an Edge
+// ---------------------------------------------------------------------------
+message ClusterPeerEndpointProto {
+  optional string id = 1;
+  required string host = 2;
+  required uint32 port = 3;
+}
+
+// ---------------------------------------------------------------------------
 // edge.register - Edge 注册到 Hub
 // ---------------------------------------------------------------------------
 message EdgeRegisterParams {
@@ -83,6 +92,8 @@ message EdgeRegisterParams {
   // before returning registration success. Additional pool slots and same-process
   // reconnects must leave this unset/false.
   optional bool fresh_process = 10;
+  // Additional endpoints this Edge exposes (beyond the default host:port).
+  repeated ClusterPeerEndpointProto additional_endpoints = 11;
 }
 
 message EdgeRegisterResult {
@@ -607,6 +618,7 @@ message EdgeReportQualityParams {
   required uint32 edge_id = 1;
   required uint32 target_edge_id = 2;
   required NetworkQualityProto quality = 3;
+  optional string target_endpoint_id = 4;
 }
 
 message NetworkQualityProto {
@@ -983,6 +995,7 @@ message HubClusterPeerJoinedParams {
   required string name = 2;
   required string host = 3;
   required uint32 voice_port = 4;
+  repeated ClusterPeerEndpointProto additional_endpoints = 5;
 }
 
 message HubClusterPeerLeftParams {
@@ -1158,6 +1171,16 @@ message HubDisseminationUpdateParams {
   optional uint32 max_ttl = 3;
 }
 
+// ---------------------------------------------------------------------------
+// hub.peerQualityFeedback — Hub relays receiver-side quality back to sender
+// ---------------------------------------------------------------------------
+message HubPeerQualityFeedbackParams {
+  required uint32 reporter_edge_id = 1;
+  required uint32 sender_edge_id = 2;
+  optional string target_endpoint_id = 3;
+  required NetworkQualityProto quality = 4;
+}
+
 /**
  * TypedRPCNotification - 类型安全的 RPC 通知
  */
@@ -1202,6 +1225,8 @@ message TypedRPCNotification {
   optional EdgeContextActionParams context_action = 35;
   // hub.contextActionModify — Hub pushes ContextActionModify to targeted clients
   optional HubContextActionModifyParams context_action_modify = 37;
+  // hub.peerQualityFeedback — Hub forwards receiver-side quality to sender Edge
+  optional HubPeerQualityFeedbackParams peer_quality_feedback = 41;
 
   // For unknown notification types, store params as JSON string
   optional string unknown_params_json = 99;

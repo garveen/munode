@@ -17,7 +17,7 @@ use munode_protocol::{message_type::MessageType, mumbleproto, transport::EDGE_MA
 
 use crate::hot_slot::get_hot_slot;
 use crate::hub_client::HubClient;
-use crate::state::{EdgeState, PeerQualityState};
+use crate::state::{EdgeState, PeerQualityMap, PeerQualityState};
 
 // ── Edge-to-Edge packet type bytes (1-byte prefix on the dedicated edge socket) ─────────────────
 //
@@ -133,7 +133,7 @@ pub struct UdpServer {
     /// Murmur's `aiUdpFlag = 0` behaviour.
     udp_session_to_addr: Arc<DashMap<u32, SocketAddr>>,
     /// Per-edge quality tracking for UDP probes.
-    peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
+    peer_quality: Arc<Mutex<PeerQualityMap>>,
     /// Channel for client voice packets: capacity 65536.
     client_tx: async_channel::Sender<(Bytes, SocketAddr)>,
     client_rx: async_channel::Receiver<(Bytes, SocketAddr)>,
@@ -285,7 +285,7 @@ impl UdpServer {
                             let sample_window_size = probe_state.peer_quality_sample_window_size();
                             {
                                 let mut pq = probe_quality.lock().await;
-                                for (&peer_id, state) in pq.iter_mut() {
+                                for (&(peer_id, _), state) in pq.iter_mut() {
                                     let expired = state.expire_stale_pings(
                                         now_ms,
                                         timeout_ms,
@@ -301,14 +301,14 @@ impl UdpServer {
                                 }
                             }
 
-                            let peers = {
-                                probe_state.peer_registry.load().all_udp_peers()
+                            let endpoints = {
+                                probe_state.peer_registry.load().all_peer_endpoints()
                             };
                             let padding = [0u8; MEDIA_LIKE_PROBE_PADDING_BYTES];
-                            for (peer_id, peer_addr) in peers {
+                            for (peer_id, endpoint_id, peer_addr) in endpoints {
                                 let seq = {
                                     let mut pq = probe_quality.lock().await;
-                                    let entry = pq.entry(peer_id).or_default();
+                                    let entry = pq.entry((peer_id, endpoint_id.clone())).or_default();
                                     entry.next_seq = entry.next_seq.wrapping_add(1);
                                     let s = entry.next_seq;
                                     entry.pending_pings.insert(s, now_ms);
@@ -330,12 +330,12 @@ impl UdpServer {
                         _ = report_interval.tick() => {
                             let my_edge_id = probe_state.get_edge_id();
                             if my_edge_id == 0 { continue; }
-                            let entries: Vec<(u32, f32, f32, f32, u32)> = {
+                            let entries: Vec<(u32, Option<String>, f32, f32, f32, u32)> = {
                                 let report_now_ms = probe_current_millis();
                                 let timeout_ms = probe_state.peer_quality_probe_timeout_ms();
                                 let sample_window_size = probe_state.peer_quality_sample_window_size();
                                 let mut pq = probe_quality.lock().await;
-                                pq.iter_mut().filter_map(|(&eid, pqs)| {
+                                pq.iter_mut().filter_map(|(&(eid, ref epid), pqs)| {
                                     let expired = pqs.expire_stale_pings(
                                         report_now_ms,
                                         timeout_ms,
@@ -360,10 +360,10 @@ impl UdpServer {
                                     pqs.last_report_packet_loss = Some(packet_loss);
                                     pqs.last_report_jitter_ms = Some(jitter_ms);
 
-                                    Some((eid, average_rtt_ms, packet_loss, jitter_ms, samples))
+                                    Some((eid, epid.clone(), average_rtt_ms, packet_loss, jitter_ms, samples))
                                 }).collect()
                             };
-                            for (target_edge_id, rtt, loss, jitter, samples) in entries {
+                            for (target_edge_id, _target_endpoint_id, rtt, loss, jitter, samples) in entries {
                                 probe_hub.report_quality(target_edge_id, rtt, loss, jitter, samples).await;
                             }
                         }
@@ -1134,14 +1134,18 @@ impl UdpServer {
         } else if ptype == 1 {
             // Pong — update quality measurement
             let now_ms = probe_current_millis();
-            let sender_edge_id = { self.edge_state.peer_registry.load().find_by_addr(from_addr) };
-            if let Some(edge_id) = sender_edge_id {
+            let sender = {
+                self.edge_state
+                    .peer_registry
+                    .load()
+                    .find_endpoint_by_addr(from_addr)
+            };
+            if let Some((edge_id, endpoint_id)) = sender {
                 let sample_window_size = self.edge_state.peer_quality_sample_window_size();
                 let mut pq = self.peer_quality.lock().await;
-                let entry = pq.entry(edge_id).or_default();
+                let entry = pq.entry((edge_id, endpoint_id)).or_default();
                 let matched = entry.record_probe_success(seq, now_ms, sample_window_size);
                 drop(pq);
-                // Successful pong resets consecutive failure counter for this peer
                 if matched {
                     reset_hop_failure(
                         &self.edge_state.next_hop_failures,

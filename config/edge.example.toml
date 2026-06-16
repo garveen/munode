@@ -219,6 +219,32 @@ sample_window_size = 30                       # Default: 30
 # Enable Hub-mediated voice relay
 enabled            = true              # Default: true
 
+# Per-endpoint scoring for multi-address send-path selection.
+# All fields have sensible defaults; omit the whole section for single-endpoint.
+[voice_routing.endpoint_scoring]
+loss_weight            = 1000.0        # Weight for packet loss ratio
+jitter_weight          = 4.0           # Weight for jitter (ms)
+local_failure_penalty  = 200.0         # Penalty per local send failure
+stale_feedback_penalty = 300.0         # Penalty for stale quality feedback
+min_dwell_ms           = 300           # Min time (ms) before switching endpoint
+switch_margin          = 15.0          # Score improvement needed to switch
+failed_packet_loss     = 0.40          # Loss above which endpoint is excluded
+failed_jitter_ms       = 500.0         # Jitter above which endpoint is excluded
+feedback_stale_ms      = 3000          # Max age (ms) of feedback before penalty
+
+# ---------------------------------------------------------------------------
+# Additional endpoints this Edge exposes (beyond network.external_host:edge_port).
+# Hub distributes these to all other Edges; each probes every endpoint and
+# scoring selects the best reachable one.
+# ---------------------------------------------------------------------------
+# [[cluster_peer_access]]
+# host = "10.0.1.1"
+# port = 64739
+# id   = "hz-vpc"
+# [[cluster_peer_access]]
+# host = "edge-1-backup.example.com"
+# port = 64739
+
 # ---------------------------------------------------------------------------
 # Web API
 # ---------------------------------------------------------------------------

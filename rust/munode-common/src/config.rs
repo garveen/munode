@@ -214,12 +214,30 @@ pub struct EdgeConfig {
     /// WebTransport (QUIC/HTTP3) listener configuration.
     #[serde(default)]
     pub webtransport: WebtransportConfig,
+    /// Additional endpoints this Edge exposes beyond the implicit default
+    /// (`network.external_host` + `external_edge_port`/`edge_port`).
+    /// Hub distributes these to all other Edges via `hub.peerJoined`.
+    #[serde(default)]
+    pub cluster_peer_access: Vec<ClusterPeerEndpoint>,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
     /// Logging format: "text" (default) or "json" (structured JSON for log aggregation).
     #[serde(default = "default_log_format")]
     pub log_format: String,
+}
+
+/// Additional endpoint (address + port) this Edge exposes.
+/// All endpoints are equal-weight; the sending Edge probes every one and
+/// the scoring function selects the best based on receiver-reported quality.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClusterPeerEndpoint {
+    /// Optional stable identifier.  When set, quality is tracked per-endpoint.
+    pub id: Option<String>,
+    /// Hostname or IP address.
+    pub host: String,
+    /// UDP port (typically the peer's `edge_port`).
+    pub port: u16,
 }
 
 fn default_log_format() -> String {
@@ -296,6 +314,48 @@ pub struct EdgeVoiceRoutingConfig {
     /// Relay node configuration.
     #[serde(default)]
     pub relay: EdgeVoiceRelayConfig,
+    /// Per-endpoint scoring configuration for multi-address send-path selection.
+    #[serde(default)]
+    pub endpoint_scoring: EndpointScoringConfig,
+}
+
+/// Configuration for per-endpoint quality scoring and switching hysteresis.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EndpointScoringConfig {
+    #[serde(default = "default_endpoint_score_loss_weight")]
+    pub loss_weight: f32,
+    #[serde(default = "default_endpoint_score_jitter_weight")]
+    pub jitter_weight: f32,
+    #[serde(default = "default_endpoint_score_local_failure_penalty")]
+    pub local_failure_penalty: f32,
+    #[serde(default = "default_endpoint_score_stale_penalty")]
+    pub stale_feedback_penalty: f32,
+    #[serde(default = "default_endpoint_min_dwell_ms")]
+    pub min_dwell_ms: u64,
+    #[serde(default = "default_endpoint_switch_margin")]
+    pub switch_margin: f32,
+    #[serde(default = "default_failed_packet_loss")]
+    pub failed_packet_loss: f64,
+    #[serde(default = "default_endpoint_failed_jitter_ms")]
+    pub failed_jitter_ms: f64,
+    #[serde(default = "default_endpoint_feedback_stale_ms")]
+    pub feedback_stale_ms: u64,
+}
+
+impl Default for EndpointScoringConfig {
+    fn default() -> Self {
+        Self {
+            loss_weight: default_endpoint_score_loss_weight(),
+            jitter_weight: default_endpoint_score_jitter_weight(),
+            local_failure_penalty: default_endpoint_score_local_failure_penalty(),
+            stale_feedback_penalty: default_endpoint_score_stale_penalty(),
+            min_dwell_ms: default_endpoint_min_dwell_ms(),
+            switch_margin: default_endpoint_switch_margin(),
+            failed_packet_loss: default_failed_packet_loss(),
+            failed_jitter_ms: default_endpoint_failed_jitter_ms(),
+            feedback_stale_ms: default_endpoint_feedback_stale_ms(),
+        }
+    }
 }
 
 impl Default for EdgeVoiceRoutingConfig {
@@ -307,6 +367,7 @@ impl Default for EdgeVoiceRoutingConfig {
             peer_voice_tcp_pool_size: default_peer_voice_tcp_pool_size(),
             quality: EdgeVoiceQualityConfig::default(),
             relay: EdgeVoiceRelayConfig::default(),
+            endpoint_scoring: EndpointScoringConfig::default(),
         }
     }
 }
@@ -1177,6 +1238,30 @@ fn default_quality_probe_timeout_secs() -> u64 {
 }
 fn default_quality_sample_window_size() -> usize {
     30
+}
+fn default_endpoint_score_loss_weight() -> f32 {
+    1000.0
+}
+fn default_endpoint_score_jitter_weight() -> f32 {
+    4.0
+}
+fn default_endpoint_score_local_failure_penalty() -> f32 {
+    200.0
+}
+fn default_endpoint_score_stale_penalty() -> f32 {
+    300.0
+}
+fn default_endpoint_min_dwell_ms() -> u64 {
+    300
+}
+fn default_endpoint_switch_margin() -> f32 {
+    15.0
+}
+fn default_endpoint_failed_jitter_ms() -> f64 {
+    500.0
+}
+fn default_endpoint_feedback_stale_ms() -> u64 {
+    3000
 }
 
 /// GeoIP configuration.

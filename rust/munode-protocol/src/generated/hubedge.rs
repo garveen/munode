@@ -753,6 +753,18 @@ pub struct EdgeInfo {
     pub last_seen: i64,
 }
 /// ---------------------------------------------------------------------------
+/// ClusterPeerEndpointProto - a single endpoint (address) exposed by an Edge
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClusterPeerEndpointProto {
+    #[prost(string, optional, tag = "1")]
+    pub id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, required, tag = "2")]
+    pub host: ::prost::alloc::string::String,
+    #[prost(uint32, required, tag = "3")]
+    pub port: u32,
+}
+/// ---------------------------------------------------------------------------
 /// edge.register - Edge 注册到 Hub
 /// ---------------------------------------------------------------------------
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -781,6 +793,9 @@ pub struct EdgeRegisterParams {
     /// reconnects must leave this unset/false.
     #[prost(bool, optional, tag = "10")]
     pub fresh_process: ::core::option::Option<bool>,
+    /// Additional endpoints this Edge exposes (beyond the default host:port).
+    #[prost(message, repeated, tag = "11")]
+    pub additional_endpoints: ::prost::alloc::vec::Vec<ClusterPeerEndpointProto>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeRegisterResult {
@@ -1558,7 +1573,7 @@ pub struct EdgeReportPeerDisconnectResult {
 /// ---------------------------------------------------------------------------
 /// edge.reportQuality - Edge 上报网络质量
 /// ---------------------------------------------------------------------------
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeReportQualityParams {
     #[prost(uint32, required, tag = "1")]
     pub edge_id: u32,
@@ -1566,6 +1581,8 @@ pub struct EdgeReportQualityParams {
     pub target_edge_id: u32,
     #[prost(message, required, tag = "3")]
     pub quality: NetworkQualityProto,
+    #[prost(string, optional, tag = "4")]
+    pub target_endpoint_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct NetworkQualityProto {
@@ -2116,6 +2133,8 @@ pub struct HubClusterPeerJoinedParams {
     pub host: ::prost::alloc::string::String,
     #[prost(uint32, required, tag = "4")]
     pub voice_port: u32,
+    #[prost(message, repeated, tag = "5")]
+    pub additional_endpoints: ::prost::alloc::vec::Vec<ClusterPeerEndpointProto>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct HubClusterPeerLeftParams {
@@ -2412,6 +2431,20 @@ pub struct HubDisseminationUpdateParams {
     #[prost(uint32, optional, tag = "3")]
     pub max_ttl: ::core::option::Option<u32>,
 }
+/// ---------------------------------------------------------------------------
+/// hub.peerQualityFeedback — Hub relays receiver-side quality back to sender
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubPeerQualityFeedbackParams {
+    #[prost(uint32, required, tag = "1")]
+    pub reporter_edge_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub sender_edge_id: u32,
+    #[prost(string, optional, tag = "3")]
+    pub target_endpoint_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, required, tag = "4")]
+    pub quality: NetworkQualityProto,
+}
 /// *
 /// TypedRPCNotification - 类型安全的 RPC 通知
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2492,6 +2525,9 @@ pub struct TypedRpcNotification {
     /// hub.contextActionModify — Hub pushes ContextActionModify to targeted clients
     #[prost(message, optional, tag = "37")]
     pub context_action_modify: ::core::option::Option<HubContextActionModifyParams>,
+    /// hub.peerQualityFeedback — Hub forwards receiver-side quality to sender Edge
+    #[prost(message, optional, tag = "41")]
+    pub peer_quality_feedback: ::core::option::Option<HubPeerQualityFeedbackParams>,
     /// For unknown notification types, store params as JSON string
     #[prost(string, optional, tag = "99")]
     pub unknown_params_json: ::core::option::Option<::prost::alloc::string::String>,

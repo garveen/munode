@@ -1028,6 +1028,7 @@ impl HubClient {
             edge_report_quality: Some(hubedge::EdgeReportQualityParams {
                 edge_id: from_edge_id,
                 target_edge_id,
+                target_endpoint_id: None,
                 quality: hubedge::NetworkQualityProto {
                     rtt: rtt_ms,
                     packet_loss,

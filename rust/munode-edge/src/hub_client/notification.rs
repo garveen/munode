@@ -813,6 +813,22 @@ impl HubClient {
 
                                 // clone-modify-store: PeerRegistry 实现 Clone，写入串行化
                                 {
+                                    // Resolve additional endpoints from the notification.
+                                    let mut eps = Vec::new();
+                                    for ep in &p.additional_endpoints {
+                                        let addr =
+                                            super::resolve_peer_udp_addr(&ep.host, ep.port as u16)
+                                                .await;
+                                        if let Some(a) = addr {
+                                            eps.push(crate::peer_registry::PeerEndpoint {
+                                                id: ep.id.clone(),
+                                                host: ep.host.clone(),
+                                                port: ep.port as u16,
+                                                udp_addr: a,
+                                            });
+                                        }
+                                    }
+
                                     let current = self.edge_state.peer_registry.load_full();
                                     let mut new_reg = (*current).clone();
                                     new_reg.upsert(
@@ -821,6 +837,7 @@ impl HubClient {
                                             udp_addr,
                                             host: host.clone(),
                                             relay_port: None,
+                                            endpoints: eps,
                                         },
                                     );
                                     self.edge_state.peer_registry.store(Arc::new(new_reg));
@@ -1059,6 +1076,45 @@ impl HubClient {
                     }
                 }
             }
+            "hub.peerQualityFeedback" => {
+                if let Some(p) = &notification.peer_quality_feedback {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let mut pq = self.edge_state.peer_quality.lock().await;
+                    let key = (p.reporter_edge_id, p.target_endpoint_id.clone());
+                    let entry = pq.entry(key).or_default();
+                    let q = &p.quality;
+                    entry.push_sample(
+                        crate::state::PeerQualitySample {
+                            expected_packets: q.samples.max(1),
+                            received_packets: ((q.samples as f32) * (1.0 - q.packet_loss))
+                                .round()
+                                .max(0.0) as u32,
+                            rtt_ms: Some(q.rtt),
+                            source: crate::state::PeerQualitySampleSource::Probe,
+                        },
+                        self.edge_state.peer_quality_sample_window_size(),
+                    );
+                    entry.last_report_average_rtt_ms = Some(q.rtt);
+                    entry.last_report_packet_loss = Some(q.packet_loss);
+                    entry.last_report_jitter_ms = Some(q.jitter);
+                    entry.last_report_ms = Some(now_ms);
+                    debug!(
+                        reporter = p.reporter_edge_id,
+                        endpoint = ?p.target_endpoint_id,
+                        rtt = q.rtt,
+                        loss = q.packet_loss,
+                        "Stored peer quality feedback"
+                    );
+                    // Recompute endpoint selection — may switch active endpoint.
+                    self.edge_state
+                        .endpoint_selector
+                        .recompute(p.reporter_edge_id)
+                        .await;
+                }
+            }
             _ => {
                 // Check for hub.serverConfigUpdate — Hub hot-reload push
                 if method == "hub.serverConfigUpdate" {
@@ -1235,6 +1291,7 @@ mod tests {
             webtransport: WebtransportConfig::default(),
             log_level: "info".to_string(),
             log_format: "text".to_string(),
+            cluster_peer_access: Vec::new(),
         }
     }
 

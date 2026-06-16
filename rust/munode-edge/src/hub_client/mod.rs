@@ -488,6 +488,8 @@ pub struct HubClient {
     /// frames from causing `Lagged` errors on the event bus.
     /// Bounded at 512: best-effort delivery, drop on overflow (voice is lossy).
     voice_relay_tx: mpsc::Sender<(u32, bytes::Bytes)>,
+    /// This Edge's additional endpoints, sent to Hub during registration.
+    cluster_peer_access: Vec<munode_common::config::ClusterPeerEndpoint>,
 }
 
 impl HubClient {
@@ -535,6 +537,7 @@ impl HubClient {
             pending_notifications: tokio::sync::Mutex::new(Vec::new()),
             outbound_notif_seq: AtomicU64::new(0),
             voice_relay_tx,
+            cluster_peer_access: config.cluster_peer_access.clone(),
         });
         let vr_state = hub.edge_state.clone();
         let vr_hub = hub.clone();
@@ -2082,8 +2085,22 @@ impl HubClient {
         result
     }
 
+    fn build_additional_endpoints(
+        &self,
+    ) -> Vec<munode_protocol::hubedge::ClusterPeerEndpointProto> {
+        self.cluster_peer_access
+            .iter()
+            .map(|ep| munode_protocol::hubedge::ClusterPeerEndpointProto {
+                id: ep.id.clone(),
+                host: ep.host.clone(),
+                port: ep.port as u32,
+            })
+            .collect()
+    }
+
     async fn do_register_inner(&self, slot: usize, fresh_process: bool) -> Result<()> {
         let request_id = self.next_request_id();
+        let eps = self.build_additional_endpoints();
         let params = EdgeRegisterParams {
             server_id: self.server_id,
             name: self.server_name.clone(),
@@ -2095,6 +2112,7 @@ impl HubClient {
             challenge: None,
             challenge_response: None,
             fresh_process: Some(fresh_process),
+            additional_endpoints: eps,
         };
 
         let request = TypedRpcRequest {
@@ -2161,6 +2179,7 @@ impl HubClient {
         let challenge_response = hex::encode(signature.as_ref());
 
         let request_id = self.next_request_id();
+        let eps = self.build_additional_endpoints();
         let params = EdgeRegisterParams {
             server_id: self.server_id,
             name: self.server_name.clone(),
@@ -2172,6 +2191,7 @@ impl HubClient {
             challenge: Some(challenge.to_string()),
             challenge_response: Some(challenge_response),
             fresh_process: Some(fresh_process),
+            additional_endpoints: eps,
         };
 
         let request = TypedRpcRequest {
@@ -2474,6 +2494,7 @@ impl HubClient {
                                 udp_addr,
                                 host: peer.host.clone(),
                                 relay_port: None,
+                                endpoints: Vec::new(),
                             },
                         );
                         self.edge_state.peer_registry.store(Arc::new(new_reg));
@@ -2788,6 +2809,7 @@ mod tests {
             webtransport: WebtransportConfig::default(),
             log_level: "info".to_string(),
             log_format: "text".to_string(),
+            cluster_peer_access: Vec::new(),
         }
     }
 

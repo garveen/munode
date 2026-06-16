@@ -218,6 +218,7 @@ impl RpcHandler {
             capacity: params.capacity,
             region: params.region.clone(),
             relay_port: None,
+            additional_endpoints: params.additional_endpoints.clone(),
         };
 
         info!(
